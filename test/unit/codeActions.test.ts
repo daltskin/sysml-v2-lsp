@@ -218,6 +218,94 @@ describe('Code Actions — Unused Definition', () => {
 });
 
 // ─────────────────────────────────────────────────────────────────
+// New semantic quick fixes
+// ─────────────────────────────────────────────────────────────────
+
+describe('Code Actions — Redefinition Multiplicity', () => {
+    it('should offer to align multiplicity with base feature', async () => {
+        const uri = 'file:///test.sysml';
+        const text = `package Test {
+    part def Wheel;
+    part def Vehicle {
+        part wheel : Wheel[0..1];
+    }
+    part def SportsCar :> Vehicle {
+        part wheel :>> wheel[2];
+    }
+}`;
+
+        const { diagnostics } = await getSemanticDiagnostics(text, uri);
+        const redefDiag = diagnostics.filter(d => d.code === 'invalid-redefinition-multiplicity');
+        expect(redefDiag.length).toBeGreaterThanOrEqual(1);
+
+        const { provider } = await makeProvider(text, uri);
+        const actions = provider.provideCodeActions(makeParams(uri, redefDiag));
+        const fix = actions.find(a => a.title.includes('Align multiplicity with base'));
+
+        expect(fix).toBeDefined();
+        expect(fix!.edit?.changes?.[uri]?.length).toBeGreaterThan(0);
+    });
+});
+
+describe('Code Actions — Incompatible Port Types', () => {
+    it('should suggest replacing endpoint with a compatible local port', async () => {
+        const uri = 'file:///test.sysml';
+        const text = `package Test {
+    port def FuelPort;
+    port def ElectricalPort;
+
+    part def Car {
+        port fuel : FuelPort;
+        port altFuel : FuelPort;
+        port power : ElectricalPort;
+
+        connection c1 connect fuel to power;
+    }
+}`;
+
+        const { diagnostics } = await getSemanticDiagnostics(text, uri);
+        const portDiag = diagnostics.filter(d => d.code === 'incompatible-port-types');
+        expect(portDiag.length).toBeGreaterThanOrEqual(1);
+
+        const { provider } = await makeProvider(text, uri);
+        const actions = provider.provideCodeActions(makeParams(uri, portDiag));
+        const fix = actions.find(a => a.title.includes("compatible port 'altFuel'"));
+
+        expect(fix).toBeDefined();
+        expect(fix!.edit?.changes?.[uri]?.[0].newText).toContain('altFuel');
+    });
+});
+
+describe('Code Actions — Unresolved Constraint Reference', () => {
+    it('should suggest nearest member replacement for unresolved path', async () => {
+        const uri = 'file:///test.sysml';
+        const text = `package Test {
+    part def Wheel {
+        attribute radius : Real;
+    }
+
+    requirement def BrakeReq {
+        subject wheel : Wheel;
+        require constraint {
+            wheel.radus > 0
+        }
+    }
+}`;
+
+        const { diagnostics } = await getSemanticDiagnostics(text, uri);
+        const constraintDiag = diagnostics.filter(d => d.code === 'unresolved-constraint-reference');
+        expect(constraintDiag.length).toBeGreaterThanOrEqual(1);
+
+        const { provider } = await makeProvider(text, uri);
+        const actions = provider.provideCodeActions(makeParams(uri, constraintDiag));
+        const fix = actions.find(a => a.title.includes("wheel.radius"));
+
+        expect(fix).toBeDefined();
+        expect(fix!.edit?.changes?.[uri]?.[0].newText).toBe('wheel.radius');
+    });
+});
+
+// ─────────────────────────────────────────────────────────────────
 // Keyword typo fixes (existing — verify still works)
 // ─────────────────────────────────────────────────────────────────
 

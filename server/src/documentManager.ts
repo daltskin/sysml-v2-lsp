@@ -1,4 +1,5 @@
 import { TextDocument } from 'vscode-languageserver-textdocument';
+import { Diagnostic } from 'vscode-languageserver/node.js';
 import { parseDocument, ParseResult } from './parser/parseDocument.js';
 import { SymbolTable } from './symbols/symbolTable.js';
 
@@ -113,6 +114,28 @@ export class DocumentManager {
     }
 
     /**
+     * Cache semantic diagnostics for the current document version.
+     */
+    setSemanticDiagnostics(uri: string, diagnostics: Diagnostic[]): void {
+        const cached = this.cache.get(uri);
+        if (!cached) return;
+        cached.semanticDiagnostics = {
+            version: cached.version,
+            diagnostics,
+        };
+    }
+
+    /**
+     * Return cached semantic diagnostics if they match the current document version.
+     */
+    getSemanticDiagnostics(uri: string): Diagnostic[] | undefined {
+        const cached = this.cache.get(uri);
+        if (!cached?.semanticDiagnostics) return undefined;
+        if (cached.semanticDiagnostics.version !== cached.version) return undefined;
+        return cached.semanticDiagnostics.diagnostics;
+    }
+
+    /**
      * Remove a document from the cache (called on document close).
      */
     remove(uri: string): void {
@@ -136,4 +159,9 @@ interface CachedDocument {
     result: ParseResult;
     /** Lazily built and cached symbol table — invalidated on re-parse. */
     symbolTable?: SymbolTable;
+    /** Semantic diagnostics for a specific version, if computed. */
+    semanticDiagnostics?: {
+        version: number;
+        diagnostics: Diagnostic[];
+    };
 }

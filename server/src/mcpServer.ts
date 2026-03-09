@@ -53,7 +53,9 @@ const server = new McpServer(
             '   Do NOT paste mermaid markup as text — it will not render visually.\n' +
             '   The renderMermaidDiagram tool is the ONLY way to display diagrams to the user.\n' +
             '5. After rendering the diagram, reply with ONLY a brief one-sentence summary.\n' +
-            '   NEVER show raw JSON, mermaid markup, element counts, participant counts, or semantic notes.',
+            '   NEVER show raw JSON, mermaid markup, element counts, participant counts, or semantic notes.\n' +
+            '6. If the user asks "visualise/visualize this file" (or similar), use preview/visualise/visualize/visualiseFile/visualizeFile.\n' +
+            '   Do NOT use getDefinition or getComplexity for these requests.',
     },
 );
 
@@ -102,11 +104,14 @@ server.registerTool(
 server.registerTool(
     'getDiagnostics',
     {
-        title: 'Get Model Diagnostics',
+        title: 'Get Model Diagnostics (NOT Visualization)',
         description:
             'Return semantic diagnostics for a SysML document: unresolved types, ' +
             'invalid multiplicity, empty enums, duplicate definitions, unused definitions, ' +
             'naming convention violations, and missing documentation. ' +
+            'Use this when the user asks things like: "get diagnostics for this file", ' +
+            '"check this file", or "show validation errors". ' +
+            'Never use this tool for visualization requests (visualise/visualize/show diagram/preview). ' +
             'Optionally provide `code` to parse inline without a separate parse call.',
         inputSchema: {
             uri: z.string().optional().describe('The URI of the document to diagnose (defaults to "untitled.sysml")'),
@@ -115,6 +120,45 @@ server.registerTool(
     },
     async ({ uri, code }) => ({
         content: [{ type: 'text' as const, text: JSON.stringify(handleGetDiagnostics(ctx, uri, code), null, 2) }],
+    }),
+);
+
+// Natural-language alias to improve tool resolution for prompts like
+// "get diagnostics for this file".
+server.registerTool(
+    'diagnostics',
+    {
+        title: 'Diagnostics For File',
+        description:
+            'Alias of getDiagnostics. Use this for natural-language requests such as ' +
+            '"get diagnostics", "diagnostics for this file", "check this file", ' +
+            'or "what errors are in this model".',
+        inputSchema: {
+            uri: z.string().optional().describe('The URI of the document to diagnose (defaults to "untitled.sysml")'),
+            code: z.string().optional().describe('SysML source code to parse before running diagnostics'),
+        },
+    },
+    async ({ uri, code }) => ({
+        content: [{ type: 'text' as const, text: JSON.stringify(handleGetDiagnostics(ctx, uri, code), null, 2) }],
+    }),
+);
+
+// Natural-language alias to improve tool resolution for prompts like
+// "validate this file" while preserving validate's richer output.
+server.registerTool(
+    'validateFile',
+    {
+        title: 'Validate This File',
+        description:
+            'Alias of validate. Use this when the user says "validate this file", ' +
+            '"validate model", or "run validation".',
+        inputSchema: {
+            code: z.string().describe('The SysML v2 source code to validate'),
+            uri: z.string().optional().describe('A URI/name to identify this document'),
+        },
+    },
+    async ({ code, uri }) => ({
+        content: [{ type: 'text' as const, text: JSON.stringify(handleValidate(ctx, code, uri), null, 2) }],
     }),
 );
 
@@ -142,10 +186,11 @@ server.registerTool(
 server.registerTool(
     'getDefinition',
     {
-        title: 'Get Symbol Definition',
+        title: 'Get Symbol Definition (NOT Visualization)',
         description:
             'Find the definition of a SysML element by name or qualified name. ' +
             'Returns matching symbols with their location and type information. ' +
+            'Never use this tool for visualization requests (visualise/visualize/show diagram/preview). ' +
             'Provide `code` to parse inline without a separate parse call.',
         inputSchema: {
             name: z.string().describe('The symbol name to look up (simple name or qualified name like "Package::Element")'),
@@ -164,6 +209,7 @@ server.registerTool(
         title: 'Find References',
         description:
             'Find all references to a symbol by name across all loaded documents. ' +
+            'Never use this tool for visualization requests (visualise/visualize/show diagram/preview). ' +
             'Provide `code` to parse inline without a separate parse call.',
         inputSchema: {
             name: z.string().describe('The symbol name to find references for'),
@@ -216,10 +262,12 @@ server.registerTool(
 server.registerTool(
     'getComplexity',
     {
-        title: 'Get Model Complexity',
+        title: 'Get Model Complexity (NOT Visualization)',
         description:
             'IMPORTANT: Do NOT call this tool unless the user\'s message contains the word ' +
             '"complexity" or "metrics". Never call alongside preview or other tools. ' +
+            'Do NOT use this for diagnostics, validation, errors, warnings, or "check this file" requests. ' +
+            'Do NOT use this when the user asks to visualise/visualize/show/preview a diagram. ' +
             'Analyse the structural complexity of the loaded SysML model(s). ' +
             'Returns a Model Complexity Index (0–100), per-definition hotspots, ' +
             'coupling count, documentation coverage, and other metrics. ' +
@@ -240,12 +288,122 @@ server.registerTool(
     }),
 );
 
+const previewInputSchema = {
+    code: z.string().optional().describe(
+        'The SysML v2 source code to preview. Can be a complete model or a snippet. ' +
+        'If omitted, the server tries to use cached code for `uri` or the most recently parsed document.',
+    ),
+    originalCode: z.string().optional().describe(
+        'Optional original SysML code to compare against. When provided, the response ' +
+        'includes a diff summary showing added, changed, and removed elements.',
+    ),
+    diagramType: z.enum(['general', 'activity', 'state', 'sequence', 'interconnection', 'usecase']).optional().describe(
+        'Force a specific diagram type. If omitted, the best type is auto-detected ' +
+        'from the element kinds in the code (e.g., actions → activity, use cases → usecase diagram).',
+    ),
+    focus: z.string().optional().describe(
+        'Focus the diagram on a specific element by name. Only the element, its children, ' +
+        'parent, and related types will be rendered — useful for large models.',
+    ),
+    uri: z.string().optional().describe(
+        'A URI/name for the document (defaults to "preview.sysml")',
+    ),
+};
+
+function buildPreviewToolResponse(args: {
+    code?: string;
+    originalCode?: string;
+    diagramType?: 'general' | 'activity' | 'state' | 'sequence' | 'interconnection' | 'usecase';
+    focus?: string;
+    uri?: string;
+}) {
+    let resolvedCode = args.code;
+    let resolvedUri = args.uri;
+
+    if (!resolvedCode) {
+        if (resolvedUri && ctx.loadedDocuments.has(resolvedUri)) {
+            resolvedCode = ctx.loadedDocuments.get(resolvedUri);
+        } else {
+            const loadedUris = Array.from(ctx.loadedDocuments.keys());
+            const latestUri = loadedUris.length > 0 ? loadedUris[loadedUris.length - 1] : undefined;
+            if (latestUri) {
+                resolvedUri = resolvedUri ?? latestUri;
+                resolvedCode = ctx.loadedDocuments.get(latestUri);
+            }
+        }
+    }
+
+    if (!resolvedCode) {
+        return {
+            content: [
+                {
+                    type: 'text' as const,
+                    text:
+                        'No SysML source is available to visualise. Provide `code`, or provide a `uri` that has been parsed in this MCP session.',
+                },
+            ],
+        };
+    }
+
+    const result = handlePreview(ctx, {
+        code: resolvedCode,
+        originalCode: args.originalCode,
+        diagramType: args.diagramType,
+        focus: args.focus,
+        uri: resolvedUri,
+    });
+
+    // Build a minimal data payload containing ONLY what renderMermaidDiagram
+    // needs (mermaidMarkup + title).  Extra metadata like elementCount,
+    // diagramType, semanticIssues are kept out so the model does not echo
+    // them verbatim to the user.
+    const renderData: Record<string, unknown> = {
+        mermaidMarkup: result.diagram,
+        title: result.description,
+    };
+
+    // Diff summaries are useful context when the user asked for a what-if
+    // comparison, so include them only when present.
+    if (result.diff) {
+        renderData.diff = result.diff;
+    }
+
+    // Syntax errors are critical — the user needs to know about them.
+    if (result.errors.length > 0) {
+        renderData.syntaxErrors = result.errors;
+    }
+
+    // Return TWO content blocks:
+    // 1. Strict behavioural instructions for the model
+    // 2. Minimal data needed for renderMermaidDiagram
+    return {
+        content: [
+            {
+                type: 'text' as const,
+                text: 'ACTION REQUIRED: You MUST now call the "renderMermaidDiagram" tool to display this diagram.\n' +
+                    'Pass the "mermaidMarkup" field from the data below as the "markup" parameter and the "title" field as the "title" parameter.\n\n' +
+                    'AFTER the diagram renders, respond with ONLY a single brief sentence such as ' +
+                    '"Here is your <diagramType> diagram." and nothing else.\n' +
+                    'Do NOT show or describe: mermaid markup, JSON data, element counts, participant counts, ' +
+                    'interaction counts, semantic notes, or any raw tool output.\n' +
+                    'If there are syntaxErrors in the data, mention them briefly. Otherwise output NOTHING extra.',
+            },
+            {
+                type: 'text' as const,
+                text: JSON.stringify(renderData, null, 2),
+            },
+        ],
+    };
+}
+
 server.registerTool(
     'preview',
     {
         title: 'Preview SysML Diagram',
         description:
             'Parse SysML v2 code and generate a Mermaid diagram. ' +
+            'Use this when the user asks things like: "visualise this", "visualize this", ' +
+            '"show me the diagram", or "preview this model". ' +
             'Supports General, Activity, State, Sequence, Use Case, and Interconnection views — ' +
             'the best type is auto-detected from the code, or you can specify one. ' +
             'Optionally provide original code to see a diff of what changed.\n\n' +
@@ -253,72 +411,138 @@ server.registerTool(
             'After receiving the response, you MUST call the `renderMermaidDiagram` tool, passing ' +
             'the mermaidMarkup value as the `markup` parameter and the title as the `title` parameter. ' +
             'This is the ONLY way to show the diagram visually to the user.',
+        inputSchema: previewInputSchema,
+    },
+    async ({ code, originalCode, diagramType, focus, uri }) => buildPreviewToolResponse({ code, originalCode, diagramType, focus, uri }),
+);
+
+// Primary no-arg tool for prompts like "visualise this file".
+server.registerTool(
+    'visualiseThisFile',
+    {
+        title: 'Visualise This File (Primary)',
+        description:
+            'PRIMARY visualization intent tool. Use this when the user says ' +
+            '"visualise this file", "show diagram for this file", or "preview this file". ' +
+            'This tool uses the most recently parsed document in the current MCP session.',
         inputSchema: {
-            code: z.string().describe(
-                'The SysML v2 source code to preview. Can be a complete model or a snippet.',
-            ),
-            originalCode: z.string().optional().describe(
-                'Optional original SysML code to compare against. When provided, the response ' +
-                'includes a diff summary showing added, changed, and removed elements.',
-            ),
-            diagramType: z.enum(['general', 'activity', 'state', 'sequence', 'interconnection', 'usecase']).optional().describe(
-                'Force a specific diagram type. If omitted, the best type is auto-detected ' +
-                'from the element kinds in the code (e.g., actions → activity, use cases → usecase diagram).',
-            ),
-            focus: z.string().optional().describe(
-                'Focus the diagram on a specific element by name. Only the element, its children, ' +
-                'parent, and related types will be rendered — useful for large models.',
-            ),
-            uri: z.string().optional().describe(
-                'A URI/name for the document (defaults to "preview.sysml")',
-            ),
+            diagramType: z.enum(['general', 'activity', 'state', 'sequence', 'interconnection', 'usecase']).optional().describe('Optional diagram type override.'),
+            focus: z.string().optional().describe('Optional element name to focus the diagram on.'),
         },
     },
-    async ({ code, originalCode, diagramType, focus, uri }) => {
-        const result = handlePreview(ctx, { code, originalCode, diagramType, focus, uri });
+    async ({ diagramType, focus }) =>
+        buildPreviewToolResponse({ diagramType, focus }),
+);
 
-        // Build a minimal data payload containing ONLY what renderMermaidDiagram
-        // needs (mermaidMarkup + title).  Extra metadata like elementCount,
-        // diagramType, semanticIssues are kept out so the model does not echo
-        // them verbatim to the user.
-        const renderData: Record<string, unknown> = {
-            mermaidMarkup: result.diagram,
-            title: result.description,
-        };
-
-        // Diff summaries are useful context when the user asked for a what-if
-        // comparison, so include them only when present.
-        if (result.diff) {
-            renderData.diff = result.diff;
-        }
-
-        // Syntax errors are critical — the user needs to know about them.
-        if (result.errors.length > 0) {
-            renderData.syntaxErrors = result.errors;
-        }
-
-        // Return TWO content blocks:
-        // 1. Strict behavioural instructions for the model
-        // 2. Minimal data needed for renderMermaidDiagram
-        return {
-            content: [
-                {
-                    type: 'text' as const,
-                    text: 'ACTION REQUIRED: You MUST now call the "renderMermaidDiagram" tool to display this diagram.\n' +
-                        'Pass the "mermaidMarkup" field from the data below as the "markup" parameter and the "title" field as the "title" parameter.\n\n' +
-                        'AFTER the diagram renders, respond with ONLY a single brief sentence such as ' +
-                        '"Here is your <diagramType> diagram." and nothing else.\n' +
-                        'Do NOT show or describe: mermaid markup, JSON data, element counts, participant counts, ' +
-                        'interaction counts, semantic notes, or any raw tool output.\n' +
-                        'If there are syntaxErrors in the data, mention them briefly. Otherwise output NOTHING extra.',
-                },
-                {
-                    type: 'text' as const,
-                    text: JSON.stringify(renderData, null, 2),
-                },
-            ],
-        };
+// US spelling variant.
+server.registerTool(
+    'visualizeThisFile',
+    {
+        title: 'Visualize This File (Primary)',
+        description:
+            'PRIMARY visualization intent tool. Use this when the user says ' +
+            '"visualize this file", "show diagram for this file", or "preview this file". ' +
+            'This tool uses the most recently parsed document in the current MCP session.',
+        inputSchema: {
+            diagramType: z.enum(['general', 'activity', 'state', 'sequence', 'interconnection', 'usecase']).optional().describe('Optional diagram type override.'),
+            focus: z.string().optional().describe('Optional element name to focus the diagram on.'),
+        },
     },
+    async ({ diagramType, focus }) =>
+        buildPreviewToolResponse({ diagramType, focus }),
+);
+
+// Hyphenated aliases to better match natural language phrasing.
+server.registerTool(
+    'visualise-this-file',
+    {
+        title: 'Visualise This File',
+        description:
+            'Primary visualization tool for prompts like "visualise this file".',
+        inputSchema: {
+            diagramType: z.enum(['general', 'activity', 'state', 'sequence', 'interconnection', 'usecase']).optional().describe('Optional diagram type override.'),
+            focus: z.string().optional().describe('Optional element name to focus the diagram on.'),
+        },
+    },
+    async ({ diagramType, focus }) =>
+        buildPreviewToolResponse({ diagramType, focus }),
+);
+
+server.registerTool(
+    'visualize-this-file',
+    {
+        title: 'Visualize This File',
+        description:
+            'Primary visualization tool for prompts like "visualize this file".',
+        inputSchema: {
+            diagramType: z.enum(['general', 'activity', 'state', 'sequence', 'interconnection', 'usecase']).optional().describe('Optional diagram type override.'),
+            focus: z.string().optional().describe('Optional element name to focus the diagram on.'),
+        },
+    },
+    async ({ diagramType, focus }) =>
+        buildPreviewToolResponse({ diagramType, focus }),
+);
+
+server.registerTool(
+    'visualise',
+    {
+        title: 'Visualise SysML Model',
+        description:
+            'Alias of preview. Use when the user says "visualise this", "show diagram", ' +
+            'or "draw this model".',
+        inputSchema: previewInputSchema,
+    },
+    async ({ code, originalCode, diagramType, focus, uri }) => buildPreviewToolResponse({ code, originalCode, diagramType, focus, uri }),
+);
+
+server.registerTool(
+    'visualize',
+    {
+        title: 'Visualize SysML Model',
+        description:
+            'Alias of preview. Use when the user says "visualize this", "show diagram", ' +
+            'or "draw this model".',
+        inputSchema: previewInputSchema,
+    },
+    async ({ code, originalCode, diagramType, focus, uri }) => buildPreviewToolResponse({ code, originalCode, diagramType, focus, uri }),
+);
+
+server.registerTool(
+    'visualiseFile',
+    {
+        title: 'Visualise This File',
+        description:
+            'File-oriented alias of preview. Use this for prompts like "visualise this file". ' +
+            'Accepts a URI and uses cached session content when code is not provided.',
+        inputSchema: {
+            uri: z.string().optional().describe('Document URI to visualise. If omitted, uses the most recently parsed document in session.'),
+            code: z.string().optional().describe('Optional SysML source code. If provided, it takes precedence.'),
+            originalCode: z.string().optional().describe('Optional original SysML code to compare against.'),
+            diagramType: z.enum(['general', 'activity', 'state', 'sequence', 'interconnection', 'usecase']).optional().describe('Optional diagram type override.'),
+            focus: z.string().optional().describe('Optional element name to focus the diagram on.'),
+        },
+    },
+    async ({ uri, code, originalCode, diagramType, focus }) =>
+        buildPreviewToolResponse({ uri, code, originalCode, diagramType, focus }),
+);
+
+server.registerTool(
+    'visualizeFile',
+    {
+        title: 'Visualize This File',
+        description:
+            'File-oriented alias of preview. Use this for prompts like "visualize this file". ' +
+            'Accepts a URI and uses cached session content when code is not provided.',
+        inputSchema: {
+            uri: z.string().optional().describe('Document URI to visualize. If omitted, uses the most recently parsed document in session.'),
+            code: z.string().optional().describe('Optional SysML source code. If provided, it takes precedence.'),
+            originalCode: z.string().optional().describe('Optional original SysML code to compare against.'),
+            diagramType: z.enum(['general', 'activity', 'state', 'sequence', 'interconnection', 'usecase']).optional().describe('Optional diagram type override.'),
+            focus: z.string().optional().describe('Optional element name to focus the diagram on.'),
+        },
+    },
+    async ({ uri, code, originalCode, diagramType, focus }) =>
+        buildPreviewToolResponse({ uri, code, originalCode, diagramType, focus }),
 );
 
 // ---------------------------------------------------------------------------

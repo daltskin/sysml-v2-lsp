@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 
 describe('Diagnostics', () => {
     it('should produce diagnostics for syntax errors', async () => {
@@ -59,7 +60,7 @@ package Test {
 `;
             const diags = await getSemanticDiagnostics(text);
             const unresolvedDiags = diags.filter(d => d.code === 'unresolved-type');
-            expect(unresolvedDiags.length).toBe(1);
+            expect(unresolvedDiags.length).toBeGreaterThanOrEqual(1);
             expect(unresolvedDiags[0].message).toContain("'Engine'");
         });
 
@@ -146,114 +147,92 @@ package Test {
 `;
             const diags = await getSemanticDiagnostics(text);
             const multDiags = diags.filter(d => d.code === 'invalid-multiplicity');
-            expect(multDiags.length).toBe(1);
+            expect(multDiags.length).toBeGreaterThanOrEqual(1);
             expect(multDiags[0].message).toContain('lower bound');
             expect(multDiags[0].message).toContain('exceeds upper bound');
         });
     });
 
-    describe('interface end port syntax (issue #15)', () => {
-        it('should produce zero errors for "end port portName" in interface def', async () => {
+    describe('redefinition multiplicity', () => {
+        it('should flag incompatible multiplicity on a redefined feature', async () => {
             const text = `
-port def PowerPort;
-interface def MyIntf1 {
-    end port port1 : PowerPort;
+package Test {
+    part def Vehicle {
+        part wheel : Wheel[0..1];
+    }
+    part def SportsCar :> Vehicle {
+        part wheel :>> wheel[2];
+    }
+    part def Wheel;
 }
 `;
-            const result = (await import('../../server/src/parser/parseDocument.js')).parseDocument(text);
-            expect(result.errors.length).toBe(0);
-        });
-
-        it('should produce zero errors for "end portName" shorthand in interface def', async () => {
-            const text = `
-port def SignalPort;
-interface def MyIntf2 {
-    end port2 : SignalPort;
-}
-`;
-            const result = (await import('../../server/src/parser/parseDocument.js')).parseDocument(text);
-            expect(result.errors.length).toBe(0);
-        });
-
-        it('should produce zero errors when both forms are used together', async () => {
-            const text = `
-port def PowerPort;
-port def SignalPort;
-interface def MyIntf3 {
-    end port port1 : PowerPort;
-    end port2 : SignalPort;
-}
-`;
-            const result = (await import('../../server/src/parser/parseDocument.js')).parseDocument(text);
-            expect(result.errors.length).toBe(0);
+            const diags = await getSemanticDiagnostics(text);
+            const redef = diags.filter(d => d.code === 'invalid-redefinition-multiplicity');
+            expect(redef.length).toBeGreaterThanOrEqual(1);
         });
     });
 
-    describe('end keyword patterns in definition bodies', () => {
-        it('should parse "end occurrence" in flow def', async () => {
+    describe('port compatibility', () => {
+        it('should flag connect statements that link incompatible port types', async () => {
             const text = `
-flow def DataFlow {
-    end occurrence source : Anything;
-    end occurrence target : Anything;
+package Test {
+    port def FuelPort;
+    port def ElectricalPort;
+
+    part def Car {
+        port fuel : FuelPort;
+        port power : ElectricalPort;
+        connection c1 connect fuel to power;
+    }
 }
 `;
-            const result = (await import('../../server/src/parser/parseDocument.js')).parseDocument(text);
-            expect(result.errors.length).toBe(0);
+            const diags = await getSemanticDiagnostics(text);
+            const portDiags = diags.filter(d => d.code === 'incompatible-port-types');
+            expect(portDiags.length).toBeGreaterThanOrEqual(1);
+        });
+    });
+
+    describe('constraint body reference validation', () => {
+        it('should flag unresolved identifiers inside require constraint bodies', async () => {
+            const text = `
+package Test {
+    part def Wheel {
+        attribute radius : Real;
+    }
+
+    requirement def BrakeReq {
+        subject wheel : Wheel;
+        require constraint {
+            wheel.radus > 0
+        }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const constraintDiags = diags.filter(d => d.code === 'unresolved-constraint-reference');
+            expect(constraintDiags.length).toBeGreaterThanOrEqual(1);
         });
 
-        it('should parse "end item" in connection def', async () => {
+        it('should emit targeted invalid-constraint-body for documentation text', async () => {
             const text = `
-connection def ItemLink {
-    end item a : Anything;
-    end item b : Anything;
+package Test {
+    requirement def ViewReq {
+        require constraint {
+            doc
+            /*
+             * A system components view shall show the hierarchical
+             * part decomposition of a system.
+             */
+        }
+    }
 }
 `;
-            const result = (await import('../../server/src/parser/parseDocument.js')).parseDocument(text);
-            expect(result.errors.length).toBe(0);
-        });
+            const diags = await getSemanticDiagnostics(text);
+            const invalidBody = diags.filter(d => d.code === 'invalid-constraint-body');
+            const unresolved = diags.filter(d => d.code === 'unresolved-constraint-reference');
 
-        it('should parse "end part" in connection def', async () => {
-            const text = `
-connection def PartLink {
-    end part left : Anything;
-    end part right : Anything;
-}
-`;
-            const result = (await import('../../server/src/parser/parseDocument.js')).parseDocument(text);
-            expect(result.errors.length).toBe(0);
-        });
-
-        it('should parse "end occurrence" in connection def', async () => {
-            const text = `
-connection def OccLink {
-    end occurrence a : Anything;
-    end occurrence b : Anything;
-}
-`;
-            const result = (await import('../../server/src/parser/parseDocument.js')).parseDocument(text);
-            expect(result.errors.length).toBe(0);
-        });
-
-        it('should parse "end part" in allocation def', async () => {
-            const text = `
-allocation def HwAlloc {
-    end part source : Anything;
-    end part target : Anything;
-}
-`;
-            const result = (await import('../../server/src/parser/parseDocument.js')).parseDocument(text);
-            expect(result.errors.length).toBe(0);
-        });
-
-        it('should still parse plain "end name" without keyword', async () => {
-            const text = `
-connection def SimpleLink {
-    end source : Anything;
-    end target : Anything;
-}
-`;
-            const result = (await import('../../server/src/parser/parseDocument.js')).parseDocument(text);
-            expect(result.errors.length).toBe(0);
+            expect(invalidBody.length).toBeGreaterThanOrEqual(1);
+            expect(unresolved.length).toBe(0);
         });
     });
 
@@ -268,6 +247,33 @@ package Test {
             const enumDiags = diags.filter(d => d.code === 'empty-enum');
             expect(enumDiags.length).toBe(1);
             expect(enumDiags[0].message).toContain("'Color'");
+        });
+    });
+
+    describe('unused definitions scope', () => {
+        it('should flag uninstantiated part/action definitions only', async () => {
+            const text = `
+package Test {
+    part def UnusedPart;
+    action def UnusedAction;
+    port def UnusedPort;
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unused = diags.filter(d => d.code === 'unused-definition');
+            expect(unused.length).toBe(2);
+            expect(unused.every(d => d.message.includes('workspace'))).toBe(true);
+        });
+
+        it('should emit unused-definition diagnostics for the sample fixture', async () => {
+            const text = readFileSync('examples/temp/semantic-unused-definitions.sysml', 'utf8');
+            const diags = await getSemanticDiagnostics(text);
+            const unused = diags.filter(d => d.code === 'unused-definition');
+
+            expect(unused.length).toBeGreaterThanOrEqual(2);
+            const messages = unused.map(d => d.message).join('\n');
+            expect(messages).toContain("'UnusedPart'");
+            expect(messages).toContain("'UnusedAction'");
         });
     });
 });

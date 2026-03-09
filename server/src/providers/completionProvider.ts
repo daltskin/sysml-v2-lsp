@@ -5,6 +5,7 @@ import {
     InsertTextFormat,
 } from 'vscode-languageserver/node.js';
 import { DocumentManager } from '../documentManager.js';
+import { isDefinition, SysMLElementKind } from '../symbols/sysmlElements.js';
 
 /**
  * SysML v2 keyword completions organized by category.
@@ -73,8 +74,10 @@ const SYSML_KEYWORDS: { label: string; kind: CompletionItemKind; detail: string;
 export class CompletionProvider {
     constructor(private documentManager: DocumentManager) { }
 
-    provideCompletions(_params: TextDocumentPositionParams): CompletionItem[] {
+    provideCompletions(params: TextDocumentPositionParams): CompletionItem[] {
         const items: CompletionItem[] = [];
+        const uri = params.textDocument.uri;
+        const context = this.detectContext(uri, params.position.line, params.position.character);
 
         for (const kw of SYSML_KEYWORDS) {
             const item: CompletionItem = {
@@ -83,6 +86,7 @@ export class CompletionProvider {
                 detail: kw.detail,
                 documentation: kw.documentation,
                 data: kw.label, // used for resolve
+                sortText: `2_${kw.label}`,
             };
 
             if (kw.insertText) {
@@ -93,8 +97,54 @@ export class CompletionProvider {
             items.push(item);
         }
 
-        // TODO: Add symbol completions from the symbol table
-        // TODO: Add antlr4-c3 grammar-aware completions
+        // Add definition symbols from all cached documents to improve type completion.
+        const workspaceTable = this.documentManager.getWorkspaceSymbolTable();
+        const allSymbols = workspaceTable.getAllSymbols();
+        const definitionSymbols = allSymbols.filter((s) => isDefinition(s.kind));
+
+        const seen = new Set<string>();
+        for (const sym of definitionSymbols) {
+            if (!sym.name || seen.has(sym.name)) continue;
+            seen.add(sym.name);
+
+            items.push({
+                label: sym.name,
+                kind: this.mapSymbolKindToCompletionKind(sym.kind),
+                detail: `${sym.kind}${sym.qualifiedName !== sym.name ? ` (${sym.qualifiedName})` : ''}`,
+                documentation: sym.documentation,
+                data: sym.qualifiedName,
+                sortText: `1_${sym.name}`,
+            });
+        }
+
+        // Add port endpoint symbols for connect contexts.
+        if (context === 'connect-endpoint') {
+            const portSymbols = allSymbols.filter((s) =>
+                s.kind === SysMLElementKind.PortUsage || s.kind === SysMLElementKind.PortDef,
+            );
+            const seenPorts = new Set<string>();
+            for (const sym of portSymbols) {
+                if (!sym.name || seenPorts.has(sym.name)) continue;
+                seenPorts.add(sym.name);
+                items.push({
+                    label: sym.name,
+                    kind: CompletionItemKind.Interface,
+                    detail: `${sym.kind}${sym.typeNames[0] ? ` : ${sym.typeNames[0]}` : ''}`,
+                    data: sym.qualifiedName,
+                    sortText: `0_${sym.name}`,
+                });
+            }
+        }
+
+        if (context === 'type-annotation') {
+            return items.filter((i) => this.isTypeOrDefinitionCompletion(i));
+        }
+
+        if (context === 'connect-endpoint') {
+            return items.filter((i) => this.isConnectContextCompletion(i));
+        }
+
+        // TODO: Add antlr4-c3 grammar-aware context-sensitive completions.
 
         return items;
     }
@@ -102,5 +152,68 @@ export class CompletionProvider {
     resolveCompletion(item: CompletionItem): CompletionItem {
         // Resolve additional details for a completion item
         return item;
+    }
+
+    private mapSymbolKindToCompletionKind(kind: SysMLElementKind): CompletionItemKind {
+        if (kind === SysMLElementKind.PartDef || kind === SysMLElementKind.ItemDef) {
+            return CompletionItemKind.Class;
+        }
+        if (kind === SysMLElementKind.ActionDef || kind === SysMLElementKind.CalcDef) {
+            return CompletionItemKind.Function;
+        }
+        if (kind === SysMLElementKind.PortDef || kind === SysMLElementKind.InterfaceDef) {
+            return CompletionItemKind.Interface;
+        }
+        if (kind === SysMLElementKind.EnumDef) {
+            return CompletionItemKind.Enum;
+        }
+        if (kind === SysMLElementKind.AttributeDef) {
+            return CompletionItemKind.Property;
+        }
+        return CompletionItemKind.Text;
+    }
+
+    private detectContext(uri: string, line: number, character: number): 'general' | 'type-annotation' | 'connect-endpoint' {
+        const text = this.documentManager.getText(uri);
+        if (!text) return 'general';
+
+        const lines = text.split('\n');
+        if (line < 0 || line >= lines.length) return 'general';
+        const lineText = lines[line] ?? '';
+        const beforeCursor = lineText.slice(0, Math.max(0, Math.min(character, lineText.length)));
+
+        const beforeTrim = beforeCursor.trimEnd();
+        if (/\bconnect\b/.test(beforeCursor) && !beforeCursor.includes(';')) {
+            return 'connect-endpoint';
+        }
+        if ((/\bconnect\b/.test(beforeCursor) && /\b(to|from)$/.test(beforeTrim))
+            || /\bconnect\s*$/.test(beforeTrim)
+            || /\bconnect\s+[A-Za-z_][\w.]*\s*$/.test(beforeTrim)) {
+            return 'connect-endpoint';
+        }
+
+        if (/:\s*[A-Za-z_\d]*$/.test(beforeCursor)) {
+            return 'type-annotation';
+        }
+
+        return 'general';
+    }
+
+    private isTypeOrDefinitionCompletion(item: CompletionItem): boolean {
+        if (typeof item.detail === 'string' && item.detail.includes(' def')) return true;
+        if (typeof item.data === 'string' && item.data.includes('::')) return true;
+        return [
+            'part def', 'action def', 'state def', 'requirement def', 'constraint def',
+            'attribute def', 'item def', 'port def', 'interface def', 'connection def',
+            'allocation def', 'use case def', 'view def', 'viewpoint def', 'enum def',
+            'calc def', 'metadata def',
+        ].includes(item.label);
+    }
+
+    private isConnectContextCompletion(item: CompletionItem): boolean {
+        if (typeof item.detail === 'string' && (item.detail.startsWith('port') || item.detail.includes(' port'))) {
+            return true;
+        }
+        return item.label === 'connect' || item.label === 'port' || item.label === 'port def';
     }
 }

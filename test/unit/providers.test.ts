@@ -937,6 +937,32 @@ describe('Hover Provider', () => {
         });
         expect(hover).toBeNull();
     });
+
+    it('should include semantic feedback for hovered diagnostic range', async () => {
+        const { HoverProvider } = await import('../../server/src/providers/hoverProvider.js');
+        const { SymbolTable } = await import('../../server/src/symbols/symbolTable.js');
+        const text = `package T { part def V { part e : Missing[1]; } }`;
+        const { dm } = await setup(text);
+        const uri = 'test://test.sysml';
+
+        const st = new SymbolTable();
+        st.build(uri, dm.get(uri)!);
+        const usage = st.findByName('e')[0];
+        expect(usage).toBeDefined();
+
+        const provider = new HoverProvider(dm);
+        const hover = provider.provideHover({
+            textDocument: { uri },
+            position: {
+                line: usage.selectionRange.start.line,
+                character: usage.selectionRange.start.character,
+            },
+        });
+
+        const value = (hover!.contents as unknown as { value: string }).value;
+        expect(value).toContain('Semantic Feedback');
+        expect(value).toContain('not defined');
+    });
 });
 
 // ===================================================================
@@ -1313,6 +1339,49 @@ describe('Completion Provider', () => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const resolved = provider.resolveCompletion(item as any);
         expect(resolved.label).toBe('part def');
+    });
+
+    it('should prioritize type-like completions in type annotation context', async () => {
+        const { CompletionProvider } = await import('../../server/src/providers/completionProvider.js');
+        const text = `package P {
+    part def Wheel;
+    part car : 
+}`;
+        const { dm } = await setup(text);
+
+        const provider = new CompletionProvider(dm);
+        const items = provider.provideCompletions({
+            textDocument: { uri: 'test://test.sysml' },
+            position: { line: 2, character: 15 },
+        });
+
+        const labels = items.map(i => i.label);
+        expect(labels).toContain('Wheel');
+        expect(labels).not.toContain('bind');
+    });
+
+    it('should offer port-focused completions in connect endpoint context', async () => {
+        const { CompletionProvider } = await import('../../server/src/providers/completionProvider.js');
+        const text = `package P {
+    port def FuelPort;
+    part def Car {
+        port fuel : FuelPort;
+        port backup : FuelPort;
+        connection c1 connect fuel to 
+    }
+}`;
+        const { dm } = await setup(text);
+
+        const provider = new CompletionProvider(dm);
+        const items = provider.provideCompletions({
+            textDocument: { uri: 'test://test.sysml' },
+            position: { line: 5, character: 36 },
+        });
+
+        const labels = items.map(i => i.label);
+        expect(labels).toContain('backup');
+        expect(labels).toContain('fuel');
+        expect(labels).not.toContain('attribute def');
     });
 });
 

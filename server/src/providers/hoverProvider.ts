@@ -1,4 +1,5 @@
 import {
+    DiagnosticSeverity,
     Hover,
     MarkupContent,
     MarkupKind,
@@ -6,6 +7,7 @@ import {
 } from 'vscode-languageserver/node.js';
 import { DocumentManager } from '../documentManager.js';
 import { getLibraryHoverInfo } from '../library/libraryIndex.js';
+import { SemanticValidator } from './semanticValidator.js';
 import { toMetaclassName } from '../symbols/sysmlElements.js';
 import { extractQualifiedNameAt } from '../utils/identUtils.js';
 
@@ -87,6 +89,34 @@ export class HoverProvider {
             lines.push(`\n---\n${symbol.documentation}`);
         }
 
+        // Attach semantic diagnostics near the hovered symbol to provide
+        // actionable guidance directly in hover.
+        let semanticDiags = this.documentManager.getSemanticDiagnostics(params.textDocument.uri);
+        if (!semanticDiags) {
+            const semanticValidator = new SemanticValidator(this.documentManager);
+            semanticDiags = semanticValidator.validate(params.textDocument.uri);
+            this.documentManager.setSemanticDiagnostics(params.textDocument.uri, semanticDiags);
+        }
+        const hoverDiags = semanticDiags.filter((d) =>
+            this.rangeContainsPosition(d.range, params.position),
+        );
+
+        if (hoverDiags.length > 0) {
+            lines.push('\n---\n**Semantic Feedback**');
+            for (const d of hoverDiags.slice(0, 3)) {
+                const sev = d.severity === DiagnosticSeverity.Error
+                    ? 'Error'
+                    : d.severity === DiagnosticSeverity.Warning
+                        ? 'Warning'
+                        : 'Hint';
+                lines.push(`- **${sev}**: ${d.message}`);
+                const hint = this.getRepairHint(String(d.code ?? ''));
+                if (hint) {
+                    lines.push(`  - Suggestion: ${hint}`);
+                }
+            }
+        }
+
         const content: MarkupContent = {
             kind: MarkupKind.Markdown,
             value: lines.join('\n'),
@@ -145,6 +175,36 @@ export class HoverProvider {
         if (character >= lineText.length) return undefined;
 
         return extractQualifiedNameAt(lineText, character);
+    }
+
+    private rangeContainsPosition(
+        range: { start: { line: number; character: number }; end: { line: number; character: number } },
+        position: { line: number; character: number },
+    ): boolean {
+        const afterStart =
+            position.line > range.start.line
+            || (position.line === range.start.line && position.character >= range.start.character);
+        const beforeEnd =
+            position.line < range.end.line
+            || (position.line === range.end.line && position.character <= range.end.character);
+        return afterStart && beforeEnd;
+    }
+
+    private getRepairHint(code: string): string | undefined {
+        switch (code) {
+        case 'invalid-redefinition-multiplicity':
+            return 'Align the redefined feature multiplicity with its base feature bounds.';
+        case 'incompatible-port-types':
+            return 'Connect endpoints with matching port types, or update one endpoint type.';
+        case 'unresolved-constraint-reference':
+            return 'Fix the reference path or add the missing feature in the referenced type.';
+        case 'unresolved-type':
+            return 'Define/import the missing type or correct the type name.';
+        case 'invalid-multiplicity':
+            return 'Use a valid bound where lower <= upper and lower is non-negative.';
+        default:
+            return undefined;
+        }
     }
 }
 

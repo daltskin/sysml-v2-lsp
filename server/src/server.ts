@@ -188,6 +188,9 @@ documents.onDidOpen((event) => {
 /** Pending debounce timers keyed by document URI. */
 const debounceTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
+/** Pending deferred semantic validation timers keyed by document URI. */
+const semanticTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
 /** Debounce delay in ms — avoids re-parsing on every keystroke. */
 const DEBOUNCE_MS = 200;
 
@@ -198,11 +201,29 @@ documents.onDidChangeContent((event) => {
 
     debounceTimers.set(uri, setTimeout(() => {
         debounceTimers.delete(uri);
+        // The document may have been closed before the debounce fired.
+        if (!documents.get(uri)) {
+            return;
+        }
         validateDocument(event.document);
     }, DEBOUNCE_MS));
 });
 
 documents.onDidClose((event) => {
+    const uri = event.document.uri;
+
+    const debounceTimer = debounceTimers.get(uri);
+    if (debounceTimer) {
+        clearTimeout(debounceTimer);
+        debounceTimers.delete(uri);
+    }
+
+    const semanticTimer = semanticTimers.get(uri);
+    if (semanticTimer) {
+        clearTimeout(semanticTimer);
+        semanticTimers.delete(uri);
+    }
+
     documentManager.remove(event.document.uri);
     modelProvider.removeUri(event.document.uri);
     // Clear diagnostics for closed documents
@@ -210,6 +231,10 @@ documents.onDidClose((event) => {
 });
 
 async function validateDocument(document: TextDocument): Promise<void> {
+    if (!documents.get(document.uri)) {
+        return;
+    }
+
     const fileName = document.uri.split('/').pop() ?? document.uri;
 
     // Notify the client that parsing has started
@@ -248,18 +273,30 @@ async function validateDocument(document: TextDocument): Promise<void> {
     // Defer semantic validation — yield the event loop first so LSP
     // requests (hover, completion, etc.) can be served promptly.
     const version = document.version;
-    setTimeout(() => {
+    const existingSemantic = semanticTimers.get(document.uri);
+    if (existingSemantic) {
+        clearTimeout(existingSemantic);
+    }
+
+    const semanticTimer = setTimeout(() => {
+        semanticTimers.delete(document.uri);
+
         // Skip if the document has been re-parsed since we started
         if (documentManager.getVersion(document.uri) !== version) return;
 
+        // Skip if the document was closed while timer was pending.
+        if (!documents.get(document.uri)) return;
+
         const semanticValidator = new SemanticValidator(documentManager);
         const semanticDiags = semanticValidator.validate(document.uri);
-        if (semanticDiags.length > 0) {
-            // Merge with current diagnostics
-            diagnostics.push(...semanticDiags);
-            connection.sendDiagnostics({ uri: document.uri, diagnostics });
-        }
+        documentManager.setSemanticDiagnostics(document.uri, semanticDiags);
+        if (semanticDiags.length === 0) return;
+
+        // Merge with current diagnostics
+        diagnostics.push(...semanticDiags);
+        connection.sendDiagnostics({ uri: document.uri, diagnostics });
     }, 50);
+    semanticTimers.set(document.uri, semanticTimer);
 }
 
 // --------------------------------------------------------------------------

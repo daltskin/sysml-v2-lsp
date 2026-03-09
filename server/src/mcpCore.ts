@@ -27,6 +27,18 @@ export { SYSML_KEYWORDS_ARRAY as SYSML_KEYWORDS } from './utils/sysmlKeywords.js
 export class McpContext {
     readonly symbolTable = new SymbolTable();
     readonly loadedDocuments = new Map<string, string>();
+    readonly loadedDocumentHashes = new Map<string, number>();
+    readonly lastParseErrors = new Map<string, SyntaxError[]>();
+    readonly lastParseTiming = new Map<string, { lex: number; parse: number }>();
+}
+
+function hashTextFNV1a(text: string): number {
+    let hash = 0x811c9dc5;
+    for (let i = 0; i < text.length; i++) {
+        hash ^= text.charCodeAt(i);
+        hash = Math.imul(hash, 0x01000193);
+    }
+    return hash >>> 0;
 }
 
 /**
@@ -93,13 +105,31 @@ export function parseAndBuild(
     text: string,
     uri: string,
 ): { errors: SyntaxError[]; symbolCount: number; timingMs: { lex: number; parse: number } } {
+    const hash = hashTextFNV1a(text);
+    const prevHash = ctx.loadedDocumentHashes.get(uri);
+    const currentSymbolCount = ctx.symbolTable.getSymbolsForUri(uri).length;
+    const cachedErrors = ctx.lastParseErrors.get(uri) ?? [];
+    const canReuseCachedParse = currentSymbolCount > 0 || cachedErrors.length > 0;
+    if (prevHash === hash && ctx.lastParseTiming.has(uri) && canReuseCachedParse) {
+        return {
+            errors: cachedErrors,
+            symbolCount: currentSymbolCount,
+            timingMs: ctx.lastParseTiming.get(uri) ?? { lex: 0, parse: 0 },
+        };
+    }
+
     const result = parseDocument(text);
     ctx.symbolTable.build(uri, result);
     ctx.loadedDocuments.set(uri, text);
+    ctx.loadedDocumentHashes.set(uri, hash);
+    ctx.lastParseErrors.set(uri, result.errors);
+    const timing = { lex: result.timing.lexMs, parse: result.timing.parseMs };
+    ctx.lastParseTiming.set(uri, timing);
+
     return {
         errors: result.errors,
         symbolCount: ctx.symbolTable.getSymbolsForUri(uri).length,
-        timingMs: { lex: result.timing.lexMs, parse: result.timing.parseMs },
+        timingMs: timing,
     };
 }
 
@@ -183,7 +213,11 @@ export function handlePreview(
 
     // Optional semantic validation
     const allNames = new Set(ctx.symbolTable.getAllSymbols().map(s => s.name));
-    const semanticDiags = SemanticValidator.validateSymbols(allSymbols, allNames);
+    const semanticDiags = SemanticValidator.validateSymbols(allSymbols, allNames, {
+        allSymbols: ctx.symbolTable.getAllSymbols(),
+        text: opts.code,
+        uri: docUri,
+    });
 
     // Determine which symbols to render
     let renderSymbols = allSymbols;
@@ -295,7 +329,11 @@ export function handleValidate(
     // Run semantic validation on the built symbol table
     const symbols = ctx.symbolTable.getSymbolsForUri(docUri);
     const allNames = new Set(ctx.symbolTable.getAllSymbols().map(s => s.name));
-    const semanticDiags = SemanticValidator.validateSymbols(symbols, allNames);
+    const semanticDiags = SemanticValidator.validateSymbols(symbols, allNames, {
+        allSymbols: ctx.symbolTable.getAllSymbols(),
+        text: code,
+        uri: docUri,
+    });
 
     const semanticIssues = semanticDiags.map((d: Diagnostic) => ({
         line: d.range.start.line + 1,
@@ -322,7 +360,11 @@ export function handleGetDiagnostics(
     ensureParsed(ctx, docUri, code);
     const symbols = ctx.symbolTable.getSymbolsForUri(docUri);
     const allNames = new Set(ctx.symbolTable.getAllSymbols().map(s => s.name));
-    const diags = SemanticValidator.validateSymbols(symbols, allNames);
+    const diags = SemanticValidator.validateSymbols(symbols, allNames, {
+        allSymbols: ctx.symbolTable.getAllSymbols(),
+        text: code ?? ctx.loadedDocuments.get(docUri),
+        uri: docUri,
+    });
 
     const summary: Record<string, number> = {};
     for (const d of diags) {
