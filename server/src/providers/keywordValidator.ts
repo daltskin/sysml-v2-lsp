@@ -26,7 +26,7 @@ const DEFINITION_KEYWORDS: ReadonlySet<string> = new Set([
     'send', 'snapshot', 'specializes', 'stakeholder', 'state', 'subject',
     'subsets', 'succession', 'then', 'timeslice', 'to', 'transition',
     'type', 'use', 'variant', 'variation', 'verification', 'verify',
-    'view', 'viewpoint', 'when', 'while',
+    'view', 'viewpoint', 'when', 'while', 'datatype',
 ]);
 
 /**

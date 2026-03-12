@@ -102,7 +102,7 @@ export class SemanticValidator {
         }
 
         diagnostics.push(...this.checkDuplicateDefinitions(symbols));
-        diagnostics.push(...this.checkUnusedDefinitions(allSymbols));
+        diagnostics.push(...this.checkUnusedDefinitions(allSymbols, uri));
         diagnostics.push(...this.checkRedefinitionMultiplicity(symbols, indexes));
         diagnostics.push(...this.checkPortCompatibility(text, uri, indexes));
         diagnostics.push(...this.checkConstraintBodyReferences(text, uri, symbols, indexes));
@@ -168,6 +168,7 @@ export class SemanticValidator {
             message,
             source: 'sysml',
             code: 'unresolved-type',
+            data: { typeName: symbol.typeName },
         }];
     }
 
@@ -302,10 +303,13 @@ export class SemanticValidator {
      * Definitions not referenced by any symbol typeNames and that do not
      * themselves specialize/redefine another type.
      */
-    private checkUnusedDefinitions(symbols: SysMLSymbol[]): Diagnostic[] {
+    private checkUnusedDefinitions(symbols: SysMLSymbol[], targetUri?: string): Diagnostic[] {
         const defs = symbols.filter(s =>
             s.kind === SysMLElementKind.PartDef || s.kind === SysMLElementKind.ActionDef,
         );
+        const defsInScope = targetUri
+            ? defs.filter(def => def.uri === targetUri)
+            : defs;
         const referencedTypes = new Set(
             symbols
                 .filter(s => s.kind !== SysMLElementKind.Package)
@@ -313,7 +317,7 @@ export class SemanticValidator {
         );
 
         const diagnostics: Diagnostic[] = [];
-        for (const def of defs) {
+        for (const def of defsInScope) {
             const isReferenced = referencedTypes.has(def.name);
             const hasBaseType = (def.typeNames?.length ?? 0) > 0;
 

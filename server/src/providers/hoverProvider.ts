@@ -192,18 +192,18 @@ export class HoverProvider {
 
     private getRepairHint(code: string): string | undefined {
         switch (code) {
-        case 'invalid-redefinition-multiplicity':
-            return 'Align the redefined feature multiplicity with its base feature bounds.';
-        case 'incompatible-port-types':
-            return 'Connect endpoints with matching port types, or update one endpoint type.';
-        case 'unresolved-constraint-reference':
-            return 'Fix the reference path or add the missing feature in the referenced type.';
-        case 'unresolved-type':
-            return 'Define/import the missing type or correct the type name.';
-        case 'invalid-multiplicity':
-            return 'Use a valid bound where lower <= upper and lower is non-negative.';
-        default:
-            return undefined;
+            case 'invalid-redefinition-multiplicity':
+                return 'Align the redefined feature multiplicity with its base feature bounds.';
+            case 'incompatible-port-types':
+                return 'Connect endpoints with matching port types, or update one endpoint type.';
+            case 'unresolved-constraint-reference':
+                return 'Fix the reference path or add the missing feature in the referenced type.';
+            case 'unresolved-type':
+                return 'Define/import the missing type or correct the type name.';
+            case 'invalid-multiplicity':
+                return 'Use a valid bound where lower <= upper and lower is non-negative.';
+            default:
+                return undefined;
         }
     }
 }

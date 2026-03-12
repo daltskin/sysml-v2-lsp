@@ -8,7 +8,7 @@ import {
     WorkspaceEdit
 } from 'vscode-languageserver/node.js';
 import { DocumentManager } from '../documentManager.js';
-import { SysMLElementKind } from '../symbols/sysmlElements.js';
+import { SysMLElementKind, isDefinition } from '../symbols/sysmlElements.js';
 
 /**
  * Provides code actions (quick fixes) for SysML documents.
@@ -82,6 +82,103 @@ export class CodeActionProvider {
             if (constraintRefFix) {
                 actions.push(constraintRefFix);
             }
+
+            // Unresolved type quick fixes
+            const unresolvedTypeFixes = this.tryUnresolvedTypeFixes(uri, diagnostic);
+            if (unresolvedTypeFixes.length > 0) {
+                actions.push(...unresolvedTypeFixes);
+            }
+        }
+
+        return actions;
+    }
+
+    // ── Unresolved type fixes ──────────────────────────────────────
+
+    /**
+     * For unresolved type diagnostics, offer:
+     *  1) Import package quick-fix if the type exists in another workspace package.
+        *  2) Create a local type definition stub in current package.
+     */
+    private tryUnresolvedTypeFixes(
+        uri: string,
+        diagnostic: Diagnostic,
+    ): CodeAction[] {
+        if (diagnostic.code !== 'unresolved-type') return [];
+
+        const text = this.documentManager.getText(uri);
+        if (!text) return [];
+
+        const data = diagnostic.data as { typeName?: string } | undefined;
+        const unresolvedType = data?.typeName
+            ?? extractQuotedString(diagnostic.message, "Type '");
+        if (!unresolvedType) return [];
+
+        const actions: CodeAction[] = [];
+        const symbolTable = this.documentManager.getWorkspaceSymbolTable();
+        const allSymbols = symbolTable.getAllSymbols();
+
+        // Import suggestions for matching types defined in other files/packages.
+        const packageNames = new Set<string>();
+        for (const s of allSymbols) {
+            if (!isDefinition(s.kind)) continue;
+            if (s.name !== unresolvedType) continue;
+            if (s.uri === uri) continue;
+
+            const parentQn = s.parentQualifiedName || '';
+            const qn = s.qualifiedName || '';
+            const pkg = (parentQn.split('::')[0] || qn.split('::')[0] || '').trim();
+            if (!pkg || pkg === unresolvedType) continue;
+            if (pkg) packageNames.add(pkg);
+        }
+
+        for (const pkg of packageNames) {
+            if (this.hasImportForPackage(text, pkg)) {
+                continue;
+            }
+
+            const insertPos = this.findImportInsertPosition(text);
+            const childIndent = this.getChildIndentForPackageLine(text, insertPos.line);
+            const importText = `${childIndent}public import ${pkg}::*;\n`;
+
+            const edit: WorkspaceEdit = {
+                changes: {
+                    [uri]: [
+                        TextEdit.insert(insertPos, importText),
+                    ],
+                },
+            };
+
+            actions.push({
+                title: `Import '${pkg}::*' to resolve '${unresolvedType}'`,
+                kind: CodeActionKind.QuickFix,
+                diagnostics: [diagnostic],
+                isPreferred: actions.length === 0,
+                edit,
+            });
+        }
+
+        // Always offer a local stub as fallback when import is not desired.
+        const stubPos = this.findPackageBodyInsertPosition(text);
+        if (stubPos) {
+            const childIndent = this.getChildIndentForPackageLine(text, stubPos.line);
+            const localTypeStub = this.buildLocalTypeStub(text, diagnostic, unresolvedType, childIndent);
+
+            const edit: WorkspaceEdit = {
+                changes: {
+                    [uri]: [
+                        TextEdit.insert(stubPos, localTypeStub.stubText),
+                    ],
+                },
+            };
+
+            actions.push({
+                title: localTypeStub.title,
+                kind: CodeActionKind.QuickFix,
+                diagnostics: [diagnostic],
+                isPreferred: actions.length === 0,
+                edit,
+            });
         }
 
         return actions;
@@ -480,7 +577,7 @@ export class CodeActionProvider {
             ? rangeExpr
             : (tokenExpr && tokenExpr.includes('.'))
                 ? tokenExpr
-            : (m?.[1] ?? '');
+                : (m?.[1] ?? '');
         const scopeName = m?.[2];
         if (!expr) return undefined;
         if (!expr.includes('.')) return undefined;
@@ -572,6 +669,102 @@ export class CodeActionProvider {
         let end = 0;
         while (end < ln.length && (ln[end] === ' ' || ln[end] === '\t')) end++;
         return ln.substring(0, end);
+    }
+
+    private hasImportForPackage(text: string, pkg: string): boolean {
+        const escaped = pkg.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        const re = new RegExp(`^\\s*(?:public\\s+)?import\\s+${escaped}::\\*\\s*;\\s*$`, 'm');
+        return re.test(text);
+    }
+
+    private findImportInsertPosition(text: string): Position {
+        const lines = text.split('\n');
+        let packageLine = -1;
+        let firstImport = -1;
+        let lastImport = -1;
+
+        for (let i = 0; i < lines.length; i++) {
+            const ln = lines[i];
+            if (packageLine < 0 && /^\s*(?:standard\s+library\s+)?package\b/.test(ln)) {
+                packageLine = i;
+            }
+            if (/^\s*(?:public\s+)?import\b/.test(ln)) {
+                if (firstImport < 0) firstImport = i;
+                lastImport = i;
+            }
+        }
+
+        if (lastImport >= 0) {
+            return Position.create(lastImport + 1, 0);
+        }
+        if (packageLine >= 0) {
+            return Position.create(packageLine + 1, 0);
+        }
+        return Position.create(0, 0);
+    }
+
+    private findPackageBodyInsertPosition(text: string): Position | undefined {
+        const lines = text.split('\n');
+        let lastClosingBraceLine = -1;
+        for (let i = lines.length - 1; i >= 0; i--) {
+            if (/^\s*}\s*;?\s*$/.test(lines[i])) {
+                lastClosingBraceLine = i;
+                break;
+            }
+        }
+        if (lastClosingBraceLine < 0) return undefined;
+        return Position.create(lastClosingBraceLine, 0);
+    }
+
+    private getChildIndentForPackageLine(text: string, line: number): string {
+        const base = this.getLineIndent(text, Math.max(0, line));
+        return `${base}    `;
+    }
+
+    private isAttributeTypeContext(text: string, diagnostic: Diagnostic, unresolvedType: string): boolean {
+        const lines = text.split('\n');
+        const line = lines[diagnostic.range.start.line] ?? '';
+        const beforeRange = line.slice(0, diagnostic.range.start.character);
+        const unresolvedInLine = line.slice(diagnostic.range.start.character, diagnostic.range.end.character);
+
+        // If the line is an attribute declaration whose type token matches
+        // the unresolved type, treat it as attribute typing context even when
+        // the diagnostic range points to the attribute name token.
+        const escapedType = unresolvedType.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        if (/^\s*attribute\s+[A-Za-z_][A-Za-z0-9_]*\s*:/.test(line)
+            && new RegExp(`:\\s*${escapedType}\\b`).test(line)) {
+            return true;
+        }
+
+        // Standard case: caret/range is on the type token in
+        // `attribute name : TypeName;`
+        if (/\battribute\s+[A-Za-z_][A-Za-z0-9_]*\s*:\s*$/.test(beforeRange)) {
+            return true;
+        }
+
+        // Fallback: tolerate ranges that are shifted but still on the same line.
+        // This catches lines like `attribute name : TypeName;` even when
+        // the range boundaries are slightly off.
+        return /\battribute\s+[A-Za-z_][A-Za-z0-9_]*\s*:\s*[A-Za-z_][A-Za-z0-9_]*\b/.test(beforeRange + unresolvedInLine);
+    }
+
+    private buildLocalTypeStub(
+        text: string,
+        diagnostic: Diagnostic,
+        unresolvedType: string,
+        childIndent: string,
+    ): { title: string; stubText: string } {
+        if (this.isAttributeTypeContext(text, diagnostic, unresolvedType)) {
+            return {
+                title: `Create local 'attribute def ${unresolvedType};'`,
+                stubText: `\n${childIndent}attribute def ${unresolvedType};\n`,
+            };
+        }
+
+        return {
+            title: `Create local 'item def ${unresolvedType};'`,
+            stubText: `\n${childIndent}item def ${unresolvedType};\n`,
+        };
     }
 }
 

@@ -1,5 +1,5 @@
-import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { describe, expect, it } from 'vitest';
 
 describe('Diagnostics', () => {
     it('should produce diagnostics for syntax errors', async () => {
@@ -46,6 +46,20 @@ async function getSemanticDiagnostics(text: string) {
 
     const validator = new SemanticValidator(docManager);
     return validator.validate(uri);
+}
+
+async function getSemanticDiagnosticsForUri(entries: Array<{ uri: string; text: string }>, targetUri: string) {
+    const { DocumentManager } = await import('../../server/src/documentManager.js');
+    const { SemanticValidator } = await import('../../server/src/providers/semanticValidator.js');
+
+    const docManager = new DocumentManager();
+    for (const entry of entries) {
+        const doc = await makeDoc(entry.text, entry.uri);
+        docManager.parse(doc);
+    }
+
+    const validator = new SemanticValidator(docManager);
+    return validator.validate(targetUri);
 }
 
 describe('Semantic Validation', () => {
@@ -121,7 +135,7 @@ package Test {
 package Test {
     public import ISQ::*;
     alias Torque for ISQ::TorqueValue;
-    
+
     part def Engine {
         attribute maxTorque : Torque;
     }
@@ -274,6 +288,30 @@ package Test {
             const messages = unused.map(d => d.message).join('\n');
             expect(messages).toContain("'UnusedPart'");
             expect(messages).toContain("'UnusedAction'");
+        });
+
+        it('should not leak unused-definition diagnostics from other files', async () => {
+            const uriA = 'file:///a.sysml';
+            const uriB = 'file:///b.sysml';
+            const textA = `
+package A {
+    part def Camera;
+}
+`;
+            const textB = `
+package B {
+    part def Sensor;
+    part sensor : Sensor;
+}
+`;
+
+            const diags = await getSemanticDiagnosticsForUri([
+                { uri: uriA, text: textA },
+                { uri: uriB, text: textB },
+            ], uriB);
+
+            const unused = diags.filter(d => d.code === 'unused-definition');
+            expect(unused.length).toBe(0);
         });
     });
 });

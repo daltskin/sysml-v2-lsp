@@ -1,5 +1,34 @@
 # Changelog
 
+## [0.8.0]
+
+### Added
+
+- Workspace-wide semantic validation with cross-file symbol indexes (byName, byParent, byQualifiedName, definitionsByName, portsByName)
+- Three new validation rules: redefinition multiplicity, port type compatibility, constraint body references
+- Quick-fix code actions for all three new rules (align multiplicity, switch port endpoint, suggest nearest member)
+- Context-aware completions: port endpoints in `connect` blocks, type annotation filtering, workspace definition symbols
+- Semantic feedback in hover tooltips — shows diagnostics and repair hints at the hovered position
+- Cached semantic diagnostics per document version to avoid redundant revalidation
+- MCP preview tool falls back to cached/loaded documents when `code` parameter is omitted
+
+### Changed
+
+- Unused-definition rule narrowed to PartDef/ActionDef, excludes types with base types, promoted from Hint to Warning, now workspace-scoped
+- MCP non-visual tools annotated with explicit "NOT Visualization" routing guidance
+- MCP preview response stripped to minimal render data (mermaidMarkup + title)
+
+## [0.7.0]
+
+### Changed
+
+- MCP tool routing guidance and aliases expanded for diagnostics, validation, and file-focused preview requests
+
+### Fixed
+
+- Semantic validator signal quality: reduced specialization false positives and downgraded low-value unused-definition reports to warnings
+- Document-close diagnostics race: pending validation timers are cancelled and diagnostics publishing is guarded for closed documents
+
 ## [0.6.0]
 
 ### Added

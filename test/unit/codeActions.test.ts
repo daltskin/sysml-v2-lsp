@@ -338,7 +338,7 @@ describe('Code Actions — Keyword Typo', () => {
 // ─────────────────────────────────────────────────────────────────
 
 describe('Code Actions — No false positives', () => {
-    it('should return no actions for unresolved-type diagnostic', async () => {
+    it('should return no actions for unresolved-type diagnostic when file text is unavailable', async () => {
         const uri = 'file:///test.sysml';
         const { CodeActionProvider } = await import(
             '../../server/src/providers/codeActionProvider.js'
@@ -376,5 +376,114 @@ describe('Code Actions — No false positives', () => {
 
         const actions = provider.provideCodeActions(makeParams(uri, [diag]));
         expect(actions.length).toBe(0);
+    });
+});
+
+describe('Code Actions — Unresolved Type', () => {
+    it('should offer to import a workspace package that defines the missing type', async () => {
+        const uriMain = 'file:///main.sysml';
+        const uriLib = 'file:///lib.sysml';
+        const mainText = `package CameraTestBDD {
+    attribute resolution : Resolution;
+}`;
+        const libText = `package PictureTaking {
+    part def Resolution;
+}`;
+
+        const { DocumentManager } = await import('../../server/src/documentManager.js');
+        const { CodeActionProvider } = await import('../../server/src/providers/codeActionProvider.js');
+
+        const docManager = new DocumentManager();
+        docManager.parse(await makeDoc(mainText, uriMain));
+        docManager.parse(await makeDoc(libText, uriLib));
+
+        const provider = new CodeActionProvider(docManager);
+        const diag: Diagnostic = {
+            severity: 2,
+            range: { start: { line: 1, character: 27 }, end: { line: 1, character: 37 } },
+            message: "Type 'Resolution' is not defined in the current document or standard library",
+            source: 'sysml',
+            code: 'unresolved-type',
+            data: { typeName: 'Resolution' },
+        };
+
+        const actions = provider.provideCodeActions(makeParams(uriMain, [diag]));
+        const importFix = actions.find(a => a.title.includes("Import 'PictureTaking::*'"));
+
+        expect(importFix).toBeDefined();
+        expect(importFix!.edit?.changes?.[uriMain]?.[0].newText).toContain('public import PictureTaking::*;');
+    });
+
+    it('should offer to create a local attribute def stub for unresolved type in attribute context', async () => {
+        const uri = 'file:///test.sysml';
+        const text = `package CameraTestBDD {
+    attribute resolution : Resolution;
+}`;
+
+        const { provider } = await makeProvider(text, uri);
+        const diag: Diagnostic = {
+            severity: 2,
+            range: { start: { line: 1, character: 27 }, end: { line: 1, character: 37 } },
+            message: "Type 'Resolution' is not defined in the current document or standard library",
+            source: 'sysml',
+            code: 'unresolved-type',
+            data: { typeName: 'Resolution' },
+        };
+
+        const actions = provider.provideCodeActions(makeParams(uri, [diag]));
+        const createFix = actions.find(a => a.title.includes("Create local 'attribute def Resolution;'"));
+
+        expect(createFix).toBeDefined();
+        expect(createFix!.edit?.changes?.[uri]?.[0].newText).toContain('attribute def Resolution;');
+    });
+
+    it('should offer attribute def for unresolved Map in attribute context', async () => {
+        const uri = 'file:///test-map.sysml';
+        const text = `package CameraTestBDD {
+    attribute mapData : Map;
+}`;
+
+        const { provider } = await makeProvider(text, uri);
+        const diag: Diagnostic = {
+            severity: 2,
+            range: { start: { line: 1, character: 24 }, end: { line: 1, character: 27 } },
+            message: "Type 'Map' is not defined in the current document or standard library",
+            source: 'sysml',
+            code: 'unresolved-type',
+            data: { typeName: 'Map' },
+        };
+
+        const actions = provider.provideCodeActions(makeParams(uri, [diag]));
+        const createFix = actions.find(a => a.title.includes("Create local 'attribute def Map;'"));
+
+        expect(createFix).toBeDefined();
+        expect(createFix!.edit?.changes?.[uri]?.[0].newText).toContain('attribute def Map;');
+    });
+
+    it('should still offer attribute def when unresolved-type range is on attribute name', async () => {
+        const uri = 'file:///camera-bdd.sysml';
+        const text = `package CameraTestBDD {
+    part def CameraSystem {
+        attribute resolution : Resolution;
+    }
+}`;
+
+        const { provider } = await makeProvider(text, uri);
+        const diag: Diagnostic = {
+            severity: 2,
+            // Mirrors real-world diagnostic where range targets "resolution"
+            // instead of "Resolution".
+            range: { start: { line: 2, character: 18 }, end: { line: 2, character: 29 } },
+            message: "Type 'Resolution' is not defined in the current document or standard library",
+            source: 'sysml',
+            code: 'unresolved-type',
+            data: { typeName: 'Resolution' },
+        };
+
+        const actions = provider.provideCodeActions(makeParams(uri, [diag]));
+        const createFix = actions.find(a => a.title.includes("Create local 'attribute def Resolution;'"));
+
+        expect(createFix).toBeDefined();
+        expect(createFix!.edit?.changes?.[uri]?.[0].newText).toContain('attribute def Resolution;');
     });
 });
