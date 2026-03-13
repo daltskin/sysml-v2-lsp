@@ -178,24 +178,16 @@ package WarmUp {
         interface wfi : WheelFastenerInterface [5]
             connect lugComposite.lug to shankComposite.shank;
     }
-    // ---- End-keyword syntax (issue #15) ----
-    // Exercises "end <keyword> <name>" alternatives in endFeatureUsage
-    // so the DFA snapshot covers these paths.
-    interface def EndKeywordTest {
-        end port ep1;
-        end port ep2 : DrivePort;
-        end part ePart1;
-        end item eItem1;
-        end occurrence eOcc1;
+    // ---- End feature syntax ----
+    // Upstream grammar uses plain "end <name>" form only (no keyword after end).
+    interface def EndFeatureTest {
+        end ep1;
+        end ep2 : DrivePort;
         end ep3;
     }
-    connection def EndKeywordConnDef {
-        end port connPort1;
-        end connection connEnd1;
-        end flow flowEnd1;
-        end interface intfEnd1;
-        end allocation allocEnd1;
-        end attribute attrEnd1;
+    connection def EndFeatureConnDef {
+        end connEnd1;
+        end connEnd2 : DrivePort;
     }
 
     // ---- Allocation ----

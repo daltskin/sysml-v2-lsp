@@ -686,7 +686,7 @@ export class SemanticValidator {
 
         // If only prose-like tokens remain and there are no expression operators,
         // treat it as misplaced documentation text.
-        const hasExprSignal = /[<>=!+\-*/%()\[\].,:]|\b(and|or|not)\b/.test(withoutComments);
+        const hasExprSignal = /[<>=!+\-*/%()[\].,:]|\b(and|or|not)\b/.test(withoutComments);
         const proseOnly = /^[A-Za-z_\s]+$/.test(withoutComments);
         return proseOnly && !hasExprSignal;
     }

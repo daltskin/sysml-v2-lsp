@@ -89,6 +89,11 @@ LIBRARY_DIR := sysml.library
 
 update-library: ## Pull latest SysML v2 standard library from OMG release repo
 	@echo "📥 Fetching SysML v2 standard library from $(LIBRARY_REPO)..."
+	@RELEASE_TAG=$$(curl -fsSL https://api.github.com/repos/$(LIBRARY_REPO)/releases/latest 2>/dev/null \
+		| grep '"tag_name"' | head -1 | sed 's/.*"tag_name": *"\([^"]*\)".*/\1/') ; \
+	COMMIT_SHA=$$(curl -fsSL https://api.github.com/repos/$(LIBRARY_REPO)/commits/$(LIBRARY_BRANCH) 2>/dev/null \
+		| grep '"sha"' | head -1 | sed 's/.*"sha": *"\([^"]*\)".*/\1/' | cut -c1-7) ; \
+	echo "  Release: $${RELEASE_TAG:-unknown}  ($(LIBRARY_BRANCH) @ $${COMMIT_SHA:-unknown})"
 	@rm -rf /tmp/sysml-v2-library-update
 	@mkdir -p /tmp/sysml-v2-library-update
 	curl -fsSL $(LIBRARY_ARCHIVE_URL) | tar xz -C /tmp/sysml-v2-library-update --strip-components=1 --wildcards '*/$(LIBRARY_DIR)/*'

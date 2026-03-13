@@ -15,6 +15,7 @@
 ### Changed
 
 - Unused-definition rule narrowed to PartDef/ActionDef, excludes types with base types, promoted from Hint to Warning, now workspace-scoped
+- Grammar updated to OMG "2026-02 - SysML v2 Release" — removed local `end <keyword>` patch in favour of upstream `endFeatureUsage` rule
 - MCP non-visual tools annotated with explicit "NOT Visualization" routing guidance
 - MCP preview response stripped to minimal render data (mermaidMarkup + title)
 

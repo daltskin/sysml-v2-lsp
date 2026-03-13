@@ -256,7 +256,6 @@ import { UsageBodyContext } from "./SysMLv2Parser.js";
 import { DefaultReferenceUsageContext } from "./SysMLv2Parser.js";
 import { ReferenceUsageContext } from "./SysMLv2Parser.js";
 import { EndFeatureUsageContext } from "./SysMLv2Parser.js";
-import { EndUsageKeywordContext } from "./SysMLv2Parser.js";
 import { VariantReferenceContext } from "./SysMLv2Parser.js";
 import { NonOccurrenceUsageElementContext } from "./SysMLv2Parser.js";
 import { OccurrenceUsageElementContext } from "./SysMLv2Parser.js";
@@ -2032,12 +2031,6 @@ export class SysMLv2ParserVisitor<Result> extends AbstractParseTreeVisitor<Resul
      * @return the visitor result
      */
     visitEndFeatureUsage?: (ctx: EndFeatureUsageContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.endUsageKeyword`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitEndUsageKeyword?: (ctx: EndUsageKeywordContext) => Result;
     /**
      * Visit a parse tree produced by `SysMLv2Parser.variantReference`.
      * @param ctx the parse tree

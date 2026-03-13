@@ -16,11 +16,13 @@
  *   6. Coupling (type refs)   — cross-definition type references (≈ coupling)
  *   7. Unused definitions     — dead definitions (≈ dead code)
  *   8. Documentation coverage — % of definitions with doc comments
- *   9. Complexity index       — single weighted score (0 = trivial, 100 = complex)
+ *   9. Advanced behavior/use  — specialization links, perform/transition usage,
+ *                               calc-chain depth, action complexity, stdlib refs
+ *  10. Complexity index       — weighted composite (0 = trivial, 100 = complex)
  *
- * The complexity index is deliberately opinionated — it combines size,
- * depth, coupling, and quality into one number that can be displayed in
- * a status bar item.
+ * The complexity index is deliberately opinionated. It combines size,
+ * depth, coupling, fan-out, documentation debt, and advanced behavioral
+ * signals into one score that can be displayed in a status bar item.
  */
 
 import { SysMLElementKind, SysMLSymbol, isDefinition, isUsage } from '../symbols/sysmlElements.js';
@@ -94,6 +96,16 @@ const WEIGHTS = {
     fanOut: 0.20,
 };
 
+interface AdvancedSignals {
+    specializationLinks: number;
+    performUsages: number;
+    transitionUsages: number;
+    stdLibTypeRefs: number;
+    maxCalcChainDepth: number;
+    actionComplexityBonus: number;
+    behaviorByDef: Map<string, number>;
+}
+
 // ---------------------------------------------------------------------------
 // Main analysis function
 // ---------------------------------------------------------------------------
@@ -116,6 +128,7 @@ export function analyseComplexity(symbols: SysMLSymbol[]): ComplexityReport {
     // --- Nesting depth ---
     const depthMap = computeDepths(symbols);
     const maxDepth = Math.max(...Array.from(depthMap.values()), 0);
+    const byQualifiedName = new Map(symbols.map(s => [s.qualifiedName, s]));
 
     // --- Children per definition ---
     const childCounts = new Map<string, number>();
@@ -138,6 +151,9 @@ export function analyseComplexity(symbols: SysMLSymbol[]): ComplexityReport {
     for (const d of defs) {
         typeRefsPerDef.set(d.qualifiedName, 0);
     }
+
+    // --- Advanced SysML feature signals ---
+    const advanced = computeAdvancedSignals(symbols, defs, byQualifiedName);
     for (const s of usages) {
         for (const tn of s.typeNames) {
             if (defNames.has(tn)) {
@@ -173,7 +189,8 @@ export function analyseComplexity(symbols: SysMLSymbol[]): ComplexityReport {
         const dp = depthMap.get(d.qualifiedName) ?? 0;
         const tr = typeRefsPerDef.get(d.qualifiedName) ?? 0;
         const hasDoc = !!d.documentation;
-        const score = computeDefScore(cc, dp, tr, hasDoc);
+        const behaviorSignal = advanced.behaviorByDef.get(d.qualifiedName) ?? 0;
+        const score = computeDefScore(cc, dp, tr, hasDoc, behaviorSignal);
         return {
             qualifiedName: d.qualifiedName,
             kind: d.kind,
@@ -186,12 +203,22 @@ export function analyseComplexity(symbols: SysMLSymbol[]): ComplexityReport {
     }).sort((a, b) => b.score - a.score);
 
     // --- Composite index ---
+    // Fold advanced SysML feature usage into the existing dimensions so the
+    // score remains comparable while accounting for richer modelling features.
+    const enrichedDepth = Math.max(maxDepth, advanced.maxCalcChainDepth + 1);
+    const enrichedCoupling = couplingCount
+        + advanced.specializationLinks
+        + Math.round(advanced.performUsages * 0.5)
+        + Math.round(advanced.transitionUsages * 0.5)
+        + Math.round(advanced.stdLibTypeRefs * 0.6);
+    const enrichedFanOut = avgChildrenPerDef + advanced.actionComplexityBonus;
+
     const complexityIndex = computeIndex(
         symbols.length,
-        maxDepth,
-        couplingCount,
+        enrichedDepth,
+        enrichedCoupling,
         defs.length,
-        avgChildrenPerDef,
+        enrichedFanOut,
         documentationCoverage,
     );
 
@@ -209,6 +236,119 @@ export function analyseComplexity(symbols: SysMLSymbol[]): ComplexityReport {
         rating: indexToRating(complexityIndex),
         hotspots,
     };
+}
+
+function computeAdvancedSignals(
+    symbols: SysMLSymbol[],
+    defs: SysMLSymbol[],
+    byQualifiedName: Map<string, SysMLSymbol>,
+): AdvancedSignals {
+    const defNames = new Set(defs.map(d => d.name));
+    const behaviorByDef = new Map<string, number>();
+    for (const d of defs) {
+        behaviorByDef.set(d.qualifiedName, 0);
+    }
+
+    let specializationLinks = 0;
+    let performUsages = 0;
+    let transitionUsages = 0;
+    let stdLibTypeRefs = 0;
+    let maxCalcChainDepth = 0;
+    let actionComplexityBonus = 0;
+
+    const addBehavior = (qualifiedName: string | undefined, amount: number): void => {
+        if (!qualifiedName || !behaviorByDef.has(qualifiedName)) return;
+        behaviorByDef.set(qualifiedName, (behaviorByDef.get(qualifiedName) ?? 0) + amount);
+    };
+
+    for (const d of defs) {
+        specializationLinks += d.typeNames.length;
+        addBehavior(d.qualifiedName, Math.min(3, d.typeNames.length));
+    }
+
+    for (const s of symbols) {
+        switch (s.kind) {
+            case SysMLElementKind.PerformActionUsage:
+                performUsages++;
+                addBehavior(s.parentQualifiedName, 2);
+                break;
+            case SysMLElementKind.CalcUsage:
+                addBehavior(s.parentQualifiedName, 2);
+                break;
+            case SysMLElementKind.CalcDef:
+                addBehavior(s.parentQualifiedName, 1);
+                break;
+            case SysMLElementKind.TransitionUsage:
+                transitionUsages++;
+                addBehavior(s.parentQualifiedName, 2);
+                break;
+            case SysMLElementKind.ExhibitStateUsage:
+                addBehavior(s.parentQualifiedName, 1);
+                break;
+            default:
+                break;
+        }
+
+        if (s.kind === SysMLElementKind.ActionDef) {
+            const localBehavior = symbols.filter(c => c.parentQualifiedName === s.qualifiedName)
+                .reduce((score, c) => {
+                    if (c.kind === SysMLElementKind.PerformActionUsage) return score + 2;
+                    if (c.kind === SysMLElementKind.CalcUsage || c.kind === SysMLElementKind.CalcDef) return score + 2;
+                    if (c.kind === SysMLElementKind.ActionUsage) return score + 1;
+                    return score;
+                }, 0);
+            actionComplexityBonus += Math.min(4, localBehavior / 4);
+            addBehavior(s.qualifiedName, Math.min(4, localBehavior));
+        }
+
+        if (s.kind === SysMLElementKind.CalcUsage || s.kind === SysMLElementKind.CalcDef) {
+            const chainDepth = calcChainDepth(s, byQualifiedName);
+            if (chainDepth > maxCalcChainDepth) {
+                maxCalcChainDepth = chainDepth;
+            }
+            addBehavior(s.parentQualifiedName, Math.min(3, chainDepth));
+        }
+
+        for (const typeName of s.typeNames) {
+            if (defNames.has(typeName)) continue;
+            if (looksLikeStdLibType(typeName)) {
+                stdLibTypeRefs++;
+                addBehavior(s.parentQualifiedName, 1);
+            }
+        }
+    }
+
+    return {
+        specializationLinks,
+        performUsages,
+        transitionUsages,
+        stdLibTypeRefs,
+        maxCalcChainDepth,
+        actionComplexityBonus,
+        behaviorByDef,
+    };
+}
+
+function calcChainDepth(symbol: SysMLSymbol, byQualifiedName: Map<string, SysMLSymbol>): number {
+    let depth = 1;
+    let cursor = symbol.parentQualifiedName ? byQualifiedName.get(symbol.parentQualifiedName) : undefined;
+    while (cursor && (cursor.kind === SysMLElementKind.CalcUsage || cursor.kind === SysMLElementKind.CalcDef)) {
+        depth++;
+        cursor = cursor.parentQualifiedName ? byQualifiedName.get(cursor.parentQualifiedName) : undefined;
+    }
+    return depth;
+}
+
+function looksLikeStdLibType(typeName: string): boolean {
+    if (!typeName) return false;
+    if (typeName.includes('::')) return true;
+
+    const commonStdLibTypes = new Set([
+        'String', 'Boolean', 'Integer', 'Natural', 'Real', 'Complex', 'Number',
+        'Map', 'OrderedMap', 'Set', 'Sequence', 'Bag', 'Vector', 'KeyValuePair',
+        'Duration', 'Time', 'DateTime', 'Mass', 'Length', 'Speed', 'Acceleration',
+    ]);
+    return commonStdLibTypes.has(typeName);
 }
 
 // ---------------------------------------------------------------------------
@@ -294,12 +434,14 @@ function computeDefScore(
     depth: number,
     typeRefs: number,
     hasDoc: boolean,
+    behaviorSignal = 0,
 ): number {
-    const cc = clamp(childCount / 15) * 35;
+    const cc = clamp(childCount / 15) * 30;
     const dp = clamp(depth / 6) * 20;
-    const tr = clamp(typeRefs / 5) * 30;
+    const tr = clamp(typeRefs / 5) * 25;
     const dc = hasDoc ? 0 : 15;
-    return Math.round(cc + dp + tr + dc);
+    const bs = clamp(behaviorSignal / 8) * 10;
+    return Math.round(Math.min(100, cc + dp + tr + dc + bs));
 }
 
 function indexToRating(index: number): ComplexityReport['rating'] {
