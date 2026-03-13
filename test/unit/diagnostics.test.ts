@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 describe('Diagnostics', () => {
@@ -280,7 +279,14 @@ package Test {
         });
 
         it('should emit unused-definition diagnostics for the sample fixture', async () => {
-            const text = readFileSync('examples/temp/semantic-unused-definitions.sysml', 'utf8');
+            const text = `
+package SemanticUnusedDefinitions {
+    part def UnusedPart;
+    action def UnusedAction;
+    part def UsedPart;
+    part system : UsedPart;
+}
+`;
             const diags = await getSemanticDiagnostics(text);
             const unused = diags.filter(d => d.code === 'unused-definition');
 
