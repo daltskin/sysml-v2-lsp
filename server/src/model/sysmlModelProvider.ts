@@ -1239,7 +1239,7 @@ export class SysMLModelProvider {
                 if (!reqName || reqName === 'requirement') continue;
 
                 // Look for 'by <satisfier>' clause
-                let byPos = skipWS(text, afterReq);
+                const byPos = skipWS(text, afterReq);
                 const [byWord, afterBy] = readIdent(text, byPos);
                 if (byWord !== 'by') continue;  // standalone satisfy/verify must have 'by'
                 const [satisfier] = readNameOrQuoted(text, skipWS(text, afterBy));
@@ -1282,7 +1282,7 @@ export class SysMLModelProvider {
             if (reqName && reqName !== 'requirement') {
                 // Check for 'by <satisfier>' clause
                 let satisfier = elementName;
-                let byPos = skipWS(elementText, afterReq);
+                const byPos = skipWS(elementText, afterReq);
                 const [byWord, afterBy] = readIdent(elementText, byPos);
                 if (byWord === 'by') {
                     const [byTarget] = readNameOrQuoted(elementText, skipWS(elementText, afterBy));
@@ -1305,7 +1305,7 @@ export class SysMLModelProvider {
             if (reqName && reqName !== 'requirement') {
                 // Check for 'by <verifier>' clause
                 let verifier = elementName;
-                let byPos = skipWS(elementText, afterReq);
+                const byPos = skipWS(elementText, afterReq);
                 const [byWord, afterBy] = readIdent(elementText, byPos);
                 if (byWord === 'by') {
                     const [byTarget] = readNameOrQuoted(elementText, skipWS(elementText, afterBy));
