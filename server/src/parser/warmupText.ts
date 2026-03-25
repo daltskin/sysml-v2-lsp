@@ -1045,5 +1045,26 @@ package WarmUp {
     part def TypeA;
     part def TypeB;
 
+    // ---- Flow / streaming / succession ----
+    // The 'flow of X from Y to Z' construct exercises item-flow grammar rules.
+    part def FlowSource { out item outPort : Signal; }
+    part def FlowSink   { in  item inPort  : Signal; }
+    item def Signal;
+    action def Focus  { out xrsl : Signal; }
+    action def Shoot  { in  xsf  : Signal; }
+    action takePicture {
+        action focus : Focus [1];
+        flow of Signal from focus.xrsl to shoot.xsf;
+        action shoot : Shoot [1];
+    }
+    part flowExample {
+        part src : FlowSource;
+        part snk : FlowSink;
+        flow of Signal from src.outPort to snk.inPort;
+        stream of Signal from src.outPort to snk.inPort;
+    }
+    succession first start then doA;
+    succession doA then doB;
+
 }
 `;

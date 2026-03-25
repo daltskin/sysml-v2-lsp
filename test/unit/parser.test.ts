@@ -1,12 +1,18 @@
-import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'fs';
 import { join } from 'path';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 // Note: These tests require the ANTLR-generated parser to be present.
 // Run `npm run generate` before running tests.
 
 describe('Parser', () => {
     const fixturesDir = join(__dirname, '..', 'fixtures');
+
+    // Load the DFA snapshot before tests to avoid cold-DFA timeouts.
+    beforeAll(async () => {
+        const { loadDFASnapshot } = await import('../../server/src/parser/dfaLoader.js');
+        loadDFASnapshot();
+    });
 
     it('should parse a valid vehicle model without errors', async () => {
         const { parseDocument } = await import('../../server/src/parser/parseDocument.js');

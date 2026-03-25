@@ -520,6 +520,18 @@ export class SysMLModelProvider {
             relationships.push(...additionalRels);
         }
 
+        // Scan for standalone satisfy/verify statements that aren't part of any
+        // symbol (e.g. top-level `satisfy X by Y;` inside a package).
+        const fullText = lines.join('\n');
+        const standaloneSatisfy = this.extractStandaloneSatisfyVerify(fullText);
+        for (const rel of standaloneSatisfy) {
+            // Avoid duplicates — only add if not already present
+            const isDup = relationships.some(
+                r => r.type === rel.type && r.source === rel.source && r.target === rel.target,
+            );
+            if (!isDup) relationships.push(rel);
+        }
+
         return relationships;
     }
 
@@ -1204,6 +1216,41 @@ export class SysMLModelProvider {
         return endpoints;
     }
 
+    /**
+     * Scan full source text for standalone `satisfy X by Y` and `verify X by Y`
+     * statements that aren't nested inside another symbol's declaration.
+     */
+    private extractStandaloneSatisfyVerify(text: string): RelationshipDTO[] {
+        const rels: RelationshipDTO[] = [];
+        const keywords = ['satisfy', 'verify'] as const;
+
+        for (const kw of keywords) {
+            const positions = findWordPositions(text, kw);
+            for (const { afterPos } of positions) {
+                let pos = skipWS(text, afterPos);
+                // Skip optional 'requirement' keyword
+                const [nextWord, afterWord] = readNameOrQuoted(text, pos);
+                if (nextWord === 'requirement') {
+                    pos = skipWS(text, afterWord);
+                } else {
+                    pos = skipWS(text, afterPos);
+                }
+                const [reqName, afterReq] = readNameOrQuoted(text, pos);
+                if (!reqName || reqName === 'requirement') continue;
+
+                // Look for 'by <satisfier>' clause
+                let byPos = skipWS(text, afterReq);
+                const [byWord, afterBy] = readIdent(text, byPos);
+                if (byWord !== 'by') continue;  // standalone satisfy/verify must have 'by'
+                const [satisfier] = readNameOrQuoted(text, skipWS(text, afterBy));
+                if (!satisfier) continue;
+
+                rels.push({ type: kw, source: satisfier, target: reqName });
+            }
+        }
+        return rels;
+    }
+
     /** Extract relationship keywords from element text. */
     private extractKeywordRelationships(elementName: string, elementText: string): RelationshipDTO[] {
         const rels: RelationshipDTO[] = [];
@@ -1222,30 +1269,50 @@ export class SysMLModelProvider {
             if (target) rels.push({ type: 'redefinition', source: elementName, target });
         }
 
-        // satisfy: `satisfy [requirement] X`
+        // satisfy: `satisfy [requirement] X [by Y]`
         const satisfyPositions = findWordPositions(elementText, 'satisfy');
         if (satisfyPositions.length > 0) {
             let pos = skipWS(elementText, satisfyPositions[0].afterPos);
             // Skip optional 'requirement' keyword
-            const [nextWord, afterWord] = readIdent(elementText, pos);
+            const [nextWord, afterWord] = readNameOrQuoted(elementText, pos);
             if (nextWord === 'requirement') {
                 pos = skipWS(elementText, afterWord);
             }
-            const [target] = readIdent(elementText, pos);
-            if (target && target !== 'requirement') rels.push({ type: 'satisfy', source: elementName, target });
+            const [reqName, afterReq] = readNameOrQuoted(elementText, pos);
+            if (reqName && reqName !== 'requirement') {
+                // Check for 'by <satisfier>' clause
+                let satisfier = elementName;
+                let byPos = skipWS(elementText, afterReq);
+                const [byWord, afterBy] = readIdent(elementText, byPos);
+                if (byWord === 'by') {
+                    const [byTarget] = readNameOrQuoted(elementText, skipWS(elementText, afterBy));
+                    if (byTarget) satisfier = byTarget;
+                }
+                rels.push({ type: 'satisfy', source: satisfier, target: reqName });
+            }
         }
 
-        // verify: `verify [requirement] X`
+        // verify: `verify [requirement] X [by Y]`
         const verifyPositions = findWordPositions(elementText, 'verify');
         if (verifyPositions.length > 0) {
             let pos = skipWS(elementText, verifyPositions[0].afterPos);
             // Skip optional 'requirement' keyword
-            const [nextWord, afterWord] = readIdent(elementText, pos);
+            const [nextWord, afterWord] = readNameOrQuoted(elementText, pos);
             if (nextWord === 'requirement') {
                 pos = skipWS(elementText, afterWord);
             }
-            const [target] = readIdent(elementText, pos);
-            if (target && target !== 'requirement') rels.push({ type: 'verify', source: elementName, target });
+            const [reqName, afterReq] = readNameOrQuoted(elementText, pos);
+            if (reqName && reqName !== 'requirement') {
+                // Check for 'by <verifier>' clause
+                let verifier = elementName;
+                let byPos = skipWS(elementText, afterReq);
+                const [byWord, afterBy] = readIdent(elementText, byPos);
+                if (byWord === 'by') {
+                    const [byTarget] = readNameOrQuoted(elementText, skipWS(elementText, afterBy));
+                    if (byTarget) verifier = byTarget;
+                }
+                rels.push({ type: 'verify', source: verifier, target: reqName });
+            }
         }
 
         return rels;

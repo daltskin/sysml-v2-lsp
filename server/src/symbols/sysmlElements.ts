@@ -35,6 +35,7 @@ export enum SysMLElementKind {
     IncludeUseCaseUsage = 'include use case',
     ActorUsage = 'actor',
     SubjectUsage = 'subject',
+    StakeholderUsage = 'stakeholder',
     EnumDef = 'enum def',
     EnumUsage = 'enum',
     CalcDef = 'calc def',
@@ -49,7 +50,9 @@ export enum SysMLElementKind {
     MetadataDef = 'metadata def',
     RenderingDef = 'rendering def',
     AnalysisCaseDef = 'analysis case def',
+    AnalysisCaseUsage = 'analysis case',
     VerificationCaseDef = 'verification case def',
+    VerificationCaseUsage = 'verification case',
     Comment = 'comment',
     Doc = 'doc',
     Alias = 'alias',
@@ -148,6 +151,7 @@ export function toMetaclassName(kind: SysMLElementKind): string {
         case SysMLElementKind.IncludeUseCaseUsage: return 'IncludeUseCaseUsage';
         case SysMLElementKind.ActorUsage: return 'ActorUsage';  // SysML v2 doesn't have a dedicated ActorUsage metaclass, but this is conventional
         case SysMLElementKind.SubjectUsage: return 'SubjectUsage';
+        case SysMLElementKind.StakeholderUsage: return 'StakeholderUsage';
         case SysMLElementKind.EnumDef: return 'EnumerationDefinition';
         case SysMLElementKind.EnumUsage: return 'EnumerationUsage';
         case SysMLElementKind.CalcDef: return 'CalculationDefinition';

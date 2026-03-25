@@ -320,4 +320,380 @@ package B {
             expect(unused.length).toBe(0);
         });
     });
+
+    describe('circular containment', () => {
+        it('should NOT flag valid recursive self-typed features', async () => {
+            const text = `
+package Test {
+    abstract action def Function {
+        action subfunctions[*] : Function;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const circular = diags.filter(d => d.code === 'circular-containment');
+            expect(circular.length).toBe(0);
+        });
+
+        it('should NOT flag recursive part containment (tree pattern)', async () => {
+            const text = `
+package Test {
+    part def TreeNode {
+        part children[*] : TreeNode;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const circular = diags.filter(d => d.code === 'circular-containment');
+            expect(circular.length).toBe(0);
+        });
+
+        it('should flag mutual containment cycle (A contains B, B contains A)', async () => {
+            const text = `
+package Test {
+    part def A {
+        part b : B;
+    }
+    part def B {
+        part a : A;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const circular = diags.filter(d => d.code === 'circular-containment');
+            expect(circular.length).toBeGreaterThanOrEqual(1);
+        });
+    });
+
+    describe('unsatisfied requirements', () => {
+        it('should warn when a requirement usage has no satisfy statement', async () => {
+            const text = `
+package Test {
+    requirement def MassReq {
+        attribute massRequired : Real;
+    }
+    requirement vehicleSpec {
+        subject v : Vehicle;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unsatisfied = diags.filter(d => d.code === 'unsatisfied-requirement');
+            expect(unsatisfied.length).toBeGreaterThanOrEqual(1);
+            expect(unsatisfied[0].message).toContain('vehicleSpec');
+        });
+
+        it('should not warn when a requirement is satisfied', async () => {
+            const text = `
+package Test {
+    part def Vehicle { }
+    requirement vehicleSpec {
+        subject v : Vehicle;
+    }
+    part vehicle_b : Vehicle;
+    satisfy vehicleSpec by vehicle_b;
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unsatisfied = diags.filter(d => d.code === 'unsatisfied-requirement');
+            expect(unsatisfied.length).toBe(0);
+        });
+
+        it('should not warn when a qualified satisfy references the requirement', async () => {
+            const text = `
+package Requirements {
+    requirement engineSpec {
+        subject e : Engine;
+    }
+}
+package Design {
+    part def Engine { }
+    part engine_a : Engine;
+    satisfy Requirements::engineSpec by engine_a;
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unsatisfied = diags.filter(d => d.code === 'unsatisfied-requirement');
+            expect(unsatisfied.length).toBe(0);
+        });
+
+        it('should not warn for requirement definitions (only usages)', async () => {
+            const text = `
+package Test {
+    requirement def MassRequirement {
+        attribute massRequired : Real;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unsatisfied = diags.filter(d => d.code === 'unsatisfied-requirement');
+            expect(unsatisfied.length).toBe(0);
+        });
+
+        it('should not warn for nested sub-requirements inside a parent requirement', async () => {
+            const text = `
+package Test {
+    part def Vehicle { }
+    requirement vehicleSpec {
+        subject v : Vehicle;
+        requirement massReq {
+            attribute massRequired : Real;
+        }
+    }
+    part vehicle_b : Vehicle;
+    satisfy vehicleSpec by vehicle_b;
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unsatisfied = diags.filter(d => d.code === 'unsatisfied-requirement');
+            // massReq is nested inside vehicleSpec and should not be independently flagged
+            expect(unsatisfied.length).toBe(0);
+        });
+
+        it('should detect satisfy across files in the workspace', async () => {
+            const reqText = `
+package Requirements {
+    requirement engineSpec {
+        subject e : Engine;
+    }
+}
+`;
+            const designText = `
+package Design {
+    part def Engine { }
+    part engine_a : Engine;
+    satisfy Requirements::engineSpec by engine_a;
+}
+`;
+            const diags = await getSemanticDiagnosticsForUri(
+                [
+                    { uri: 'file:///requirements.sysml', text: reqText },
+                    { uri: 'file:///design.sysml', text: designText },
+                ],
+                'file:///requirements.sysml',
+            );
+            const unsatisfied = diags.filter(d => d.code === 'unsatisfied-requirement');
+            expect(unsatisfied.length).toBe(0);
+        });
+
+        it('should not warn for requirement redefinitions inside satisfy blocks', async () => {
+            const text = `
+package Requirements {
+    requirement engineSpec {
+        requirement torqueReq {
+            subject t : GenerateTorque;
+        }
+        requirement powerReq {
+            port outPort { }
+        }
+    }
+}
+package Design {
+    part def Engine { }
+    action def GenerateTorque { }
+    part engine_a : Engine;
+    satisfy Requirements::engineSpec by engine_a {
+        requirement torqueReq :>> torqueReq {
+            subject generateTorque redefines generateTorque = engine_a;
+        }
+        requirement powerReq :>> powerReq {
+            port torqueOutPort redefines outPort = engine_a;
+        }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unsatisfied = diags.filter(d => d.code === 'unsatisfied-requirement');
+            // torqueReq and powerReq inside the satisfy block should not be flagged
+            expect(unsatisfied.length).toBe(0);
+        });
+
+        it('should warn when a satisfy statement is commented out with //', async () => {
+            const text = `
+package Test {
+    part def Vehicle { }
+    requirement vehicleSpec {
+        subject v : Vehicle;
+    }
+    part vehicle_b : Vehicle;
+    //satisfy vehicleSpec by vehicle_b;
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unsatisfied = diags.filter(d => d.code === 'unsatisfied-requirement');
+            expect(unsatisfied.length).toBeGreaterThanOrEqual(1);
+            expect(unsatisfied[0].message).toContain('vehicleSpec');
+        });
+
+        it('should warn when a satisfy statement is inside a block comment', async () => {
+            const text = `
+package Test {
+    part def Vehicle { }
+    requirement vehicleSpec {
+        subject v : Vehicle;
+    }
+    part vehicle_b : Vehicle;
+    /* satisfy vehicleSpec by vehicle_b; */
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unsatisfied = diags.filter(d => d.code === 'unsatisfied-requirement');
+            expect(unsatisfied.length).toBeGreaterThanOrEqual(1);
+            expect(unsatisfied[0].message).toContain('vehicleSpec');
+        });
+    });
+
+    describe('unverified requirements', () => {
+        it('should warn when a satisfied requirement has no verify statement', async () => {
+            const text = `
+package Test {
+    part def Vehicle { }
+    requirement vehicleSpec {
+        subject v : Vehicle;
+    }
+    part vehicle_a : Vehicle;
+    satisfy vehicleSpec by vehicle_a;
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unverified = diags.filter(d => d.code === 'unverified-requirement');
+            expect(unverified.length).toBeGreaterThanOrEqual(1);
+            expect(unverified[0].message).toContain('vehicleSpec');
+            expect(unverified[0].message).toContain('verification case');
+        });
+
+        it('should not warn when a requirement is both satisfied and verified', async () => {
+            const text = `
+package Test {
+    part def Vehicle { }
+    requirement vehicleSpec {
+        subject v : Vehicle;
+    }
+    part vehicle_a : Vehicle;
+    satisfy vehicleSpec by vehicle_a;
+    verification case def VehicleTest { }
+    verify vehicleSpec by VehicleTest;
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unverified = diags.filter(d => d.code === 'unverified-requirement');
+            expect(unverified.length).toBe(0);
+        });
+
+        it('should warn when a requirement is unsatisfied and unverified', async () => {
+            const text = `
+package Test {
+    requirement vehicleSpec {
+        subject v : Vehicle;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unverified = diags.filter(d => d.code === 'unverified-requirement');
+            expect(unverified.length).toBeGreaterThanOrEqual(1);
+            expect(unverified[0].message).toContain('vehicleSpec');
+            expect(unverified[0].message).toContain('no verification case');
+        });
+
+        it('should detect verify across files in the workspace', async () => {
+            const reqText = `
+package Requirements {
+    requirement engineSpec {
+        subject e : Engine;
+    }
+}
+`;
+            const designText = `
+package Design {
+    part def Engine { }
+    part engine_a : Engine;
+    satisfy Requirements::engineSpec by engine_a;
+}
+`;
+            const verifyText = `
+package Verification {
+    verification case def EngineTest { }
+    verify Requirements::engineSpec by EngineTest;
+}
+`;
+            const diags = await getSemanticDiagnosticsForUri(
+                [
+                    { uri: 'file:///requirements.sysml', text: reqText },
+                    { uri: 'file:///design.sysml', text: designText },
+                    { uri: 'file:///verification.sysml', text: verifyText },
+                ],
+                'file:///requirements.sysml',
+            );
+            const unverified = diags.filter(d => d.code === 'unverified-requirement');
+            expect(unverified.length).toBe(0);
+        });
+
+        it('should warn when verify is in a different file but missing', async () => {
+            const reqText = `
+package Requirements {
+    requirement engineSpec {
+        subject e : Engine;
+    }
+}
+`;
+            const designText = `
+package Design {
+    part def Engine { }
+    part engine_a : Engine;
+    satisfy Requirements::engineSpec by engine_a;
+}
+`;
+            const diags = await getSemanticDiagnosticsForUri(
+                [
+                    { uri: 'file:///requirements.sysml', text: reqText },
+                    { uri: 'file:///design.sysml', text: designText },
+                ],
+                'file:///requirements.sysml',
+            );
+            const unverified = diags.filter(d => d.code === 'unverified-requirement');
+            expect(unverified.length).toBeGreaterThanOrEqual(1);
+            expect(unverified[0].message).toContain('engineSpec');
+        });
+
+        it('should not flag nested sub-requirements for verification', async () => {
+            const text = `
+package Test {
+    part def Vehicle { }
+    requirement vehicleSpec {
+        subject v : Vehicle;
+        requirement massReq {
+            attribute massRequired : Real;
+        }
+    }
+    part vehicle_a : Vehicle;
+    satisfy vehicleSpec by vehicle_a;
+    verify vehicleSpec by VehicleTest;
+    verification case def VehicleTest { }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unverified = diags.filter(d => d.code === 'unverified-requirement');
+            // massReq is nested — should not be independently flagged
+            expect(unverified.length).toBe(0);
+        });
+
+        it('should warn when a verify statement is commented out', async () => {
+            const text = `
+package Test {
+    part def Vehicle { }
+    requirement vehicleSpec {
+        subject v : Vehicle;
+    }
+    part vehicle_a : Vehicle;
+    satisfy vehicleSpec by vehicle_a;
+    verification case def VehicleTest { }
+    //verify vehicleSpec by VehicleTest;
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unverified = diags.filter(d => d.code === 'unverified-requirement');
+            expect(unverified.length).toBeGreaterThanOrEqual(1);
+            expect(unverified[0].message).toContain('vehicleSpec');
+        });
+    });
 });

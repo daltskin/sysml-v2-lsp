@@ -119,6 +119,7 @@ const STYLE_PALETTE: Record<string, { fill: string; stroke: string; color: strin
     IncludeUseCaseUsage: { fill: '#e1f5fe', stroke: '#0288D1', color: '#01579B' },
     ActorUsage: { fill: '#fbe9e7', stroke: '#FF5722', color: '#BF360C' },
     SubjectUsage: { fill: '#e8eaf6', stroke: '#3F51B5', color: '#1A237E' },
+    StakeholderUsage: { fill: '#f3e5f5', stroke: '#9C27B0', color: '#4A148C' },
     OccurrenceDef: { fill: '#e0f7fa', stroke: '#00ACC1', color: '#006064' },
     OccurrenceUsage: { fill: '#e0f7fa', stroke: '#00ACC1', color: '#006064' },
 };
@@ -223,7 +224,8 @@ export function inferDiagramType(symbols: SysMLSymbol[]): DiagramType {
         + (kinds.get(SysMLElementKind.UseCaseUsage) ?? 0)
         + (kinds.get(SysMLElementKind.IncludeUseCaseUsage) ?? 0)
         + (kinds.get(SysMLElementKind.ActorUsage) ?? 0)
-        + (kinds.get(SysMLElementKind.SubjectUsage) ?? 0);
+        + (kinds.get(SysMLElementKind.SubjectUsage) ?? 0)
+        + (kinds.get(SysMLElementKind.StakeholderUsage) ?? 0);
 
     const sequenceCount = (kinds.get(SysMLElementKind.OccurrenceDef) ?? 0)
         + (kinds.get(SysMLElementKind.OccurrenceUsage) ?? 0);
@@ -742,6 +744,7 @@ function generateUseCaseView(symbols: SysMLSymbol[], symbolTable: Map<string, Sy
     // ── Collect by kind ──────────────────────────────────────────────────
     const actors = symbols.filter(s => s.kind === SysMLElementKind.ActorUsage);
     const subjects = symbols.filter(s => s.kind === SysMLElementKind.SubjectUsage);
+    const stakeholders = symbols.filter(s => s.kind === SysMLElementKind.StakeholderUsage);
     const allUseCaseDefs = symbols.filter(s => s.kind === SysMLElementKind.UseCaseDef);
     const allUseCaseUsages = symbols.filter(s => s.kind === SysMLElementKind.UseCaseUsage);
     const includes = symbols.filter(s => s.kind === SysMLElementKind.IncludeUseCaseUsage);
@@ -876,6 +879,24 @@ function generateUseCaseView(symbols: SysMLSymbol[], symbolTable: Map<string, Sy
         lines.push(`    ${subjId}["📋 ${escapeLabel(subj.name)}"]`);
         nodeStyles.set(subjId, 'SubjectUsage');
         elementCount++;
+    }
+
+    // ── Stakeholder nodes ───────────────────────────────────────────────
+    for (const sh of stakeholders) {
+        const shId = safeId(sh.qualifiedName);
+        lines.push(`    ${shId}{{"👤 ${escapeLabel(sh.name)}"}}`);
+        nodeStyles.set(shId, 'StakeholderUsage');
+        elementCount++;
+
+        // Connect stakeholder to its parent requirement
+        const parentSym = sh.parentQualifiedName
+            ? symbolTable.get(sh.parentQualifiedName)
+            : undefined;
+        if (parentSym && (parentSym.kind === SysMLElementKind.RequirementDef
+            || parentSym.kind === SysMLElementKind.RequirementUsage)) {
+            const reqId = safeId(parentSym.qualifiedName);
+            lines.push(`    ${shId} -.->|"«stakeholder»"| ${reqId}`);
+        }
     }
 
     if (elementCount === 0) {

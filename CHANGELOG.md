@@ -1,5 +1,21 @@
 # Changelog
 
+## [0.9.0]
+
+### Added
+
+- Semantic rules: circular specialization, circular containment, unsatisfied requirements, unverified requirements
+- Syntax error suppression for known grammar limitation zones (constraint bodies, calc/analysis expressions)
+- Workspace file scanning improvements
+- Document formatting provider
+
+### Changed
+
+- Parser self-healing DFA: SLL→LL fallback builds correct DFA states in-place instead of clearing the entire snapshot
+- Library index handles `<shortName>` and quoted long-name syntax
+- Satisfy/verify caches on `SemanticValidator` avoid redundant workspace scans
+- Type-name extraction strips leaked keyword concatenations from `getText()`
+
 ## [0.8.0]
 
 ### Added
@@ -7,7 +23,6 @@
 - Update grammar files with Full OMG SysML v2 spec conformance: grammar now passes all official training, validation, and example files (309 .sysml files across 4 suites)
 - `make update-grammar` now automatically rebuilds parser and regenerates DFA snapshot
 - Standard library smoke test retained in LSP repo (`test/unit/conformance.test.ts`)
-- 12 new grammar patches (Fix 40–51) in the grammar generator for spec conformance
 
 ### Changed
 

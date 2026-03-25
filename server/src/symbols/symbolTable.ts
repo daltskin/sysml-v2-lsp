@@ -313,6 +313,7 @@ export class SymbolTable {
         if (lower === 'includeusecaseusage') return SysMLElementKind.IncludeUseCaseUsage;
         if (lower === 'actorusage') return SysMLElementKind.ActorUsage;
         if (lower === 'subjectusage') return SysMLElementKind.SubjectUsage;
+        if (lower === 'stakeholderusage') return SysMLElementKind.StakeholderUsage;
         if (lower === 'referenceusage') return SysMLElementKind.RefUsage;
         if (lower === 'interfaceusage') return SysMLElementKind.InterfaceUsage;
         if (lower === 'performactionusage') return SysMLElementKind.PerformActionUsage;
@@ -323,6 +324,10 @@ export class SymbolTable {
         if (lower === 'renderingdefinition') return SysMLElementKind.RenderingDef;
         if (lower === 'viewusage') return SysMLElementKind.ViewUsage;
         if (lower === 'viewpointusage') return SysMLElementKind.ViewpointUsage;
+        if (lower === 'verificationcasedefinition') return SysMLElementKind.VerificationCaseDef;
+        if (lower === 'verificationcaseusage') return SysMLElementKind.VerificationCaseUsage;
+        if (lower === 'analysiscasedefinition') return SysMLElementKind.AnalysisCaseDef;
+        if (lower === 'analysiscaseusage') return SysMLElementKind.AnalysisCaseUsage;
 
         // Alias member
         if (lower === 'aliasmember') return SysMLElementKind.Alias;
@@ -339,12 +344,12 @@ export class SymbolTable {
         for (let i = 0; i < ctx.getChildCount(); i++) {
             const child = ctx.getChild(i);
 
-            // Direct terminal (identifier token)
+            // Direct terminal (identifier token or quoted name)
             if (child instanceof TerminalNode) {
                 const token = child.symbol;
                 // Skip keywords — we want identifier tokens only
                 if (this.isIdentifierToken(token)) {
-                    return token.text ?? undefined;
+                    return this.unquoteName(token.text ?? '');
                 }
             }
 
@@ -433,36 +438,46 @@ export class SymbolTable {
         // concatenated (getText() strips whitespace).  This prevents the regex
         // from greedily matching into connect/bind/first/then/flow/… clauses.
         // e.g. ":BrakeCableconnectfrontLever…" should stop at "connect".
+        // Also truncate at redefines/subsets/references which follow a typing
+        // and would otherwise be concatenated (e.g. "FuelCmdredefinespwrCmd").
         text = text.replace(
-            /(connect|bind|first|then|flow|allocate|assign|accept|send|decide|merge|join|fork)\b.*/i,
+            /(redefines|subsets|references|connect|bind|first|then|flow|allocate|assign|accept|send|decide|merge|join|fork|via|default)\b.*/i,
             '',
         );
 
-        // 1. "specializes A, B" or ":> A, B"
-        const specMatch = text.match(/(?:specializes|:>|:>>)\s*([A-Za-z_][\w:]*(?:\s*,\s*[A-Za-z_][\w:]*)*)/);
+        // 1. "specializes A, B" or ":> A, B" (including quoted names)
+        const specMatch = text.match(/(?:specializes|:>|:>>)\s*('[^']+'|[A-Za-z_]\w*(?:::\w+)*)(?:\s*,\s*(?:'[^']+'|[A-Za-z_]\w*(?:::\w+)*))*/);
         if (specMatch) {
-            for (const part of specMatch[1].split(',')) {
-                const m = part.trim().match(/^([A-Za-z_][\w:]*)/);
+            const specStr = text.substring(text.indexOf(specMatch[0]) + specMatch[0].indexOf(specMatch[1]));
+            for (const part of specStr.split(',')) {
+                const qm = part.match(/'([^']+)'/);
+                if (qm) { names.push(qm[1]); continue; }
+                const m = part.trim().match(/^([A-Za-z_]\w*(?:::\w+)*)/);
                 if (m) names.push(m[1]);
             }
             return names;
         }
 
         // 2. "definedby A, B" — note getText() strips spaces
-        const defByMatch = text.match(/definedby\s*([A-Za-z_][\w:]*(?:\s*,\s*[A-Za-z_][\w:]*)*)/);
+        const defByMatch = text.match(/definedby\s*([A-Za-z_]\w*(?:::\w+)*(?:\s*,\s*[A-Za-z_]\w*(?:::\w+)*)*)/);
         if (defByMatch) {
             for (const part of defByMatch[1].split(',')) {
-                const m = part.trim().match(/^([A-Za-z_][\w:]*)/);
+                const m = part.trim().match(/^([A-Za-z_]\w*(?:::\w+)*)/);
                 if (m) names.push(m[1]);
             }
             return names;
         }
 
-        // 3. ": A, B" (typing shorthand)
-        const typingMatch = text.match(/:(?![:>])\s*([A-Za-z_][\w:]*(?:\s*,\s*[A-Za-z_][\w:]*)*)/);
+        // 3. ": A, B" (typing shorthand, including quoted names)
+        const typingMatch = text.match(/:(?![:>])\s*('[^']+'|[A-Za-z_]\w*(?:::\w+)*)/);
         if (typingMatch) {
-            for (const part of typingMatch[1].split(',')) {
-                const m = part.trim().match(/^([A-Za-z_][\w:]*)/);
+            // Extract from after the colon
+            const fullMatchIdx = text.indexOf(typingMatch[0]);
+            const afterColon = text.substring(fullMatchIdx + 1).trim();
+            for (const part of afterColon.split(',')) {
+                const qm = part.match(/'([^']+)'/);
+                if (qm) { names.push(qm[1]); continue; }
+                const m = part.trim().match(/^([A-Za-z_]\w*(?:::\w+)*)/);
                 if (m) names.push(m[1]);
             }
             return names;
@@ -501,18 +516,24 @@ export class SymbolTable {
                 const stripped = childText
                     .replace(/^(specializes|:>|:>>|:\s|definedby|subsets|redefines|references|conjugates|disjoints)/i, '');
                 for (const part of stripped.split(',')) {
-                    const m = part.match(/([A-Za-z_][\w:]*)/);
-                    if (m) names.push(m[1]);
+                    // Match quoted names ('...') or plain identifiers
+                    const qm = part.match(/'([^']+)'/);
+                    if (qm) {
+                        names.push(qm[1]);
+                    } else {
+                        const m = part.match(/([A-Za-z_]\w*(?:::\w+)*)/);
+                        if (m) names.push(m[1]);
+                    }
                 }
             } else if (
                 // Recurse into declaration / part / body wrappers that may
                 // contain nested typing rules (but NOT into body rules that
                 // contain children — to avoid collecting types from members).
+                // Do NOT recurse into redefinitions/subsettings — those
+                // reference existing features, not this symbol's type.
                 rn.includes('declaration') ||
                 rn.includes('featurespecialization') ||
                 rn.includes('typings') ||
-                rn.includes('subsettings') ||
-                rn.includes('redefinitions') ||
                 rn.includes('usagecompletion') ||
                 rn === 'usage' ||
                 rn === 'definition'
@@ -700,12 +721,33 @@ export class SymbolTable {
 
     /**
      * Check if a token is an identifier (not a keyword or punctuation).
+     * Also accepts SysML quoted names ('single quoted strings').
      */
     private isIdentifierToken(token: Token): boolean {
         const text = token.text;
         if (!text) return false;
+        // SysML quoted names: 'Activate rocket booster'
+        if (this.isQuotedName(text)) return true;
         // Identifiers start with a letter or underscore
         return /^[a-zA-Z_]/.test(text) && !this.isKeyword(text);
+    }
+
+    /**
+     * Check if text is a SysML quoted name (single-quoted string).
+     */
+    private isQuotedName(text: string): boolean {
+        return text.length >= 3 && text.startsWith("'") && text.endsWith("'");
+    }
+
+    /**
+     * Strip quotes from a SysML quoted name, returning the inner text.
+     * Returns the text unchanged if not quoted.
+     */
+    private unquoteName(text: string): string {
+        if (this.isQuotedName(text)) {
+            return text.slice(1, -1);
+        }
+        return text;
     }
 
     /**
@@ -746,7 +788,7 @@ export class SymbolTable {
             if (child instanceof TerminalNode) {
                 const text = child.symbol.text;
                 if (text && this.isIdentifierToken(child.symbol)) {
-                    parts.push(text);
+                    parts.push(this.unquoteName(text));
                 }
             } else if (child instanceof ParserRuleContext) {
                 const sub = this.extractTextFromSubtree(child);

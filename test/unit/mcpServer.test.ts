@@ -1,6 +1,11 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 describe('MCP Server Core', () => {
+    // Load the DFA snapshot before tests to avoid cold-DFA timeouts.
+    beforeAll(async () => {
+        const { loadDFASnapshot } = await import('../../server/src/parser/dfaLoader.js');
+        loadDFASnapshot();
+    });
     let McpContext: typeof import('../../server/src/mcpCore.js').McpContext;
     let handleParse: typeof import('../../server/src/mcpCore.js').handleParse;
     let handleValidate: typeof import('../../server/src/mcpCore.js').handleValidate;

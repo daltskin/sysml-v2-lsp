@@ -35,8 +35,8 @@ const STANDARD_LIBRARY_TYPES = new Set([
 ]);
 
 const CONSTRAINT_KEYWORDS = new Set([
-    'and', 'or', 'not', 'if', 'then', 'else', 'true', 'false',
-    'require', 'constraint', 'subject', 'return', 'doc', 'comment',
+    'and', 'or', 'not', 'xor', 'implies', 'if', 'then', 'else', 'true', 'false', 'null',
+    'require', 'constraint', 'subject', 'return', 'doc', 'comment', 'assert', 'assume',
 ]);
 
 interface SymbolIndexes {
@@ -73,6 +73,19 @@ function isISQValueType(name: string): boolean {
  * - Mandatory features with unresolved types
  */
 export class SemanticValidator {
+    /** Cached workspace-wide satisfy data, invalidated when any document version changes. */
+    private satisfyCache?: {
+        versionKey: string;
+        satisfiedNames: Set<string>;
+        satisfyBlockRanges: Map<string, Array<{ startLine: number; endLine: number }>>;
+    };
+
+    /** Cached workspace-wide verify data, invalidated when any document version changes. */
+    private verifyCache?: {
+        versionKey: string;
+        verifiedNames: Set<string>;
+    };
+
     constructor(private readonly documentManager: DocumentManager) { }
 
     /**
@@ -106,6 +119,10 @@ export class SemanticValidator {
         diagnostics.push(...this.checkRedefinitionMultiplicity(symbols, indexes));
         diagnostics.push(...this.checkPortCompatibility(text, uri, indexes));
         diagnostics.push(...this.checkConstraintBodyReferences(text, uri, symbols, indexes));
+        diagnostics.push(...this.checkCircularSpecialization(symbols, indexes));
+        diagnostics.push(...this.checkCircularContainment(symbols, indexes));
+        diagnostics.push(...this.checkUnsatisfiedRequirements(symbols, indexes));
+        diagnostics.push(...this.checkUnverifiedRequirements(symbols, indexes));
 
         return this.dedupeDiagnostics(diagnostics);
     }
@@ -125,26 +142,34 @@ export class SemanticValidator {
     ): Diagnostic[] {
         if (!symbol.typeName) return [];
 
+        // Safety net: strip concatenated keywords that leak through when
+        // getText() merges "Type redefines foo" → "TyperedefinesFoo".
+        let typeName = symbol.typeName;
+        const kwMatch = typeName.match(/^([A-Z][A-Za-z_0-9]*?)(redefines|subsets|references|connect|bind|default|via|accept|send|flow|allocate|assign|decide|merge|join|fork)\w/i);
+        if (kwMatch) {
+            typeName = kwMatch[1];
+        }
+
         // Resolve the root segment for qualified names (e.g., "ISQ::MassValue" → "ISQ")
-        const rootSegment = symbol.typeName.split('::')[0];
+        const rootSegment = typeName.split('::')[0];
 
         // Skip if the type is defined in the document, standard library, or indexed library packages
         if (
-            allSymbolNames.has(symbol.typeName) ||
+            allSymbolNames.has(typeName) ||
             allSymbolNames.has(rootSegment) ||
-            STANDARD_LIBRARY_TYPES.has(symbol.typeName) ||
+            STANDARD_LIBRARY_TYPES.has(typeName) ||
             STANDARD_LIBRARY_TYPES.has(rootSegment) ||
             libraryNames.has(rootSegment) ||
             // Pattern match for ISQ quantity value types (e.g., LengthValue, TorqueValue)
-            isISQValueType(symbol.typeName) ||
+            isISQValueType(typeName) ||
             // Check the scanned library type index (covers all ISQ/SI types including
             // those with digits like CartesianSpatial3dCoordinateFrame)
-            resolveLibraryType(symbol.typeName) !== undefined ||
+            resolveLibraryType(typeName) !== undefined ||
             resolveLibraryType(rootSegment) !== undefined ||
             // Names starting with lowercase are feature references (subsettings
             // via :>), not type references — don't flag them as unresolved types.
             // e.g. "attribute x :> distancePerVolume" references a feature, not a type.
-            (symbol.typeName.charCodeAt(0) >= 97 && symbol.typeName.charCodeAt(0) <= 122)
+            (typeName.charCodeAt(0) >= 97 && typeName.charCodeAt(0) <= 122)
         ) {
             return [];
         }
@@ -156,7 +181,7 @@ export class SemanticValidator {
             ? DiagnosticSeverity.Error
             : DiagnosticSeverity.Warning;
 
-        let message = `Type '${symbol.typeName}' is not defined in the current document or standard library`;
+        let message = `Type '${typeName}' is not defined in the current document or standard library`;
         if (isMandatory) {
             const multStr = symbol.multiplicity ?? '1';
             message += ` (feature '${symbol.name}' requires multiplicity [${multStr}])`;
@@ -168,7 +193,7 @@ export class SemanticValidator {
             message,
             source: 'sysml',
             code: 'unresolved-type',
-            data: { typeName: symbol.typeName },
+            data: { typeName },
         }];
     }
 
@@ -379,6 +404,14 @@ export class SemanticValidator {
         diagnostics.push(...instance.checkDuplicateDefinitions(symbolsInUri));
         diagnostics.push(...instance.checkUnusedDefinitions(allSymbols));
         diagnostics.push(...instance.checkRedefinitionMultiplicity(symbolsInUri, indexes));
+        diagnostics.push(...instance.checkCircularSpecialization(symbolsInUri, indexes));
+        diagnostics.push(...instance.checkCircularContainment(symbolsInUri, indexes));
+        diagnostics.push(...instance.checkUnsatisfiedRequirements(
+            allSymbols, indexes, opts?.text ? [opts.text] : [],
+        ));
+        diagnostics.push(...instance.checkUnverifiedRequirements(
+            allSymbols, indexes, opts?.text ? [opts.text] : [],
+        ));
 
         if (opts?.text && opts.uri) {
             diagnostics.push(...instance.checkPortCompatibility(opts.text, opts.uri, indexes));
@@ -386,6 +419,460 @@ export class SemanticValidator {
         }
 
         return instance.dedupeDiagnostics(diagnostics);
+    }
+
+    /**
+     * Rule: Circular specialization chain.
+     *
+     * Detects cycles in definition specialization hierarchies.
+     * For example: A :> B, B :> C, C :> A forms a cycle.
+     */
+    private checkCircularSpecialization(symbolsInUri: SysMLSymbol[], indexes: SymbolIndexes): Diagnostic[] {
+        const diagnostics: Diagnostic[] = [];
+        const defsInFile = symbolsInUri.filter(s => isDefinition(s.kind) && s.typeNames.length > 0);
+
+        for (const def of defsInFile) {
+            const visited = new Set<string>();
+            visited.add(def.name);
+            const cycle = this.followSpecializationChain(def.name, def.typeNames, visited, indexes);
+            if (cycle) {
+                diagnostics.push({
+                    severity: DiagnosticSeverity.Error,
+                    range: def.selectionRange,
+                    message: `Circular specialization: ${cycle.join(' :> ')} :> ${cycle[0]}`,
+                    source: 'sysml',
+                    code: 'circular-specialization',
+                });
+            }
+        }
+        return diagnostics;
+    }
+
+    /**
+     * Walk the specialization chain from a set of type names and detect if any
+     * path leads back to a name already in the visited set.
+     */
+    private followSpecializationChain(
+        originName: string,
+        typeNames: string[],
+        visited: Set<string>,
+        indexes: SymbolIndexes,
+    ): string[] | undefined {
+        for (const tn of typeNames) {
+            if (visited.has(tn)) {
+                // Found a cycle — reconstruct the path for the message
+                return [...visited];
+            }
+            // Look up the definition for this type name
+            const candidates = indexes.definitionsByName.get(tn);
+            if (!candidates || candidates.length === 0) continue;
+
+            const target = candidates[0];
+            if (target.typeNames.length === 0) continue;
+
+            visited.add(tn);
+            const cycle = this.followSpecializationChain(originName, target.typeNames, visited, indexes);
+            if (cycle) return cycle;
+            visited.delete(tn);
+        }
+        return undefined;
+    }
+
+    /**
+     * Rule: Circular containment.
+     *
+     * Detects cycles where definition A contains a feature typed by B and
+     * definition B contains a feature typed by A (or longer transitive chains).
+     */
+    private checkCircularContainment(symbolsInUri: SysMLSymbol[], indexes: SymbolIndexes): Diagnostic[] {
+        const diagnostics: Diagnostic[] = [];
+        const defsInFile = symbolsInUri.filter(s => isDefinition(s.kind));
+
+        for (const def of defsInFile) {
+            const children = indexes.byParent.get(def.qualifiedName) ?? [];
+            // Get all type names referenced by children (features of this definition)
+            const childTypeNames = children.flatMap(c => c.typeNames).filter(t => t.length > 0);
+            if (childTypeNames.length === 0) continue;
+
+            for (const childTypeName of childTypeNames) {
+                // Skip self-references: a definition containing a feature
+                // typed by itself (e.g. `action subfunctions[*] : Function`)
+                // is valid recursive decomposition, not circular containment.
+                if (childTypeName === def.name) continue;
+
+                const visited = new Set<string>();
+                visited.add(def.name);
+                const cycle = this.followContainmentChain(childTypeName, visited, indexes);
+                if (cycle) {
+                    // Find the child that references the type for better positioning
+                    const offendingChild = children.find(c => c.typeNames.includes(childTypeName));
+                    const range = offendingChild?.selectionRange ?? def.selectionRange;
+                    diagnostics.push({
+                        severity: DiagnosticSeverity.Error,
+                        range,
+                        message: `Circular containment: ${cycle.join(' -> ')} -> ${cycle[0]}`,
+                        source: 'sysml',
+                        code: 'circular-containment',
+                    });
+                    break; // One diagnostic per definition is enough
+                }
+            }
+        }
+        return diagnostics;
+    }
+
+    /**
+     * Walk the containment chain: for a type name, find its definition,
+     * check its children's types, and see if any loops back.
+     */
+    private followContainmentChain(
+        typeName: string,
+        visited: Set<string>,
+        indexes: SymbolIndexes,
+    ): string[] | undefined {
+        if (visited.has(typeName)) {
+            return [...visited];
+        }
+
+        const candidates = indexes.definitionsByName.get(typeName);
+        if (!candidates || candidates.length === 0) return undefined;
+
+        const target = candidates[0];
+        const children = indexes.byParent.get(target.qualifiedName) ?? [];
+        const childTypeNames = children.flatMap(c => c.typeNames).filter(t => t.length > 0);
+        if (childTypeNames.length === 0) return undefined;
+
+        visited.add(typeName);
+        for (const tn of childTypeNames) {
+            const cycle = this.followContainmentChain(tn, visited, indexes);
+            if (cycle) return cycle;
+        }
+        visited.delete(typeName);
+        return undefined;
+    }
+
+    /**
+     * Rule: unsatisfied requirements.
+     *
+     * Requirement usages that are not referenced by any `satisfy` statement
+     * anywhere in the workspace receive a warning. Only top-level requirement
+     * usages are checked — nested requirements inside a satisfy block or
+     * requirement definitions are skipped.
+     */
+    private checkUnsatisfiedRequirements(
+        allSymbols: SysMLSymbol[],
+        indexes: SymbolIndexes,
+        workspaceTexts?: string[],
+    ): Diagnostic[] {
+        const diagnostics: Diagnostic[] = [];
+
+        // Collect all satisfied requirement names and satisfy block line ranges.
+        // Use a cache keyed by workspace version to avoid rescanning on every keystroke.
+        let satisfiedNames: Set<string>;
+        let satisfyBlockRanges: Map<string, Array<{ startLine: number; endLine: number }>>;
+
+        if (workspaceTexts) {
+            // Static/MCP path — no caching.
+            satisfiedNames = new Set<string>();
+            satisfyBlockRanges = new Map();
+            for (const text of workspaceTexts) {
+                this.extractSatisfyReferences(text, satisfiedNames);
+                satisfyBlockRanges.set('__static__', this.extractSatisfyBlockRanges(text));
+            }
+        } else if (this.documentManager) {
+            // Build a version fingerprint from all cached document versions.
+            const uris = this.documentManager.getUris();
+            const versionKey = uris.map(u => u + ':' + this.documentManager.getVersion(u)).join('|');
+
+            if (this.satisfyCache && this.satisfyCache.versionKey === versionKey) {
+                satisfiedNames = this.satisfyCache.satisfiedNames;
+                satisfyBlockRanges = this.satisfyCache.satisfyBlockRanges;
+            } else {
+                satisfiedNames = new Set<string>();
+                satisfyBlockRanges = new Map();
+                for (const uri of uris) {
+                    const text = this.documentManager.getText(uri);
+                    if (text) {
+                        this.extractSatisfyReferences(text, satisfiedNames);
+                        satisfyBlockRanges.set(uri, this.extractSatisfyBlockRanges(text));
+                    }
+                }
+                this.satisfyCache = { versionKey, satisfiedNames, satisfyBlockRanges };
+            }
+        } else {
+            satisfiedNames = new Set<string>();
+            satisfyBlockRanges = new Map();
+        }
+
+        // Find all top-level requirement usages (not defs, not nested inside satisfy blocks).
+        const requirementUsages = allSymbols.filter(s =>
+            s.kind === SysMLElementKind.RequirementUsage,
+        );
+
+        for (const req of requirementUsages) {
+            // Skip requirements whose parent is also a requirement usage —
+            // they are nested sub-requirements, not independently satisfiable.
+            if (req.parentQualifiedName) {
+                const parent = indexes.byQualifiedName.get(req.parentQualifiedName);
+                if (parent?.kind === SysMLElementKind.RequirementUsage) continue;
+            }
+
+            // Skip requirements that appear inside a satisfy block — they are
+            // redefinitions of sub-requirements, not independent requirements.
+            const uriRanges = satisfyBlockRanges.get(req.uri) ?? satisfyBlockRanges.get('__static__') ?? [];
+            const reqLine = req.selectionRange.start.line;
+            if (uriRanges.some(r => reqLine >= r.startLine && reqLine <= r.endLine)) continue;
+
+            // Check if this requirement is satisfied by name (simple or qualified).
+            const isSatisfied =
+                satisfiedNames.has(req.name) ||
+                satisfiedNames.has(req.qualifiedName);
+
+            if (!isSatisfied) {
+                diagnostics.push({
+                    severity: DiagnosticSeverity.Warning,
+                    range: req.selectionRange,
+                    message: `Requirement '${req.name}' is not satisfied by any element`,
+                    source: 'sysml',
+                    code: 'unsatisfied-requirement',
+                    data: { name: req.name, qualifiedName: req.qualifiedName },
+                });
+            }
+        }
+
+        return diagnostics;
+    }
+
+    /**
+     * Extract requirement references from `satisfy` statements in a text.
+     * Adds both the full qualified name and the simple (last segment) name.
+     *
+     * Patterns matched:
+     *   satisfy QualifiedName by ...
+     *   satisfy QualifiedName;
+     */
+    private extractSatisfyReferences(text: string, out: Set<string>): void {
+        // Match: satisfy QualifiedName by ...
+        //        satisfy QualifiedName;
+        //        satisfy requirement X : Y;
+        const stripped = this.stripComments(text);
+        const re = /\bsatisfy\s+(?:requirement\s+)?([\w]+(?:::[\w]+)*)\s+(?:by\b|;|:)/g;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(stripped)) !== null) {
+            const ref = m[1];
+            out.add(ref);
+            // Also add the simple (last-segment) name for matching
+            const lastSeg = ref.includes('::') ? ref.split('::').pop()! : ref;
+            out.add(lastSeg);
+        }
+    }
+
+    /**
+     * Extract the line ranges of satisfy block bodies from text.
+     * Returns an array of { startLine, endLine } for each satisfy { ... } block.
+     */
+    private extractSatisfyBlockRanges(text: string): Array<{ startLine: number; endLine: number }> {
+        const ranges: Array<{ startLine: number; endLine: number }> = [];
+        const stripped = this.stripComments(text);
+        const re = /\bsatisfy\b[^;{]*\{/g;
+        let m: RegExpExecArray | null;
+
+        // Pre-build a line-offset table so offset→line lookups are O(log n)
+        // instead of the previous O(n) slice+split per match.
+        let lineOffsets: number[] | undefined;
+
+        while ((m = re.exec(stripped)) !== null) {
+            const open = m.index + m[0].length - 1;
+            let depth = 1;
+            let i = open + 1;
+            while (i < stripped.length && depth > 0) {
+                if (stripped[i] === '{') depth++;
+                if (stripped[i] === '}') depth--;
+                i++;
+            }
+            if (depth !== 0) continue;
+
+            // Lazily build the line-offset table on the first real match.
+            if (!lineOffsets) {
+                lineOffsets = [0];
+                for (let j = 0; j < text.length; j++) {
+                    if (text[j] === '\n') lineOffsets.push(j + 1);
+                }
+            }
+
+            ranges.push({
+                startLine: this.offsetToLine(lineOffsets, open),
+                endLine: this.offsetToLine(lineOffsets, i - 1),
+            });
+        }
+        return ranges;
+    }
+
+    /**
+     * Rule: unverified requirements.
+     *
+     * In SysML v2, `satisfy` declares that a design element fulfills a
+     * requirement, while `verify` declares that a verification case (test)
+     * checks whether a requirement is met.  Good practice requires both.
+     *
+     * This rule warns when a requirement usage has no `verify` statement
+     * anywhere in the workspace, regardless of satisfaction status.
+     *
+     * SysML v2 verify patterns detected:
+     *   verify <requirement> by <verificationCase>;
+     *   verify <qualifiedName>;
+     *   verification case def X { verify <requirement>; }
+     */
+    private checkUnverifiedRequirements(
+        allSymbols: SysMLSymbol[],
+        indexes: SymbolIndexes,
+        workspaceTexts?: string[],
+    ): Diagnostic[] {
+        const diagnostics: Diagnostic[] = [];
+
+        // Collect all satisfied and verified requirement names across workspace.
+        let satisfiedNames: Set<string>;
+        let verifiedNames: Set<string>;
+        let satisfyBlockRanges: Map<string, Array<{ startLine: number; endLine: number }>>;
+
+        if (workspaceTexts) {
+            // Static/MCP path — no caching.
+            satisfiedNames = new Set<string>();
+            verifiedNames = new Set<string>();
+            satisfyBlockRanges = new Map();
+            for (const text of workspaceTexts) {
+                this.extractSatisfyReferences(text, satisfiedNames);
+                this.extractVerifyReferences(text, verifiedNames);
+                satisfyBlockRanges.set('__static__', this.extractSatisfyBlockRanges(text));
+            }
+        } else if (this.documentManager) {
+            const uris = this.documentManager.getUris();
+            const versionKey = uris.map(u => u + ':' + this.documentManager.getVersion(u)).join('|');
+
+            // Reuse satisfy cache (already built by checkUnsatisfiedRequirements).
+            if (this.satisfyCache && this.satisfyCache.versionKey === versionKey) {
+                satisfiedNames = this.satisfyCache.satisfiedNames;
+                satisfyBlockRanges = this.satisfyCache.satisfyBlockRanges;
+            } else {
+                satisfiedNames = new Set<string>();
+                satisfyBlockRanges = new Map();
+                for (const uri of uris) {
+                    const text = this.documentManager.getText(uri);
+                    if (text) {
+                        this.extractSatisfyReferences(text, satisfiedNames);
+                        satisfyBlockRanges.set(uri, this.extractSatisfyBlockRanges(text));
+                    }
+                }
+                this.satisfyCache = { versionKey, satisfiedNames, satisfyBlockRanges };
+            }
+
+            // Build or reuse verify cache.
+            if (this.verifyCache && this.verifyCache.versionKey === versionKey) {
+                verifiedNames = this.verifyCache.verifiedNames;
+            } else {
+                verifiedNames = new Set<string>();
+                for (const uri of uris) {
+                    const text = this.documentManager.getText(uri);
+                    if (text) {
+                        this.extractVerifyReferences(text, verifiedNames);
+                    }
+                }
+                this.verifyCache = { versionKey, verifiedNames };
+            }
+        } else {
+            satisfiedNames = new Set<string>();
+            verifiedNames = new Set<string>();
+            satisfyBlockRanges = new Map();
+        }
+
+        // Check top-level requirement usages that ARE satisfied but NOT verified.
+        const requirementUsages = allSymbols.filter(s =>
+            s.kind === SysMLElementKind.RequirementUsage,
+        );
+
+        for (const req of requirementUsages) {
+            // Skip nested sub-requirements.
+            if (req.parentQualifiedName) {
+                const parent = indexes.byQualifiedName.get(req.parentQualifiedName);
+                if (parent?.kind === SysMLElementKind.RequirementUsage) continue;
+            }
+
+            // Skip requirements inside satisfy blocks.
+            const uriRanges = satisfyBlockRanges.get(req.uri) ?? satisfyBlockRanges.get('__static__') ?? [];
+            const reqLine = req.selectionRange.start.line;
+            if (uriRanges.some(r => reqLine >= r.startLine && reqLine <= r.endLine)) continue;
+
+            const isSatisfied =
+                satisfiedNames.has(req.name) ||
+                satisfiedNames.has(req.qualifiedName);
+
+            const isVerified =
+                verifiedNames.has(req.name) ||
+                verifiedNames.has(req.qualifiedName);
+
+            if (!isVerified) {
+                const message = isSatisfied
+                    ? `Requirement '${req.name}' is satisfied but has no verification case — ` +
+                      `consider adding: verify ${req.name} by <VerificationCase>;`
+                    : `Requirement '${req.name}' has no verification case — ` +
+                      `consider adding: verify ${req.name} by <VerificationCase>;`;
+                diagnostics.push({
+                    severity: DiagnosticSeverity.Warning,
+                    range: req.selectionRange,
+                    message,
+                    source: 'sysml',
+                    code: 'unverified-requirement',
+                    data: { name: req.name, qualifiedName: req.qualifiedName },
+                });
+            }
+        }
+
+        return diagnostics;
+    }
+
+    /**
+     * Extract requirement references from `verify` statements in text.
+     * Adds both the full qualified name and the simple (last segment) name.
+     *
+     * Patterns matched:
+     *   verify QualifiedName by ...
+     *   verify QualifiedName;
+     *   verify requirement QualifiedName by ...
+     */
+    private extractVerifyReferences(text: string, out: Set<string>): void {
+        const stripped = this.stripComments(text);
+        const re = /\bverify\s+(?:requirement\s+)?([\w]+(?:::[\w]+)*)\s*(?:by\b|;|:|\{)/g;
+        let m: RegExpExecArray | null;
+        while ((m = re.exec(stripped)) !== null) {
+            const ref = m[1];
+            out.add(ref);
+            const lastSeg = ref.includes('::') ? ref.split('::').pop()! : ref;
+            out.add(lastSeg);
+        }
+    }
+
+    /**
+     * Replace all SysML comments (line and block) with spaces,
+     * preserving string length and newline positions so that character offsets
+     * and line numbers remain valid.
+     */
+    private stripComments(text: string): string {
+        // Replace block comments (preserve newlines), then line comments
+        return text
+            .replace(/\/\*[\s\S]*?\*\//g, m => m.replace(/[^\n]/g, ' '))
+            .replace(/\/\/[^\n]*/g, m => ' '.repeat(m.length));
+    }
+
+    /** Binary-search a sorted line-offset table to find the 0-based line for a character offset. */
+    private offsetToLine(lineOffsets: number[], offset: number): number {
+        let lo = 0;
+        let hi = lineOffsets.length - 1;
+        while (lo < hi) {
+            const mid = (lo + hi + 1) >>> 1;
+            if (lineOffsets[mid] <= offset) lo = mid;
+            else hi = mid - 1;
+        }
+        return lo;
     }
 
     /**
@@ -515,6 +1002,18 @@ export class SemanticValidator {
                 const path = expr.split('.');
                 const ok = this.resolvePathFromParent(path, parentMembers, indexes);
                 if (ok) continue;
+
+                // For single-segment identifiers (no dots), check if the name
+                // resolves in the broader scope: workspace symbols (covers
+                // imports) or standard library types (covers wildcard imports
+                // like `import USCustomaryUnits::*`).
+                if (path.length === 1) {
+                    const root = path[0];
+                    if (indexes.byName.has(root) ||
+                        resolveLibraryType(root) !== undefined) {
+                        continue;
+                    }
+                }
 
                 const absoluteStart = b.bodyOffset + im.index;
                 diagnostics.push({

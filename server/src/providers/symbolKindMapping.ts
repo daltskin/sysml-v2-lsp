@@ -59,6 +59,7 @@ export function toSysMLSymbolKind(kind: SysMLElementKind): SymbolKind {
         case SysMLElementKind.RequirementUsage:
         case SysMLElementKind.ActorUsage:
         case SysMLElementKind.SubjectUsage:
+        case SysMLElementKind.StakeholderUsage:
             return SymbolKind.Object;
 
         // Constraints → Constant (boolean-valued)

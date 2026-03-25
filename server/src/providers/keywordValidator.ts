@@ -226,6 +226,11 @@ function looksLikeKeywordPosition(visibleTokens: Token[], index: number): boolea
             prev.type === SysMLv2Lexer.COLON_EQ) {
             return false;
         }
+        // If preceded by '->' (collection invoke operator), this is a
+        // function name (select, collect, reject, etc.), not a keyword.
+        if (prev.text === '->') {
+            return false;
+        }
     }
 
     // Check next token — if it's something that follows a keyword, this is likely a typo

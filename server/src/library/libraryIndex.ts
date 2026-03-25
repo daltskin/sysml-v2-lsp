@@ -29,7 +29,7 @@ function readWord(line: string, pos: number): [string, number] | undefined {
     return pos > start ? [line.slice(start, pos), pos] : undefined;
 }
 
-/** Read a name that may be wrapped in single quotes ('Name'). */
+/** Read a name that may be wrapped in single quotes ('Name') or angle brackets (<shortName>). */
 function readName(line: string, pos: number): [string, number] | undefined {
     pos = skipSpaces(line, pos);
     if (pos < line.length && line[pos] === "'") {
@@ -40,7 +40,60 @@ function readName(line: string, pos: number): [string, number] | undefined {
         if (pos < line.length && line[pos] === "'") pos++;
         return name ? [name, pos] : undefined;
     }
+    // Handle <shortName> syntax — index the short name and skip past the
+    // optional long name that follows (quoted or unquoted).
+    // e.g. `<knot> 'knot (nautical mile per hour)'` or `<kg> kilogram`
+    if (pos < line.length && line[pos] === '<') {
+        pos++;
+        const start = pos;
+        while (pos < line.length && line[pos] !== '>') pos++;
+        const shortName = line.slice(start, pos).trim();
+        if (pos < line.length && line[pos] === '>') pos++;
+        // Skip optional long name after the short name
+        pos = skipSpaces(line, pos);
+        if (pos < line.length && line[pos] === "'") {
+            // Quoted long name — skip to closing quote
+            pos++;
+            while (pos < line.length && line[pos] !== "'") pos++;
+            if (pos < line.length) pos++;
+        } else if (pos < line.length && isWordChar(line.charCodeAt(pos))) {
+            // Unquoted long name (e.g. `<kg> kilogram`)
+            while (pos < line.length && isWordChar(line.charCodeAt(pos))) pos++;
+        }
+        return shortName ? [shortName, pos] : undefined;
+    }
     return readWord(line, pos);
+}
+
+/**
+ * Extract the long name from a `<shortName> longName` or `<shortName> 'longName'` pattern.
+ * Returns the single-word long name (e.g. `foot` from `'foot'`, `kilogram` from `kilogram`)
+ * or undefined if the long name is multi-word or absent.
+ */
+function readLongName(line: string, pos: number): string | undefined {
+    pos = skipSpaces(line, pos);
+    if (pos >= line.length || line[pos] !== '<') return undefined;
+    // Skip past <shortName>
+    while (pos < line.length && line[pos] !== '>') pos++;
+    if (pos < line.length) pos++;
+    pos = skipSpaces(line, pos);
+    if (pos >= line.length) return undefined;
+    if (line[pos] === "'") {
+        // Quoted long name
+        pos++;
+        const start = pos;
+        while (pos < line.length && line[pos] !== "'") pos++;
+        const longName = line.slice(start, pos).trim();
+        if (longName && /^[A-Za-z_]\w*$/.test(longName)) return longName;
+        return undefined;
+    }
+    // Unquoted long name (e.g. `<kg> kilogram`)
+    if (isWordChar(line.charCodeAt(pos))) {
+        const start = pos;
+        while (pos < line.length && isWordChar(line.charCodeAt(pos))) pos++;
+        return line.slice(start, pos);
+    }
+    return undefined;
 }
 
 /** Check if the word at pos matches the given keyword (followed by non-word char or end). */
@@ -211,6 +264,37 @@ function extractUsageNameFromLine(line: string): string | undefined {
 }
 
 /**
+ * Extract the long quoted name from a usage line that uses `<short> 'long'`.
+ * Returns the single-word long name or undefined.
+ */
+function extractUsageLongNameFromLine(line: string): string | undefined {
+    if (line.length < 5 || line[0] !== ' ' || line[1] !== ' ' ||
+        line[2] !== ' ' || line[3] !== ' ') {
+        return undefined;
+    }
+
+    let w = readWord(line, 4);
+    if (!w) return undefined;
+    let [keyword, pos] = w;
+
+    if (keyword === 'abstract') {
+        w = readWord(line, pos);
+        if (!w) return undefined;
+        [keyword, pos] = w;
+    }
+
+    if (keyword === 'use') {
+        w = readWord(line, pos);
+        if (!w || w[0] !== 'case') return undefined;
+        pos = w[1];
+    } else if (!USAGE_KEYWORDS.has(keyword)) {
+        return undefined;
+    }
+
+    return readLongName(line, pos);
+}
+
+/**
  * Clean a single line from a doc-comment block, stripping comment
  * delimiters and leading asterisk decoration.
  */
@@ -311,6 +395,20 @@ function buildIndex(libRoot: string): { packages: Map<string, string>; types: Ma
                                 const qualName = `${pkgName}::${usageName}`;
                                 if (!types.has(qualName)) {
                                     types.set(qualName, { uri: fileUri, line: i });
+                                }
+                            }
+                            // Also index the long quoted name if present
+                            // (e.g. `<ft> 'foot'` → index both `ft` and `foot`)
+                            const longName = extractUsageLongNameFromLine(lines[i]);
+                            if (longName && longName !== usageName) {
+                                if (!types.has(longName)) {
+                                    types.set(longName, { uri: fileUri, line: i });
+                                }
+                                if (pkgName) {
+                                    const qualLong = `${pkgName}::${longName}`;
+                                    if (!types.has(qualLong)) {
+                                        types.set(qualLong, { uri: fileUri, line: i });
+                                    }
                                 }
                             }
                         }

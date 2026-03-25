@@ -1,9 +1,8 @@
 import { BailErrorStrategy, CharStream, CommonTokenStream, DefaultErrorStrategy, ParserRuleContext, PredictionMode } from 'antlr4ng';
 import { SysMLv2Lexer } from '../generated/SysMLv2Lexer.js';
 import { SysMLv2Parser } from '../generated/SysMLv2Parser.js';
-import { clearPreSeededDFA, isDfaPreSeeded } from './dfaLoader.js';
+import { clearPreSeededDFAStates, isDfaPreSeeded, markDfaNotPreSeeded } from './dfaLoader.js';
 import { SyntaxError, SysMLErrorListener } from './errorListener.js';
-import { WARMUP_TEXT } from './warmupText.js';
 
 /**
  * Result of parsing a SysML document.
@@ -31,33 +30,38 @@ export interface ParseResult {
  * This two-stage strategy is the standard ANTLR4 optimisation —
  * SLL handles the vast majority of inputs and is ~2-3x faster.
  *
- * If the DFA has been pre-seeded from a snapshot and the parser
- * throws a TypeError (uncovered edge), the DFA is cleared and the
- * parse retried.  Additionally, if the pre-seeded DFA produces
- * parse errors, we retry once with a cleared DFA to rule out
- * stale snapshot edges producing bogus errors (issue #15).
+ * When the DFA has been pre-seeded from a snapshot, SLL may bail out
+ * on grammar paths not in the snapshot (empty ATNConfigSets trigger
+ * an LL fallback).  The LL pass always produces correct results
+ * because it works from the ATN, not the DFA.  As a side effect,
+ * LL builds correct DFA states for the uncovered paths, so the NEXT
+ * parse of any file benefits from the corrected DFA.
+ *
+ * If a pre-seeded DFA parse produces errors, the first file that
+ * triggers this pays a small one-time penalty (~200-500 ms for the
+ * LL computation).  All subsequent parses are fast.
  */
 export function parseDocument(text: string): ParseResult {
-    try {
-        const result = parseDocumentCore(text);
-        // If errors occurred and DFA is pre-seeded, the snapshot may
-        // be stale — a missing edge in the pre-seeded DFA produces
-        // an ERROR alternative instead of a TypeError.  Retry once
-        // with the DFA cleared so the ATN can build correct edges.
-        if (result.errors.length > 0 && isDfaPreSeeded()) {
-            clearPreSeededDFA();
-            return parseDocumentCore(text);
-        }
-        return result;
-    } catch (e: unknown) {
-        if (isDfaPreSeeded() && e instanceof TypeError) {
-            // Pre-seeded DFA hit a token pattern it doesn't cover.
-            // Clear all pre-seeded states and re-parse from scratch.
-            clearPreSeededDFA();
-            return parseDocumentCore(text);
-        }
-        throw e;
+    const result = parseDocumentCore(text);
+
+    // If errors occurred with a pre-seeded DFA, they might be false
+    // positives from incomplete snapshot coverage.  Clear all pre-seeded
+    // DFA states and re-parse with LL-only mode — this computes
+    // transitions from the ATN directly for correct results, AND
+    // populates the DFA for future parses.
+    if (result.errors.length > 0 && isDfaPreSeeded()) {
+        markDfaNotPreSeeded();
+        clearPreSeededDFAStates();
+        return parseDocumentLL(text);
     }
+
+    // Clear the flag after first successful parse so the check
+    // doesn't run on every subsequent parse.
+    if (isDfaPreSeeded()) {
+        markDfaNotPreSeeded();
+    }
+
+    return result;
 }
 
 function parseDocumentCore(text: string): ParseResult {
@@ -115,115 +119,49 @@ function parseDocumentCore(text: string): ParseResult {
     };
 }
 
-// ---------------------------------------------------------------------------
-// DFA warm-up
-//
-// The ANTLR4 parser uses a static ATN with lazily-built DFA tables.
-// The first parse of a session populates these tables (~20 s for the
-// full SysML v2 grammar).  All subsequent parses reuse them (~50 ms).
-//
-// warmupDFA() parses representative SysML text in small chunks using
-// setImmediate between chunks so the Node event loop stays responsive
-// for incoming LSP requests.  If a real parse arrives mid-warmup, the
-// DFA is already partially populated, so even aborted warm-ups help.
-// ---------------------------------------------------------------------------
-
-/** Split the monolithic warm-up text into independently parseable chunks. */
-function createWarmupChunks(): string[] {
-    const allLines = WARMUP_TEXT.split('\n');
-    // Strip the outer `package WarmUp {` … `}` wrapper
-    const inner = allLines.slice(1, allLines.length - 1);
-    const CHUNK_SIZE = 30;
-    const chunks: string[] = [];
-    for (let i = 0; i < inner.length; i += CHUNK_SIZE) {
-        const slice = inner.slice(i, i + CHUNK_SIZE).join('\n');
-        chunks.push(`package WU_${chunks.length} {\n${slice}\n}`);
-    }
-    return chunks;
-}
-
-/** Parse a single snippet to exercise the DFA without keeping results. */
-function parseSnippet(text: string): void {
-    const input = CharStream.fromString(text);
-    const lexer = new SysMLv2Lexer(input);
-    const tokens = new CommonTokenStream(lexer);
-    tokens.fill();
-    const parser = new SysMLv2Parser(tokens);
-    parser.removeErrorListeners();
-    parser.interpreter.predictionMode = PredictionMode.SLL;
-    parser.errorHandler = new BailErrorStrategy();
-    try {
-        parser.rootNamespace();
-    } catch {
-        // SLL bail-out → try LL for remaining DFA coverage
-        tokens.seek(0);
-        parser.reset();
-        parser.interpreter.predictionMode = PredictionMode.LL;
-        parser.errorHandler = new DefaultErrorStrategy();
-        parser.removeErrorListeners();
-        try { parser.rootNamespace(); } catch { /* best effort */ }
-    }
-}
-
-export interface WarmupProgress {
-    chunksCompleted: number;
-    totalChunks: number;
-    elapsedMs: number;
-}
-
 /**
- * Cooperatively warm up the ANTLR4 DFA cache on the main thread.
+ * Parse using LL mode only (no SLL fast path).
  *
- * Returns a promise that resolves when all chunks are parsed (or the
- * warm-up is cancelled).  Calls `onProgress` after each chunk so the
- * caller can log / notify the client.
- *
- * Call `cancel()` on the returned handle to abort early (e.g. when the
- * first real document is opened and will finish warming the DFA itself).
+ * Used when the pre-seeded DFA produced errors — LL computes all
+ * transitions from the ATN directly, producing correct results.
+ * As a side effect, it builds correct DFA states for any grammar
+ * paths not covered by the snapshot, so future parses benefit.
  */
-export function warmupDFA(
-    onProgress?: (p: WarmupProgress) => void,
-): { promise: Promise<WarmupProgress>; cancel: () => void } {
-    const chunks = createWarmupChunks();
-    const t0 = Date.now();
-    let cancelled = false;
+function parseDocumentLL(text: string): ParseResult {
+    const inputStream = CharStream.fromString(text);
+    const lexer = new SysMLv2Lexer(inputStream);
+    const tokenStream = new CommonTokenStream(lexer);
 
-    const cancel = () => { cancelled = true; };
+    const lexStart = Date.now();
+    tokenStream.fill();
+    const lexMs = Date.now() - lexStart;
 
-    const promise = new Promise<WarmupProgress>((resolve) => {
-        let i = 0;
+    const parser = new SysMLv2Parser(tokenStream);
+    const errorListener = new SysMLErrorListener();
+    lexer.removeErrorListeners();
+    parser.removeErrorListeners();
+    parser.addErrorListener(errorListener);
 
-        function next() {
-            if (cancelled || i >= chunks.length) {
-                const result: WarmupProgress = {
-                    chunksCompleted: i,
-                    totalChunks: chunks.length,
-                    elapsedMs: Date.now() - t0,
-                };
-                resolve(result);
-                return;
-            }
+    let tree: ParserRuleContext | null = null;
+    const parseStart = Date.now();
 
-            try {
-                parseSnippet(chunks[i]);
-            } catch {
-                // best effort — continue with next chunk
-            }
-            i++;
+    // LL only — computes from ATN, bypasses stale DFA states
+    parser.interpreter.predictionMode = PredictionMode.LL;
+    parser.errorHandler = new DefaultErrorStrategy();
+    try {
+        tree = parser.rootNamespace();
+    } catch {
+        // If parsing fails completely, tree remains null
+    }
 
-            const progress: WarmupProgress = {
-                chunksCompleted: i,
-                totalChunks: chunks.length,
-                elapsedMs: Date.now() - t0,
-            };
-            onProgress?.(progress);
+    const parseMs = Date.now() - parseStart;
 
-            // Yield to the event loop so LSP requests can be serviced
-            setImmediate(next);
-        }
-
-        setImmediate(next);
-    });
-
-    return { promise, cancel };
+    return {
+        tree,
+        tokenStream,
+        parser,
+        lexer,
+        errors: errorListener.getErrors(),
+        timing: { lexMs, parseMs },
+    };
 }
