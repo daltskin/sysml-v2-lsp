@@ -31,6 +31,15 @@ const serverBuild = esbuild.build({
     external: ['vscode'],
 });
 
+// Bundle the parse worker (separate entry point for worker_threads)
+const workerBuild = esbuild.build({
+    ...baseConfig,
+    ...serverMinify,
+    entryPoints: ['server/src/parser/parseWorker.ts'],
+    outfile: 'dist/server/parseWorker.js',
+    external: ['vscode'],
+});
+
 // Bundle the MCP server
 const mcpServerBuild = esbuild.build({
     ...baseConfig,
@@ -49,5 +58,5 @@ const clientBuild = esbuild.build({
     external: ['vscode'],
 });
 
-await Promise.all([serverBuild, mcpServerBuild, clientBuild]);
+await Promise.all([serverBuild, workerBuild, mcpServerBuild, clientBuild]);
 console.log(isProduction ? '✅ Production build complete' : '✅ Build complete');

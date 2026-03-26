@@ -31,6 +31,7 @@ import {
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { Worker } from 'node:worker_threads';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { DocumentManager } from './documentManager.js';
 import { initLibraryIndex } from './library/libraryIndex.js';
@@ -89,6 +90,157 @@ let hasWorkspaceFolderCapability = false;
 
 /** Workspace folder roots (file-system paths) captured during initialization. */
 let workspaceRoots: string[] = [];
+
+/** Set to true after onInitialized completes (DFA loaded, library indexed). */
+let serverReady = false;
+/** URIs of documents opened before the server was ready. */
+const earlyOpenUris = new Set<string>();
+
+// --------------------------------------------------------------------------
+// Parse worker bridge
+// --------------------------------------------------------------------------
+
+/** Next request ID for the parse worker. */
+let workerRequestId = 0;
+
+/** The parse worker thread (spawned lazily). */
+let parseWorker: Worker | undefined;
+/** True when the worker is available (spawned + not crashed). */
+let workerReady = false;
+
+/**
+ * Spawn the parse worker.  Called once from onInitialized after the
+ * DFA snapshot is loaded on the main thread.  The worker loads its own
+ * snapshot independently.
+ */
+function spawnParseWorker(): void {
+    const workerPath = path.join(__dirname, 'parseWorker.js');
+    try {
+        parseWorker = new Worker(workerPath);
+        parseWorker.on('message', handleWorkerMessage);
+        parseWorker.on('error', (err) => {
+            connection.console.log(`Parse worker error: ${err.message}`);
+            workerReady = false;
+        });
+        parseWorker.on('exit', (code) => {
+            connection.console.log(`Parse worker exited with code ${code}`);
+            workerReady = false;
+            parseWorker = undefined;
+        });
+        workerReady = true;
+        connection.console.log('Parse worker spawned');
+    } catch (err) {
+        connection.console.log(`Failed to spawn parse worker: ${err}`);
+    }
+}
+
+/**
+ * Handle messages from the parse worker.
+ */
+function handleWorkerMessage(msg: any): void {
+    // Warm-up completion notification
+    if (msg.warmup) {
+        connection.console.log(
+            `Worker DFA warm-up: ${msg.elapsed} ms, ` +
+            `${msg.chunksCompleted}/${msg.totalChunks} chunks` +
+            (msg.interrupted ? ' (interrupted by real parse)' : ''),
+        );
+        return;
+    }
+
+    // Parse response — deliver fast diagnostics
+    const { uri, version, errors, keywordDiagnostics } = msg;
+
+    // Skip if the document was closed or re-edited since
+    const doc = documents.get(uri);
+    if (!doc || doc.version !== version) return;
+
+    // Convert worker errors → LSP Diagnostics
+    const diagnostics: import('vscode-languageserver/node.js').Diagnostic[] = [];
+    for (const e of errors) {
+        diagnostics.push({
+            severity: 1, // Error
+            range: {
+                start: { line: e.line - 1, character: e.column },
+                end: { line: e.line - 1, character: e.column + (e.length || 1) },
+            },
+            message: e.message,
+            source: 'sysml',
+        });
+    }
+    for (const kd of keywordDiagnostics) {
+        diagnostics.push({
+            severity: kd.severity,
+            range: kd.range,
+            message: kd.message,
+            source: 'sysml',
+            code: kd.code,
+        });
+    }
+
+    // Send worker diagnostics immediately (fast path)
+    connection.sendDiagnostics({ uri, diagnostics });
+
+    // Now do the main-thread parse for the symbol table (needed by
+    // hover, completion, go-to-def, etc.).  The main-thread DFA is
+    // already warm from the snapshot so this is fast (~50-200 ms).
+    // We do this asynchronously via setImmediate to keep the event
+    // loop responsive between the fast diagnostic push and the
+    // heavier symbol-table build.
+    setImmediate(() => {
+        const currentDoc = documents.get(uri);
+        if (!currentDoc || currentDoc.version !== version) return;
+
+        documentManager.parse(currentDoc);
+
+        // Merge syntax diagnostics from the authoritative main-thread
+        // parse with semantic diagnostics (deferred).
+        const mainDiags = diagnosticsProvider.getDiagnostics(uri);
+        const parseResult = documentManager.get(uri);
+        if (parseResult) {
+            mainDiags.push(...validateKeywords(parseResult));
+        }
+        connection.sendDiagnostics({ uri, diagnostics: mainDiags });
+
+        connection.sendNotification('sysml/status', {
+            state: 'end',
+            message: `Parsed ${uri.split('/').pop()} (worker + main)`,
+            fileName: uri.split('/').pop(),
+            uri,
+        });
+
+        // Deferred semantic validation
+        const existingSemantic = semanticTimers.get(uri);
+        if (existingSemantic) clearTimeout(existingSemantic);
+        semanticTimers.set(uri, setTimeout(() => {
+            semanticTimers.delete(uri);
+            if (documentManager.getVersion(uri) !== version) return;
+            if (!documents.get(uri)) return;
+            const semanticDiags = semanticValidator.validate(uri);
+            documentManager.setSemanticDiagnostics(uri, semanticDiags);
+            if (semanticDiags.length === 0) return;
+            mainDiags.push(...semanticDiags);
+            connection.sendDiagnostics({ uri, diagnostics: mainDiags });
+        }, 50));
+    });
+}
+
+/**
+ * Send a parse request to the worker.  Returns true if the worker
+ * accepted the request, false if the worker is unavailable (fallback
+ * to main-thread parsing).
+ */
+function requestWorkerParse(document: TextDocument): boolean {
+    if (!workerReady || !parseWorker) return false;
+    const id = ++workerRequestId;
+    parseWorker.postMessage({
+        id,
+        text: document.getText(),
+        uri: document.uri,
+        version: document.version,
+    });
+    return true;
+}
 
 // --------------------------------------------------------------------------
 // Lifecycle
@@ -221,6 +373,25 @@ connection.onInitialized(() => {
             `Workspace scan: pre-parsed ${fileCount} .sysml files in ${scanMs} ms`
         );
     }
+
+    // Server is fully initialized — mark ready and spawn the parse worker.
+    serverReady = true;
+    spawnParseWorker();
+
+    // Re-validate any documents that were opened before the DFA was loaded.  The
+    // early parse may have produced false-positive syntax errors
+    // because the cold DFA doesn't cover all grammar paths.
+    serverReady = true;
+    if (earlyOpenUris.size > 0) {
+        connection.console.log(
+            `Re-validating ${earlyOpenUris.size} document(s) opened before server was ready`
+        );
+        for (const uri of earlyOpenUris) {
+            const doc = documents.get(uri);
+            if (doc) validateDocument(doc);
+        }
+        earlyOpenUris.clear();
+    }
 });
 
 // --------------------------------------------------------------------------
@@ -308,6 +479,16 @@ function revalidateOpenDocuments(): void {
 let crossFileRevalidateTimer: ReturnType<typeof setTimeout> | undefined;
 
 documents.onDidOpen((event) => {
+    if (!serverReady) {
+        // Server not fully initialized (DFA not loaded yet).  Queue
+        // the URI for re-validation after onInitialized completes.
+        // Still parse it so symbols are available, but don't send
+        // diagnostics that may be false positives.
+        earlyOpenUris.add(event.document.uri);
+        documentManager.parse(event.document);
+        return;
+    }
+
     validateDocument(event.document);
 
     // A newly opened file adds symbols to the workspace table.
@@ -420,7 +601,15 @@ async function validateDocument(document: TextDocument): Promise<void> {
         uri: document.uri,
     });
 
-    // Parse and cache the document
+    // Try the worker first — it runs the ANTLR parse off the main
+    // thread so hover/completion/go-to-def stay responsive.
+    // The worker posts diagnostics back via handleWorkerMessage,
+    // which also kicks off the main-thread parse for the symbol table.
+    if (requestWorkerParse(document)) {
+        return;
+    }
+
+    // Fallback: main-thread parse (worker unavailable or not started)
     const parseT0 = Date.now();
     documentManager.parse(document);
     const parseMs = Date.now() - parseT0;

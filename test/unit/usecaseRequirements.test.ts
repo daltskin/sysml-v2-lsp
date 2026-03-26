@@ -139,11 +139,11 @@ package Test {
         it('should nest actor and subject as children of use case def', async () => {
             const model = await getModelForText(`
 package Test {
-    item def Hero;
-    part def Batmobile;
+    item def Operator;
+    part def Controller;
     use case def Rescue {
-        subject bm : Batmobile;
-        actor driver : Hero;
+        subject ctrl : Controller;
+        actor driver : Operator;
     }
 }
 `, ['elements']);

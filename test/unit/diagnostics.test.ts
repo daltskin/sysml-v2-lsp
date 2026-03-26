@@ -62,6 +62,24 @@ async function getSemanticDiagnosticsForUri(entries: Array<{ uri: string; text: 
 }
 
 describe('Semantic Validation', () => {
+    describe('import inside package body', () => {
+        it('should NOT produce syntax errors for import inside package body', async () => {
+            const text = `
+package CircularReferenceExample {
+    import CircularReferenceExample::*;
+
+    part def Contained {
+        part outer : Container;
+    }
+    part system : PartA;
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const syntaxDiags = diags.filter(d => d.message?.includes('no viable alternative'));
+            expect(syntaxDiags.length).toBe(0);
+        });
+    });
+
     describe('unresolved type references', () => {
         it('should flag a type that does not exist in the document', async () => {
             const text = `
@@ -260,6 +278,52 @@ package Test {
             const enumDiags = diags.filter(d => d.code === 'empty-enum');
             expect(enumDiags.length).toBe(1);
             expect(enumDiags[0].message).toContain("'Color'");
+        });
+
+        it('should NOT flag enum definitions with explicit enum values', async () => {
+            const text = `
+package Test {
+    enum def Color {
+        enum red;
+        enum green;
+        enum blue;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const enumDiags = diags.filter(d => d.code === 'empty-enum');
+            expect(enumDiags.length).toBe(0);
+        });
+
+        it('should NOT flag enum definitions with bare (implicit) values', async () => {
+            const text = `
+package Test {
+    enum def Color {
+        red;
+        green;
+        blue;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const enumDiags = diags.filter(d => d.code === 'empty-enum');
+            expect(enumDiags.length).toBe(0);
+        });
+
+        it('should NOT flag enum definitions with doc and values', async () => {
+            const text = `
+package Test {
+    enum def Severity {
+        doc /* Severity levels. */
+        low;
+        medium;
+        high;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const enumDiags = diags.filter(d => d.code === 'empty-enum');
+            expect(enumDiags.length).toBe(0);
         });
     });
 

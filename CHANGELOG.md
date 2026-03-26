@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.10.0]
+
+### Added
+
+- Off-main-thread parsing via worker thread — diagnostics arrive faster while hover/completion stay responsive
+- Early-open document queue: files opened before server initialisation are re-validated once the DFA is ready
+- Enum value recognition (`enum red;` and bare `red;`) modelled as `EnumUsage` children in the symbol table
+- DFA loader module for worker-side snapshot hydration
+- Expanded warm-up text with `import` and `import all` variants
+
+### Changed
+
+- Parse-retry comment trimmed to a concise one-liner
+- `empty-enum` diagnostic no longer fires when the enum body contains explicit or implicit values
+
+### Fixed
+
+- False-positive syntax errors on `import` statements inside package bodies
+
 ## [0.9.0]
 
 ### Added

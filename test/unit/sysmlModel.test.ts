@@ -219,6 +219,31 @@ package Test {
             expect(typeNames).toContain('enum def');
         });
 
+        it('should extract enum values as EnumUsage children', async () => {
+            const model = await getModelForText(`
+package Test {
+    enum def Color {
+        enum red;
+        green;
+        blue;
+    }
+}
+`, ['elements']);
+
+            const pkg = model.elements!.find(e => e.name === 'Test');
+            const enumDef = pkg!.children.find(c => c.type === 'enum def' && c.name === 'Color');
+            expect(enumDef).toBeDefined();
+
+            const valueNames = enumDef!.children.map(c => c.name);
+            expect(valueNames).toContain('red');
+            expect(valueNames).toContain('green');
+            expect(valueNames).toContain('blue');
+
+            // All should be 'enum' type (EnumUsage)
+            const valueTypes = enumDef!.children.map(c => c.type);
+            expect(valueTypes.every(t => t === 'enum')).toBe(true);
+        });
+
         it('should extract multiplicity', async () => {
             const model = await getModelForText(`
 package Test {

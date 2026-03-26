@@ -44,11 +44,8 @@ export interface ParseResult {
 export function parseDocument(text: string): ParseResult {
     const result = parseDocumentCore(text);
 
-    // If errors occurred with a pre-seeded DFA, they might be false
-    // positives from incomplete snapshot coverage.  Clear all pre-seeded
-    // DFA states and re-parse with LL-only mode — this computes
-    // transitions from the ATN directly for correct results, AND
-    // populates the DFA for future parses.
+    // If errors occurred with a pre-seeded DFA, clear pre-seeded
+    // states and retry with LL-only mode.
     if (result.errors.length > 0 && isDfaPreSeeded()) {
         markDfaNotPreSeeded();
         clearPreSeededDFAStates();

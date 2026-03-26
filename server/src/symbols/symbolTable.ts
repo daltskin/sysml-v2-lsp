@@ -293,6 +293,8 @@ export class SymbolTable {
         if (lower === 'allocationdefinition') return SysMLElementKind.AllocationDef;
         if (lower === 'usecasedefinition') return SysMLElementKind.UseCaseDef;
         if (lower === 'enumerationdefinition') return SysMLElementKind.EnumDef;
+        if (lower === 'enumeratedvalue') return SysMLElementKind.EnumUsage;
+        if (lower === 'enumerationusage') return SysMLElementKind.EnumUsage;
         if (lower === 'calculationdefinition' || lower === 'calcdefinition') return SysMLElementKind.CalcDef;
         if (lower === 'viewdefinition') return SysMLElementKind.ViewDef;
         if (lower === 'viewpointdefinition') return SysMLElementKind.ViewpointDef;

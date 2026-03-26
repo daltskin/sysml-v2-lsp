@@ -71,6 +71,29 @@ export function clearPreSeededDFAStates(): void {
 }
 
 /**
+ * Unconditionally clear ALL DFA states for every decision.
+ *
+ * Used when parse errors occur after the pre-seeded flag has been
+ * cleared — child states deeper in the DFA graph may still hold
+ * pre-seeded ERROR edges even though s0 was rebuilt by LL.
+ * The ATN will lazily recompute correct states on the next parse.
+ */
+export function clearAllDFAStates(): void {
+    const dfas = (SysMLv2Parser as any).decisionsToDFA as any[];
+    for (const dfa of dfas) {
+        if (!dfa.s0) continue;
+        if (dfa.isPrecedenceDfa) {
+            dfa.s0 = DFAState.fromState(-1);
+        } else {
+            dfa.s0 = undefined;
+        }
+        if (dfa.states && typeof dfa.states.clear === 'function') {
+            dfa.states.clear();
+        }
+    }
+}
+
+/**
  * Pre-populate the parser's static DFA tables from the build-time snapshot.
  *
  * Must be called once at server startup, before any parsing occurs.
