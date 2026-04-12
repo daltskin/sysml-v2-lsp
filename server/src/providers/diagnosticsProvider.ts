@@ -3,6 +3,23 @@ import { DocumentManager } from '../documentManager.js';
 import { SyntaxError } from '../parser/errorListener.js';
 
 /**
+ * Patterns that indicate expression-level constructs the ANTLR grammar
+ * cannot handle.  Only blocks whose body text matches at least one of
+ * these patterns will have their syntax errors suppressed.
+ *
+ *  - Arithmetic / unit operators:  +  -  *  /  ^  **  used as infix
+ *    operators in value expressions (e.g. `mass * 9.81`, `W/m^2`).
+ *  - Collection / streaming operators:  ->  .?
+ *  - Assignment operator inside expressions:  :=
+ *
+ * The patterns are intentionally conservative: a bare `+` adjacent to a
+ * word character or digit on both sides is required, so that a `+` in a
+ * comment or string doesn't trigger suppression.
+ */
+const EXPRESSION_OPERATOR_RE =
+    /(\w\s*[+\-*/^]\s*\w)|(\w\s*\*\*\s*\w)|->|\.(?:\?)|:=/;
+
+/**
  * Provides diagnostics (errors/warnings) for SysML documents.
  * Converts ANTLR parse errors into LSP Diagnostic objects.
  */
@@ -24,17 +41,19 @@ export class DiagnosticsProvider {
         const diagnostics: Diagnostic[] = [];
 
         for (const error of result.errors) {
-            // Suppress syntax errors inside blocks where the ANTLR grammar
-            // has known limitations: constraint bodies (arithmetic operators),
-            // requirement usage bodies (nested :>>), calc/analysis bodies.
+            // Suppress syntax errors only inside blocks that actually
+            // contain expression operators the ANTLR grammar cannot parse.
             if (suppressedRanges.length > 0) {
                 if (this.isLineInRanges(error.line, suppressedRanges)) {
                     continue;
                 }
-                // Also suppress cascading "extraneous input '}'" errors
-                // caused by the parser losing brace-depth tracking after
-                // earlier expression failures in suppressed blocks.
-                if (error.message.startsWith('extraneous input \'}\' expecting')) {
+                // Suppress cascading "extraneous input '}'" errors only
+                // when they fall on the closing line of a suppressed block,
+                // not document-wide.
+                if (
+                    error.message.startsWith('extraneous input \'}\' expecting') &&
+                    this.isLineAtEndOfRanges(error.line, suppressedRanges)
+                ) {
                     continue;
                 }
             }
@@ -60,18 +79,14 @@ export class DiagnosticsProvider {
      * Find 0-based line ranges of blocks where the ANTLR grammar has
      * known limitations and syntax errors should be suppressed.
      *
-     * The grammar can't handle arithmetic operators (+, -, *, /, ^),
-     * unit expressions (W/m^2), collection operators (->select, ->collect),
-     * or Boolean operators (and, or, xor) in value expressions. These
-     * appear in virtually any block type (part def, calc def, analysis,
-     * constraint, requirement, etc.), so we suppress errors in all
-     * definition and usage blocks that contain value expressions.
+     * Only suppress errors in blocks whose body text actually contains
+     * expression-level operators that the grammar cannot handle
+     * (arithmetic, unit, collection, or assignment operators).  Blocks
+     * without such operators will correctly report all syntax errors.
      */
     private findGrammarLimitationRanges(text: string): Array<{ startLine: number; endLine: number }> {
         const ranges: Array<{ startLine: number; endLine: number }> = [];
         // Match any block opened by a SysML keyword followed by `{`.
-        // This catches part def, calc def, analysis, constraint, requirement,
-        // action def, state, occurrence, etc.
         const re = /\b(part|attribute|item|port|action|state|constraint|requirement|analysis|calc|occurrence|interface|connection|allocation|flow|use|verification|individual|exhibit|view|viewpoint|concern|rendering|metadata)\b([^;{]*)\{/g;
         let m: RegExpExecArray | null;
 
@@ -87,6 +102,15 @@ export class DiagnosticsProvider {
                 i++;
             }
             if (depth !== 0) continue;
+
+            // Extract the body text (between the braces, exclusive).
+            const bodyText = text.slice(open + 1, i - 1);
+
+            // Only suppress when the body actually contains expression
+            // operators the grammar cannot handle.
+            if (!EXPRESSION_OPERATOR_RE.test(bodyText)) {
+                continue;
+            }
 
             if (!lineOffsets) {
                 lineOffsets = [0];
@@ -116,5 +140,9 @@ export class DiagnosticsProvider {
 
     private isLineInRanges(line: number, ranges: Array<{ startLine: number; endLine: number }>): boolean {
         return ranges.some(r => line >= r.startLine && line <= r.endLine);
+    }
+
+    private isLineAtEndOfRanges(line: number, ranges: Array<{ startLine: number; endLine: number }>): boolean {
+        return ranges.some(r => line === r.endLine);
     }
 }
