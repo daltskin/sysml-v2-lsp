@@ -3,6 +3,7 @@ import { Range } from 'vscode-languageserver/node.js';
 import { MultiplicityBoundsContext, SysMLv2Parser } from '../generated/SysMLv2Parser.js';
 import { ParseResult } from '../parser/parseDocument.js';
 import { contextToRange, tokenToRange } from '../parser/positionUtils.js';
+import { SYSML_KEYWORDS } from '../utils/sysmlKeywords.js';
 import { Scope } from './scope.js';
 import { SysMLElementKind, SysMLSymbol, isUsage as isUsageKind } from './sysmlElements.js';
 
@@ -754,30 +755,10 @@ export class SymbolTable {
 
     /**
      * Check if a text is a SysML keyword.
+     * Uses the shared keyword set derived from the generated lexer.
      */
     private isKeyword(text: string): boolean {
-        const keywords = new Set([
-            'about', 'abstract', 'accept', 'action', 'actor', 'after', 'alias',
-            'all', 'allocate', 'allocation', 'analysis', 'and', 'as', 'assert',
-            'assign', 'assume', 'attribute', 'bind', 'binding', 'bool', 'by',
-            'calc', 'case', 'comment', 'concern', 'connect', 'connection',
-            'constraint', 'decide', 'def', 'default', 'defined', 'dependency',
-            'derived', 'do', 'doc', 'else', 'end', 'entry', 'enum', 'event',
-            'exhibit', 'exit', 'expose', 'false', 'feature', 'filter', 'first',
-            'flow', 'for', 'fork', 'frame', 'from', 'hastype', 'if', 'implies',
-            'import', 'in', 'include', 'individual', 'inout', 'interface',
-            'istype', 'item', 'join', 'language', 'library', 'locale', 'merge',
-            'message', 'meta', 'metadata', 'multiplicity', 'namespace', 'nonunique',
-            'not', 'null', 'objective', 'occurrence', 'of', 'or', 'ordered', 'out',
-            'package', 'parallel', 'part', 'perform', 'port', 'private',
-            'protected', 'public', 'readonly', 'redefines', 'ref', 'references',
-            'render', 'rendering', 'rep', 'require', 'requirement', 'return',
-            'satisfy', 'send', 'snapshot', 'specializes', 'stakeholder', 'state',
-            'subject', 'subsets', 'succession', 'then', 'timeslice', 'to', 'transition',
-            'true', 'type', 'use', 'variant', 'variation', 'verification', 'verify',
-            'view', 'viewpoint', 'when', 'while', 'xor',
-        ]);
-        return keywords.has(text);
+        return SYSML_KEYWORDS.has(text);
     }
 
     /**
