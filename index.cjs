@@ -15,7 +15,7 @@ const path = require('path');
 const serverPath = path.join(__dirname, 'dist', 'server', 'server.js');
 
 /** Absolute path to the bundled worker module (used internally by the server). */
-const workerPath = path.join(__dirname, 'dist', 'server', 'parser', 'parseWorker.js');
+const workerPath = path.join(__dirname, 'dist', 'server', 'parseWorker.js');
 
 /** Absolute path to the bundled MCP server entry point (stdio transport). */
 const mcpServerPath = path.join(__dirname, 'dist', 'server', 'mcpServer.js');

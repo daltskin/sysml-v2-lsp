@@ -20,10 +20,17 @@ import { DFA_SNAPSHOT, type DecisionSnapshot } from './dfaSnapshot.js';
 
 /** Sentinel: set to true after loadDFASnapshot() succeeds. */
 let _loaded = false;
+/** Sticky flag: true if loadDFASnapshot() was ever called successfully. */
+let _everLoaded = false;
 
 /** Returns true if the DFA has been pre-seeded from a snapshot. */
 export function isDfaPreSeeded(): boolean {
     return _loaded;
+}
+
+/** Returns true if a DFA snapshot was ever loaded in this session. */
+export function wasDfaEverPreSeeded(): boolean {
+    return _everLoaded;
 }
 
 /**
@@ -117,6 +124,7 @@ export function loadDFASnapshot(): number {
     }
 
     _loaded = true;
+    _everLoaded = true;
     return totalStates;
 }
 

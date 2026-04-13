@@ -1,5 +1,29 @@
 # Changelog
 
+## [0.11.0]
+
+### Added
+
+- Cross-file requirement diagnostics: `satisfy` and `verify` checks now use workspace-wide model relationships instead of per-file text scanning (#10)
+- Narrowed diagnostics suppression: syntax errors are only suppressed in blocks containing expression operators the grammar cannot parse (#8)
+- Integration test suite covering keyword derivation, suppression narrowing, and end-to-end provider pipeline (#8)
+- Regression tests for cross-file shorthand `satisfy`/`verify` (#10)
+
+### Changed
+
+- `stripComments()` consolidated into shared `identUtils.ts` — removed duplicates from model provider and semantic validator
+- Keyword set derived from generated ANTLR lexer at runtime, replacing hardcoded list in symbol table (#8)
+- `RelationshipDTO.source` is now optional for shorthand `satisfy`/`verify` without `by` clause
+- Satisfy/verify caches populated in a single workspace scan instead of redundant passes
+- Grammar and DFA snapshot updated
+- Cascading `}` error suppression scoped to closing line of suppressed blocks only (#8)
+
+### Fixed
+
+- False `unsatisfied-requirement` / `unverified-requirement` warnings when models are split across files (#10)
+- Expression operators inside comments no longer falsely trigger diagnostics suppression
+- Security: updated dependencies to resolve 7 CVEs (lodash, vite, hono, path-to-regexp, picomatch, brace-expansion)
+
 ## [0.10.0]
 
 ### Added

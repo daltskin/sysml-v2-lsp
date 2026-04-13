@@ -1,7 +1,7 @@
 import { BailErrorStrategy, CharStream, CommonTokenStream, DefaultErrorStrategy, ParserRuleContext, PredictionMode } from 'antlr4ng';
 import { SysMLv2Lexer } from '../generated/SysMLv2Lexer.js';
 import { SysMLv2Parser } from '../generated/SysMLv2Parser.js';
-import { clearPreSeededDFAStates, isDfaPreSeeded, markDfaNotPreSeeded } from './dfaLoader.js';
+import { clearAllDFAStates, isDfaPreSeeded, markDfaNotPreSeeded } from './dfaLoader.js';
 import { SyntaxError, SysMLErrorListener } from './errorListener.js';
 
 /**
@@ -44,18 +44,23 @@ export interface ParseResult {
 export function parseDocument(text: string): ParseResult {
     const result = parseDocumentCore(text);
 
-    // If errors occurred with a pre-seeded DFA, clear pre-seeded
-    // states and retry with LL-only mode.
+    // If errors occurred with a pre-seeded DFA, clear ALL DFA states
+    // (not just s0) and retry with LL-only mode.  Pre-seeded child
+    // states deep in the DFA graph may have bogus ERROR edges.
     if (result.errors.length > 0 && isDfaPreSeeded()) {
         markDfaNotPreSeeded();
-        clearPreSeededDFAStates();
+        clearAllDFAStates();
         return parseDocumentLL(text);
     }
 
-    // Clear the flag after first successful parse so the check
-    // doesn't run on every subsequent parse.
+    // First successful parse with pre-seeded DFA: clear ALL states
+    // so that subsequent parses don't encounter stale pre-seeded
+    // states for grammar paths not exercised by this file.  This is
+    // a one-time cost — the next parse rebuilds the DFA correctly
+    // from the ATN.
     if (isDfaPreSeeded()) {
         markDfaNotPreSeeded();
+        clearAllDFAStates();
     }
 
     return result;

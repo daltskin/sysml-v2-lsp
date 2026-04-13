@@ -2,7 +2,7 @@
   "name": "sysml-v2-lsp",
   "displayName": "SysML v2 Language Server",
   "description": "Language Server Protocol implementation for SysML v2, powered by ANTLR4",
-  "version": "0.8.0",
+  "version": "0.11.0",
   "publisher": "JamieD",
   "license": "MIT",
   "repository": {

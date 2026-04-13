@@ -1,6 +1,7 @@
 import { Diagnostic, DiagnosticSeverity } from 'vscode-languageserver/node.js';
 import { DocumentManager } from '../documentManager.js';
 import { SyntaxError } from '../parser/errorListener.js';
+import { stripComments } from '../utils/identUtils.js';
 
 /**
  * Patterns that indicate expression-level constructs the ANTLR grammar
@@ -103,8 +104,10 @@ export class DiagnosticsProvider {
             }
             if (depth !== 0) continue;
 
-            // Extract the body text (between the braces, exclusive).
-            const bodyText = text.slice(open + 1, i - 1);
+            // Extract the body text (between the braces, exclusive)
+            // and strip comments so that operators inside comments don't
+            // trigger false suppression.
+            const bodyText = stripComments(text.slice(open + 1, i - 1));
 
             // Only suppress when the body actually contains expression
             // operators the grammar cannot handle.
