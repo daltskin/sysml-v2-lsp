@@ -8,8 +8,6 @@ import { SequenceExpressionListContext } from "./SysMLv2Parser.js";
 import { BaseExpressionContext } from "./SysMLv2Parser.js";
 import { NullExpressionContext } from "./SysMLv2Parser.js";
 import { FeatureReferenceExpressionContext } from "./SysMLv2Parser.js";
-import { MetadataAccessExpressionContext } from "./SysMLv2Parser.js";
-import { InvocationExpressionContext } from "./SysMLv2Parser.js";
 import { ConstructorExpressionContext } from "./SysMLv2Parser.js";
 import { BodyExpressionContext } from "./SysMLv2Parser.js";
 import { ArgumentListContext } from "./SysMLv2Parser.js";
@@ -121,9 +119,6 @@ import { OwnedReferenceSubsettingContext } from "./SysMLv2Parser.js";
 import { OwnedCrossSubsettingContext } from "./SysMLv2Parser.js";
 import { RedefinitionContext } from "./SysMLv2Parser.js";
 import { OwnedRedefinitionContext } from "./SysMLv2Parser.js";
-import { OwnedFeatureChainContext } from "./SysMLv2Parser.js";
-import { FeatureChainContext } from "./SysMLv2Parser.js";
-import { OwnedFeatureChainingContext } from "./SysMLv2Parser.js";
 import { FeatureInvertingContext } from "./SysMLv2Parser.js";
 import { OwnedFeatureInvertingContext } from "./SysMLv2Parser.js";
 import { TypeFeaturingContext } from "./SysMLv2Parser.js";
@@ -156,38 +151,7 @@ import { ExpressionContext } from "./SysMLv2Parser.js";
 import { PredicateContext } from "./SysMLv2Parser.js";
 import { BooleanExpressionContext } from "./SysMLv2Parser.js";
 import { InvariantContext } from "./SysMLv2Parser.js";
-import { OwnedExpressionMemberContext } from "./SysMLv2Parser.js";
-import { MetadataReferenceContext } from "./SysMLv2Parser.js";
-import { TypeReferenceMemberContext } from "./SysMLv2Parser.js";
-import { TypeResultMemberContext } from "./SysMLv2Parser.js";
-import { ReferenceTypingContext } from "./SysMLv2Parser.js";
-import { EmptyResultMemberContext } from "./SysMLv2Parser.js";
-import { SequenceOperatorExpressionContext } from "./SysMLv2Parser.js";
-import { SequenceExpressionListMemberContext } from "./SysMLv2Parser.js";
-import { BodyArgumentMemberContext } from "./SysMLv2Parser.js";
-import { BodyArgumentContext } from "./SysMLv2Parser.js";
-import { BodyArgumentValueContext } from "./SysMLv2Parser.js";
-import { FunctionReferenceArgumentMemberContext } from "./SysMLv2Parser.js";
-import { FunctionReferenceArgumentContext } from "./SysMLv2Parser.js";
-import { FunctionReferenceArgumentValueContext } from "./SysMLv2Parser.js";
-import { FunctionReferenceExpressionContext } from "./SysMLv2Parser.js";
-import { FunctionReferenceMemberContext } from "./SysMLv2Parser.js";
-import { FunctionReferenceContext } from "./SysMLv2Parser.js";
 import { FeatureChainMemberContext } from "./SysMLv2Parser.js";
-import { OwnedFeatureChainMemberContext } from "./SysMLv2Parser.js";
-import { FeatureReferenceMemberContext } from "./SysMLv2Parser.js";
-import { FeatureReferenceContext } from "./SysMLv2Parser.js";
-import { ElementReferenceMemberContext } from "./SysMLv2Parser.js";
-import { ConstructorResultMemberContext } from "./SysMLv2Parser.js";
-import { ConstructorResultContext } from "./SysMLv2Parser.js";
-import { InstantiatedTypeMemberContext } from "./SysMLv2Parser.js";
-import { InstantiatedTypeReferenceContext } from "./SysMLv2Parser.js";
-import { NamedArgumentMemberContext } from "./SysMLv2Parser.js";
-import { ParameterRedefinitionContext } from "./SysMLv2Parser.js";
-import { ExpressionBodyMemberContext } from "./SysMLv2Parser.js";
-import { ExpressionBodyContext } from "./SysMLv2Parser.js";
-import { BooleanValueContext } from "./SysMLv2Parser.js";
-import { RealValueContext } from "./SysMLv2Parser.js";
 import { InteractionContext } from "./SysMLv2Parser.js";
 import { FlowContext } from "./SysMLv2Parser.js";
 import { SuccessionFlowContext } from "./SysMLv2Parser.js";
@@ -197,9 +161,6 @@ import { PayloadFeatureContext } from "./SysMLv2Parser.js";
 import { PayloadFeatureSpecializationPartContext } from "./SysMLv2Parser.js";
 import { FlowEndMemberContext } from "./SysMLv2Parser.js";
 import { FlowEndContext } from "./SysMLv2Parser.js";
-import { FlowFeatureMemberContext } from "./SysMLv2Parser.js";
-import { FlowFeatureContext } from "./SysMLv2Parser.js";
-import { FlowFeatureRedefinitionContext } from "./SysMLv2Parser.js";
 import { ValuePartContext } from "./SysMLv2Parser.js";
 import { FeatureValueContext } from "./SysMLv2Parser.js";
 import { MultiplicityContext } from "./SysMLv2Parser.js";
@@ -241,7 +202,6 @@ import { DefinitionBodyItemContentContext } from "./SysMLv2Parser.js";
 import { DefinitionMemberContext } from "./SysMLv2Parser.js";
 import { VariantUsageMemberContext } from "./SysMLv2Parser.js";
 import { NonOccurrenceUsageMemberContext } from "./SysMLv2Parser.js";
-import { OccurrenceUsageMemberContext } from "./SysMLv2Parser.js";
 import { StructureUsageMemberContext } from "./SysMLv2Parser.js";
 import { BehaviorUsageMemberContext } from "./SysMLv2Parser.js";
 import { RefPrefixContext } from "./SysMLv2Parser.js";
@@ -329,8 +289,6 @@ import { FlowUsageContext } from "./SysMLv2Parser.js";
 import { SuccessionFlowUsageContext } from "./SysMLv2Parser.js";
 import { FlowPayloadFeatureMemberContext } from "./SysMLv2Parser.js";
 import { FlowPayloadFeatureContext } from "./SysMLv2Parser.js";
-import { FlowEndSubsettingContext } from "./SysMLv2Parser.js";
-import { FeatureChainPrefixContext } from "./SysMLv2Parser.js";
 import { ActionDefinitionContext } from "./SysMLv2Parser.js";
 import { ActionBodyContext } from "./SysMLv2Parser.js";
 import { ActionBodyItemContext } from "./SysMLv2Parser.js";
@@ -382,7 +340,6 @@ import { IfNodeParameterMemberContext } from "./SysMLv2Parser.js";
 import { WhileLoopNodeContext } from "./SysMLv2Parser.js";
 import { ForLoopNodeContext } from "./SysMLv2Parser.js";
 import { ForVariableDeclarationMemberContext } from "./SysMLv2Parser.js";
-import { ForVariableDeclarationContext } from "./SysMLv2Parser.js";
 import { ActionTargetSuccessionContext } from "./SysMLv2Parser.js";
 import { TargetSuccessionContext } from "./SysMLv2Parser.js";
 import { GuardedTargetSuccessionContext } from "./SysMLv2Parser.js";
@@ -483,8 +440,6 @@ import { RenderingDefinitionContext } from "./SysMLv2Parser.js";
 import { RenderingUsageContext } from "./SysMLv2Parser.js";
 import { MetadataDefinitionContext } from "./SysMLv2Parser.js";
 import { PrefixMetadataUsageContext } from "./SysMLv2Parser.js";
-import { MetadataUsageContext } from "./SysMLv2Parser.js";
-import { MetadataUsageDeclarationContext } from "./SysMLv2Parser.js";
 import { MetadataBodyUsageMemberContext } from "./SysMLv2Parser.js";
 import { MetadataBodyUsageContext } from "./SysMLv2Parser.js";
 import { ExtendedDefinitionContext } from "./SysMLv2Parser.js";
@@ -566,26 +521,6 @@ export class SysMLv2ParserListener implements ParseTreeListener {
      * @param ctx the parse tree
      */
     exitFeatureReferenceExpression?: (ctx: FeatureReferenceExpressionContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.metadataAccessExpression`.
-     * @param ctx the parse tree
-     */
-    enterMetadataAccessExpression?: (ctx: MetadataAccessExpressionContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.metadataAccessExpression`.
-     * @param ctx the parse tree
-     */
-    exitMetadataAccessExpression?: (ctx: MetadataAccessExpressionContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.invocationExpression`.
-     * @param ctx the parse tree
-     */
-    enterInvocationExpression?: (ctx: InvocationExpressionContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.invocationExpression`.
-     * @param ctx the parse tree
-     */
-    exitInvocationExpression?: (ctx: InvocationExpressionContext) => void;
     /**
      * Enter a parse tree produced by `SysMLv2Parser.constructorExpression`.
      * @param ctx the parse tree
@@ -1697,36 +1632,6 @@ export class SysMLv2ParserListener implements ParseTreeListener {
      */
     exitOwnedRedefinition?: (ctx: OwnedRedefinitionContext) => void;
     /**
-     * Enter a parse tree produced by `SysMLv2Parser.ownedFeatureChain`.
-     * @param ctx the parse tree
-     */
-    enterOwnedFeatureChain?: (ctx: OwnedFeatureChainContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.ownedFeatureChain`.
-     * @param ctx the parse tree
-     */
-    exitOwnedFeatureChain?: (ctx: OwnedFeatureChainContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.featureChain`.
-     * @param ctx the parse tree
-     */
-    enterFeatureChain?: (ctx: FeatureChainContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.featureChain`.
-     * @param ctx the parse tree
-     */
-    exitFeatureChain?: (ctx: FeatureChainContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.ownedFeatureChaining`.
-     * @param ctx the parse tree
-     */
-    enterOwnedFeatureChaining?: (ctx: OwnedFeatureChainingContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.ownedFeatureChaining`.
-     * @param ctx the parse tree
-     */
-    exitOwnedFeatureChaining?: (ctx: OwnedFeatureChainingContext) => void;
-    /**
      * Enter a parse tree produced by `SysMLv2Parser.featureInverting`.
      * @param ctx the parse tree
      */
@@ -2047,176 +1952,6 @@ export class SysMLv2ParserListener implements ParseTreeListener {
      */
     exitInvariant?: (ctx: InvariantContext) => void;
     /**
-     * Enter a parse tree produced by `SysMLv2Parser.ownedExpressionMember`.
-     * @param ctx the parse tree
-     */
-    enterOwnedExpressionMember?: (ctx: OwnedExpressionMemberContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.ownedExpressionMember`.
-     * @param ctx the parse tree
-     */
-    exitOwnedExpressionMember?: (ctx: OwnedExpressionMemberContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.metadataReference`.
-     * @param ctx the parse tree
-     */
-    enterMetadataReference?: (ctx: MetadataReferenceContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.metadataReference`.
-     * @param ctx the parse tree
-     */
-    exitMetadataReference?: (ctx: MetadataReferenceContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.typeReferenceMember`.
-     * @param ctx the parse tree
-     */
-    enterTypeReferenceMember?: (ctx: TypeReferenceMemberContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.typeReferenceMember`.
-     * @param ctx the parse tree
-     */
-    exitTypeReferenceMember?: (ctx: TypeReferenceMemberContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.typeResultMember`.
-     * @param ctx the parse tree
-     */
-    enterTypeResultMember?: (ctx: TypeResultMemberContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.typeResultMember`.
-     * @param ctx the parse tree
-     */
-    exitTypeResultMember?: (ctx: TypeResultMemberContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.referenceTyping`.
-     * @param ctx the parse tree
-     */
-    enterReferenceTyping?: (ctx: ReferenceTypingContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.referenceTyping`.
-     * @param ctx the parse tree
-     */
-    exitReferenceTyping?: (ctx: ReferenceTypingContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.emptyResultMember`.
-     * @param ctx the parse tree
-     */
-    enterEmptyResultMember?: (ctx: EmptyResultMemberContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.emptyResultMember`.
-     * @param ctx the parse tree
-     */
-    exitEmptyResultMember?: (ctx: EmptyResultMemberContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.sequenceOperatorExpression`.
-     * @param ctx the parse tree
-     */
-    enterSequenceOperatorExpression?: (ctx: SequenceOperatorExpressionContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.sequenceOperatorExpression`.
-     * @param ctx the parse tree
-     */
-    exitSequenceOperatorExpression?: (ctx: SequenceOperatorExpressionContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.sequenceExpressionListMember`.
-     * @param ctx the parse tree
-     */
-    enterSequenceExpressionListMember?: (ctx: SequenceExpressionListMemberContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.sequenceExpressionListMember`.
-     * @param ctx the parse tree
-     */
-    exitSequenceExpressionListMember?: (ctx: SequenceExpressionListMemberContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.bodyArgumentMember`.
-     * @param ctx the parse tree
-     */
-    enterBodyArgumentMember?: (ctx: BodyArgumentMemberContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.bodyArgumentMember`.
-     * @param ctx the parse tree
-     */
-    exitBodyArgumentMember?: (ctx: BodyArgumentMemberContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.bodyArgument`.
-     * @param ctx the parse tree
-     */
-    enterBodyArgument?: (ctx: BodyArgumentContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.bodyArgument`.
-     * @param ctx the parse tree
-     */
-    exitBodyArgument?: (ctx: BodyArgumentContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.bodyArgumentValue`.
-     * @param ctx the parse tree
-     */
-    enterBodyArgumentValue?: (ctx: BodyArgumentValueContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.bodyArgumentValue`.
-     * @param ctx the parse tree
-     */
-    exitBodyArgumentValue?: (ctx: BodyArgumentValueContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.functionReferenceArgumentMember`.
-     * @param ctx the parse tree
-     */
-    enterFunctionReferenceArgumentMember?: (ctx: FunctionReferenceArgumentMemberContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.functionReferenceArgumentMember`.
-     * @param ctx the parse tree
-     */
-    exitFunctionReferenceArgumentMember?: (ctx: FunctionReferenceArgumentMemberContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.functionReferenceArgument`.
-     * @param ctx the parse tree
-     */
-    enterFunctionReferenceArgument?: (ctx: FunctionReferenceArgumentContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.functionReferenceArgument`.
-     * @param ctx the parse tree
-     */
-    exitFunctionReferenceArgument?: (ctx: FunctionReferenceArgumentContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.functionReferenceArgumentValue`.
-     * @param ctx the parse tree
-     */
-    enterFunctionReferenceArgumentValue?: (ctx: FunctionReferenceArgumentValueContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.functionReferenceArgumentValue`.
-     * @param ctx the parse tree
-     */
-    exitFunctionReferenceArgumentValue?: (ctx: FunctionReferenceArgumentValueContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.functionReferenceExpression`.
-     * @param ctx the parse tree
-     */
-    enterFunctionReferenceExpression?: (ctx: FunctionReferenceExpressionContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.functionReferenceExpression`.
-     * @param ctx the parse tree
-     */
-    exitFunctionReferenceExpression?: (ctx: FunctionReferenceExpressionContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.functionReferenceMember`.
-     * @param ctx the parse tree
-     */
-    enterFunctionReferenceMember?: (ctx: FunctionReferenceMemberContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.functionReferenceMember`.
-     * @param ctx the parse tree
-     */
-    exitFunctionReferenceMember?: (ctx: FunctionReferenceMemberContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.functionReference`.
-     * @param ctx the parse tree
-     */
-    enterFunctionReference?: (ctx: FunctionReferenceContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.functionReference`.
-     * @param ctx the parse tree
-     */
-    exitFunctionReference?: (ctx: FunctionReferenceContext) => void;
-    /**
      * Enter a parse tree produced by `SysMLv2Parser.featureChainMember`.
      * @param ctx the parse tree
      */
@@ -2226,146 +1961,6 @@ export class SysMLv2ParserListener implements ParseTreeListener {
      * @param ctx the parse tree
      */
     exitFeatureChainMember?: (ctx: FeatureChainMemberContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.ownedFeatureChainMember`.
-     * @param ctx the parse tree
-     */
-    enterOwnedFeatureChainMember?: (ctx: OwnedFeatureChainMemberContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.ownedFeatureChainMember`.
-     * @param ctx the parse tree
-     */
-    exitOwnedFeatureChainMember?: (ctx: OwnedFeatureChainMemberContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.featureReferenceMember`.
-     * @param ctx the parse tree
-     */
-    enterFeatureReferenceMember?: (ctx: FeatureReferenceMemberContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.featureReferenceMember`.
-     * @param ctx the parse tree
-     */
-    exitFeatureReferenceMember?: (ctx: FeatureReferenceMemberContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.featureReference`.
-     * @param ctx the parse tree
-     */
-    enterFeatureReference?: (ctx: FeatureReferenceContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.featureReference`.
-     * @param ctx the parse tree
-     */
-    exitFeatureReference?: (ctx: FeatureReferenceContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.elementReferenceMember`.
-     * @param ctx the parse tree
-     */
-    enterElementReferenceMember?: (ctx: ElementReferenceMemberContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.elementReferenceMember`.
-     * @param ctx the parse tree
-     */
-    exitElementReferenceMember?: (ctx: ElementReferenceMemberContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.constructorResultMember`.
-     * @param ctx the parse tree
-     */
-    enterConstructorResultMember?: (ctx: ConstructorResultMemberContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.constructorResultMember`.
-     * @param ctx the parse tree
-     */
-    exitConstructorResultMember?: (ctx: ConstructorResultMemberContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.constructorResult`.
-     * @param ctx the parse tree
-     */
-    enterConstructorResult?: (ctx: ConstructorResultContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.constructorResult`.
-     * @param ctx the parse tree
-     */
-    exitConstructorResult?: (ctx: ConstructorResultContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.instantiatedTypeMember`.
-     * @param ctx the parse tree
-     */
-    enterInstantiatedTypeMember?: (ctx: InstantiatedTypeMemberContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.instantiatedTypeMember`.
-     * @param ctx the parse tree
-     */
-    exitInstantiatedTypeMember?: (ctx: InstantiatedTypeMemberContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.instantiatedTypeReference`.
-     * @param ctx the parse tree
-     */
-    enterInstantiatedTypeReference?: (ctx: InstantiatedTypeReferenceContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.instantiatedTypeReference`.
-     * @param ctx the parse tree
-     */
-    exitInstantiatedTypeReference?: (ctx: InstantiatedTypeReferenceContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.namedArgumentMember`.
-     * @param ctx the parse tree
-     */
-    enterNamedArgumentMember?: (ctx: NamedArgumentMemberContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.namedArgumentMember`.
-     * @param ctx the parse tree
-     */
-    exitNamedArgumentMember?: (ctx: NamedArgumentMemberContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.parameterRedefinition`.
-     * @param ctx the parse tree
-     */
-    enterParameterRedefinition?: (ctx: ParameterRedefinitionContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.parameterRedefinition`.
-     * @param ctx the parse tree
-     */
-    exitParameterRedefinition?: (ctx: ParameterRedefinitionContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.expressionBodyMember`.
-     * @param ctx the parse tree
-     */
-    enterExpressionBodyMember?: (ctx: ExpressionBodyMemberContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.expressionBodyMember`.
-     * @param ctx the parse tree
-     */
-    exitExpressionBodyMember?: (ctx: ExpressionBodyMemberContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.expressionBody`.
-     * @param ctx the parse tree
-     */
-    enterExpressionBody?: (ctx: ExpressionBodyContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.expressionBody`.
-     * @param ctx the parse tree
-     */
-    exitExpressionBody?: (ctx: ExpressionBodyContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.booleanValue`.
-     * @param ctx the parse tree
-     */
-    enterBooleanValue?: (ctx: BooleanValueContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.booleanValue`.
-     * @param ctx the parse tree
-     */
-    exitBooleanValue?: (ctx: BooleanValueContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.realValue`.
-     * @param ctx the parse tree
-     */
-    enterRealValue?: (ctx: RealValueContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.realValue`.
-     * @param ctx the parse tree
-     */
-    exitRealValue?: (ctx: RealValueContext) => void;
     /**
      * Enter a parse tree produced by `SysMLv2Parser.interaction`.
      * @param ctx the parse tree
@@ -2456,36 +2051,6 @@ export class SysMLv2ParserListener implements ParseTreeListener {
      * @param ctx the parse tree
      */
     exitFlowEnd?: (ctx: FlowEndContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.flowFeatureMember`.
-     * @param ctx the parse tree
-     */
-    enterFlowFeatureMember?: (ctx: FlowFeatureMemberContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.flowFeatureMember`.
-     * @param ctx the parse tree
-     */
-    exitFlowFeatureMember?: (ctx: FlowFeatureMemberContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.flowFeature`.
-     * @param ctx the parse tree
-     */
-    enterFlowFeature?: (ctx: FlowFeatureContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.flowFeature`.
-     * @param ctx the parse tree
-     */
-    exitFlowFeature?: (ctx: FlowFeatureContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.flowFeatureRedefinition`.
-     * @param ctx the parse tree
-     */
-    enterFlowFeatureRedefinition?: (ctx: FlowFeatureRedefinitionContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.flowFeatureRedefinition`.
-     * @param ctx the parse tree
-     */
-    exitFlowFeatureRedefinition?: (ctx: FlowFeatureRedefinitionContext) => void;
     /**
      * Enter a parse tree produced by `SysMLv2Parser.valuePart`.
      * @param ctx the parse tree
@@ -2896,16 +2461,6 @@ export class SysMLv2ParserListener implements ParseTreeListener {
      * @param ctx the parse tree
      */
     exitNonOccurrenceUsageMember?: (ctx: NonOccurrenceUsageMemberContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.occurrenceUsageMember`.
-     * @param ctx the parse tree
-     */
-    enterOccurrenceUsageMember?: (ctx: OccurrenceUsageMemberContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.occurrenceUsageMember`.
-     * @param ctx the parse tree
-     */
-    exitOccurrenceUsageMember?: (ctx: OccurrenceUsageMemberContext) => void;
     /**
      * Enter a parse tree produced by `SysMLv2Parser.structureUsageMember`.
      * @param ctx the parse tree
@@ -3777,26 +3332,6 @@ export class SysMLv2ParserListener implements ParseTreeListener {
      */
     exitFlowPayloadFeature?: (ctx: FlowPayloadFeatureContext) => void;
     /**
-     * Enter a parse tree produced by `SysMLv2Parser.flowEndSubsetting`.
-     * @param ctx the parse tree
-     */
-    enterFlowEndSubsetting?: (ctx: FlowEndSubsettingContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.flowEndSubsetting`.
-     * @param ctx the parse tree
-     */
-    exitFlowEndSubsetting?: (ctx: FlowEndSubsettingContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.featureChainPrefix`.
-     * @param ctx the parse tree
-     */
-    enterFeatureChainPrefix?: (ctx: FeatureChainPrefixContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.featureChainPrefix`.
-     * @param ctx the parse tree
-     */
-    exitFeatureChainPrefix?: (ctx: FeatureChainPrefixContext) => void;
-    /**
      * Enter a parse tree produced by `SysMLv2Parser.actionDefinition`.
      * @param ctx the parse tree
      */
@@ -4306,16 +3841,6 @@ export class SysMLv2ParserListener implements ParseTreeListener {
      * @param ctx the parse tree
      */
     exitForVariableDeclarationMember?: (ctx: ForVariableDeclarationMemberContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.forVariableDeclaration`.
-     * @param ctx the parse tree
-     */
-    enterForVariableDeclaration?: (ctx: ForVariableDeclarationContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.forVariableDeclaration`.
-     * @param ctx the parse tree
-     */
-    exitForVariableDeclaration?: (ctx: ForVariableDeclarationContext) => void;
     /**
      * Enter a parse tree produced by `SysMLv2Parser.actionTargetSuccession`.
      * @param ctx the parse tree
@@ -5316,26 +4841,6 @@ export class SysMLv2ParserListener implements ParseTreeListener {
      * @param ctx the parse tree
      */
     exitPrefixMetadataUsage?: (ctx: PrefixMetadataUsageContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.metadataUsage`.
-     * @param ctx the parse tree
-     */
-    enterMetadataUsage?: (ctx: MetadataUsageContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.metadataUsage`.
-     * @param ctx the parse tree
-     */
-    exitMetadataUsage?: (ctx: MetadataUsageContext) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.metadataUsageDeclaration`.
-     * @param ctx the parse tree
-     */
-    enterMetadataUsageDeclaration?: (ctx: MetadataUsageDeclarationContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.metadataUsageDeclaration`.
-     * @param ctx the parse tree
-     */
-    exitMetadataUsageDeclaration?: (ctx: MetadataUsageDeclarationContext) => void;
     /**
      * Enter a parse tree produced by `SysMLv2Parser.metadataBodyUsageMember`.
      * @param ctx the parse tree

@@ -77,14 +77,6 @@ featureReferenceExpression
     : qualifiedName
     ;
 
-metadataAccessExpression
-    : qualifiedName DOT METADATA
-    ;
-
-invocationExpression
-    : qualifiedName argumentList
-    ;
-
 constructorExpression
     : NEW qualifiedName argumentList
     ;
@@ -130,7 +122,6 @@ argumentMember
 argumentExpressionMember
     : ownedExpression
     ;
-
 
 // ===== Name rule (Identifier or UnrestrictedName) =====
 
@@ -618,19 +609,6 @@ ownedRedefinition
     : qualifiedName ( DOT qualifiedName )*
     ;
 
-ownedFeatureChain
-    : featureChain
-    | ownedFeatureChaining ( DOT ownedFeatureChaining )+
-    ;
-
-featureChain
-    : ownedFeatureChaining ( DOT ownedFeatureChaining )+
-    ;
-
-ownedFeatureChaining
-    : qualifiedName
-    ;
-
 featureInverting
     : ( INVERTING identification? )? INVERSE qualifiedName ( DOT qualifiedName )* OF qualifiedName ( DOT qualifiedName )* relationshipBody
     ;
@@ -763,135 +741,8 @@ invariant
     : featurePrefix INV ( TRUE | FALSE )? featureDeclaration valuePart? functionBody
     ;
 
-ownedExpressionMember
-    : ownedExpression
-    ;
-
-metadataReference
-    : elementReferenceMember
-    ;
-
-typeReferenceMember
-    : typeReference
-    ;
-
-typeResultMember
-    : typeReference
-    ;
-
-referenceTyping
-    : qualifiedName
-    ;
-
-emptyResultMember
-    : emptyFeature_
-    ;
-
-sequenceOperatorExpression
-    : ownedExpressionMember COMMA sequenceExpressionListMember
-    ;
-
-sequenceExpressionListMember
-    : sequenceExpressionList
-    ;
-
-bodyArgumentMember
-    : bodyArgument
-    ;
-
-bodyArgument
-    : bodyArgumentValue
-    ;
-
-bodyArgumentValue
-    : bodyExpression
-    ;
-
-functionReferenceArgumentMember
-    : functionReferenceArgument
-    ;
-
-functionReferenceArgument
-    : functionReferenceArgumentValue
-    ;
-
-functionReferenceArgumentValue
-    : functionReferenceExpression
-    ;
-
-functionReferenceExpression
-    : functionReferenceMember
-    ;
-
-functionReferenceMember
-    : functionReference
-    ;
-
-functionReference
-    : referenceTyping
-    ;
-
 featureChainMember
     : qualifiedName ( DOT qualifiedName )*
-    ;
-
-ownedFeatureChainMember
-    : featureChain
-    | ownedFeatureChain
-    ;
-
-featureReferenceMember
-    : featureReference
-    ;
-
-featureReference
-    : qualifiedName
-    ;
-
-elementReferenceMember
-    : qualifiedName
-    ;
-
-constructorResultMember
-    : constructorResult
-    ;
-
-constructorResult
-    : argumentList
-    ;
-
-instantiatedTypeMember
-    : qualifiedName ( DOT qualifiedName )*
-    ;
-
-instantiatedTypeReference
-    : qualifiedName
-    ;
-
-namedArgumentMember
-    : namedArgument
-    ;
-
-parameterRedefinition
-    : qualifiedName
-    ;
-
-expressionBodyMember
-    : expressionBody
-    ;
-
-expressionBody
-    : LBRACE functionBodyPart RBRACE
-    ;
-
-booleanValue
-    : TRUE
-    | FALSE
-    ;
-
-realValue
-    : INTEGER? DOT ( INTEGER | REAL )
-    | REAL
     ;
 
 interaction
@@ -934,18 +785,6 @@ flowEndMember
 
 flowEnd
     : qualifiedName ( DOT qualifiedName )*
-    ;
-
-flowFeatureMember
-    : flowFeature
-    ;
-
-flowFeature
-    : flowFeatureRedefinition
-    ;
-
-flowFeatureRedefinition
-    : qualifiedName
     ;
 
 valuePart
@@ -1163,10 +1002,6 @@ variantUsageMember
 
 nonOccurrenceUsageMember
     : memberPrefix nonOccurrenceUsageElement
-    ;
-
-occurrenceUsageMember
-    : memberPrefix occurrenceUsageElement
     ;
 
 structureUsageMember
@@ -1602,15 +1437,6 @@ flowPayloadFeature
     : payloadFeature
     ;
 
-flowEndSubsetting
-    : qualifiedName
-    | featureChainPrefix
-    ;
-
-featureChainPrefix
-    : ( ownedFeatureChaining DOT )+ ownedFeatureChaining DOT
-    ;
-
 actionDefinition
     : occurrenceDefinitionPrefix ACTION DEF definitionDeclaration actionBody
     ;
@@ -1835,10 +1661,6 @@ forLoopNode
     ;
 
 forVariableDeclarationMember
-    : usageDeclaration?
-    ;
-
-forVariableDeclaration
     : usageDeclaration?
     ;
 
@@ -2283,14 +2105,6 @@ prefixMetadataUsage
     : ownedFeatureTyping
     ;
 
-metadataUsage
-    : usageExtensionKeyword* ( AT_SIGN | METADATA ) metadataUsageDeclaration ( ABOUT annotation ( COMMA annotation )* )? metadataBody
-    ;
-
-metadataUsageDeclaration
-    : ( identification? ( COLON | TYPED BY ) )? ownedFeatureTyping
-    ;
-
 metadataBodyUsageMember
     : metadataBodyUsage
     ;
@@ -2315,7 +2129,6 @@ filterPackageImportDeclaration
 namespaceImportDirect
     : qualifiedName COLON_COLON STAR ( COLON_COLON STAR_STAR )?
     ;
-
 
 // ===== Stub rules for undefined references =====
 // These rules are referenced in the spec but not fully defined.

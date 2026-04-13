@@ -8,8 +8,6 @@ import { SequenceExpressionListContext } from "./SysMLv2Parser.js";
 import { BaseExpressionContext } from "./SysMLv2Parser.js";
 import { NullExpressionContext } from "./SysMLv2Parser.js";
 import { FeatureReferenceExpressionContext } from "./SysMLv2Parser.js";
-import { MetadataAccessExpressionContext } from "./SysMLv2Parser.js";
-import { InvocationExpressionContext } from "./SysMLv2Parser.js";
 import { ConstructorExpressionContext } from "./SysMLv2Parser.js";
 import { BodyExpressionContext } from "./SysMLv2Parser.js";
 import { ArgumentListContext } from "./SysMLv2Parser.js";
@@ -121,9 +119,6 @@ import { OwnedReferenceSubsettingContext } from "./SysMLv2Parser.js";
 import { OwnedCrossSubsettingContext } from "./SysMLv2Parser.js";
 import { RedefinitionContext } from "./SysMLv2Parser.js";
 import { OwnedRedefinitionContext } from "./SysMLv2Parser.js";
-import { OwnedFeatureChainContext } from "./SysMLv2Parser.js";
-import { FeatureChainContext } from "./SysMLv2Parser.js";
-import { OwnedFeatureChainingContext } from "./SysMLv2Parser.js";
 import { FeatureInvertingContext } from "./SysMLv2Parser.js";
 import { OwnedFeatureInvertingContext } from "./SysMLv2Parser.js";
 import { TypeFeaturingContext } from "./SysMLv2Parser.js";
@@ -156,38 +151,7 @@ import { ExpressionContext } from "./SysMLv2Parser.js";
 import { PredicateContext } from "./SysMLv2Parser.js";
 import { BooleanExpressionContext } from "./SysMLv2Parser.js";
 import { InvariantContext } from "./SysMLv2Parser.js";
-import { OwnedExpressionMemberContext } from "./SysMLv2Parser.js";
-import { MetadataReferenceContext } from "./SysMLv2Parser.js";
-import { TypeReferenceMemberContext } from "./SysMLv2Parser.js";
-import { TypeResultMemberContext } from "./SysMLv2Parser.js";
-import { ReferenceTypingContext } from "./SysMLv2Parser.js";
-import { EmptyResultMemberContext } from "./SysMLv2Parser.js";
-import { SequenceOperatorExpressionContext } from "./SysMLv2Parser.js";
-import { SequenceExpressionListMemberContext } from "./SysMLv2Parser.js";
-import { BodyArgumentMemberContext } from "./SysMLv2Parser.js";
-import { BodyArgumentContext } from "./SysMLv2Parser.js";
-import { BodyArgumentValueContext } from "./SysMLv2Parser.js";
-import { FunctionReferenceArgumentMemberContext } from "./SysMLv2Parser.js";
-import { FunctionReferenceArgumentContext } from "./SysMLv2Parser.js";
-import { FunctionReferenceArgumentValueContext } from "./SysMLv2Parser.js";
-import { FunctionReferenceExpressionContext } from "./SysMLv2Parser.js";
-import { FunctionReferenceMemberContext } from "./SysMLv2Parser.js";
-import { FunctionReferenceContext } from "./SysMLv2Parser.js";
 import { FeatureChainMemberContext } from "./SysMLv2Parser.js";
-import { OwnedFeatureChainMemberContext } from "./SysMLv2Parser.js";
-import { FeatureReferenceMemberContext } from "./SysMLv2Parser.js";
-import { FeatureReferenceContext } from "./SysMLv2Parser.js";
-import { ElementReferenceMemberContext } from "./SysMLv2Parser.js";
-import { ConstructorResultMemberContext } from "./SysMLv2Parser.js";
-import { ConstructorResultContext } from "./SysMLv2Parser.js";
-import { InstantiatedTypeMemberContext } from "./SysMLv2Parser.js";
-import { InstantiatedTypeReferenceContext } from "./SysMLv2Parser.js";
-import { NamedArgumentMemberContext } from "./SysMLv2Parser.js";
-import { ParameterRedefinitionContext } from "./SysMLv2Parser.js";
-import { ExpressionBodyMemberContext } from "./SysMLv2Parser.js";
-import { ExpressionBodyContext } from "./SysMLv2Parser.js";
-import { BooleanValueContext } from "./SysMLv2Parser.js";
-import { RealValueContext } from "./SysMLv2Parser.js";
 import { InteractionContext } from "./SysMLv2Parser.js";
 import { FlowContext } from "./SysMLv2Parser.js";
 import { SuccessionFlowContext } from "./SysMLv2Parser.js";
@@ -197,9 +161,6 @@ import { PayloadFeatureContext } from "./SysMLv2Parser.js";
 import { PayloadFeatureSpecializationPartContext } from "./SysMLv2Parser.js";
 import { FlowEndMemberContext } from "./SysMLv2Parser.js";
 import { FlowEndContext } from "./SysMLv2Parser.js";
-import { FlowFeatureMemberContext } from "./SysMLv2Parser.js";
-import { FlowFeatureContext } from "./SysMLv2Parser.js";
-import { FlowFeatureRedefinitionContext } from "./SysMLv2Parser.js";
 import { ValuePartContext } from "./SysMLv2Parser.js";
 import { FeatureValueContext } from "./SysMLv2Parser.js";
 import { MultiplicityContext } from "./SysMLv2Parser.js";
@@ -241,7 +202,6 @@ import { DefinitionBodyItemContentContext } from "./SysMLv2Parser.js";
 import { DefinitionMemberContext } from "./SysMLv2Parser.js";
 import { VariantUsageMemberContext } from "./SysMLv2Parser.js";
 import { NonOccurrenceUsageMemberContext } from "./SysMLv2Parser.js";
-import { OccurrenceUsageMemberContext } from "./SysMLv2Parser.js";
 import { StructureUsageMemberContext } from "./SysMLv2Parser.js";
 import { BehaviorUsageMemberContext } from "./SysMLv2Parser.js";
 import { RefPrefixContext } from "./SysMLv2Parser.js";
@@ -329,8 +289,6 @@ import { FlowUsageContext } from "./SysMLv2Parser.js";
 import { SuccessionFlowUsageContext } from "./SysMLv2Parser.js";
 import { FlowPayloadFeatureMemberContext } from "./SysMLv2Parser.js";
 import { FlowPayloadFeatureContext } from "./SysMLv2Parser.js";
-import { FlowEndSubsettingContext } from "./SysMLv2Parser.js";
-import { FeatureChainPrefixContext } from "./SysMLv2Parser.js";
 import { ActionDefinitionContext } from "./SysMLv2Parser.js";
 import { ActionBodyContext } from "./SysMLv2Parser.js";
 import { ActionBodyItemContext } from "./SysMLv2Parser.js";
@@ -382,7 +340,6 @@ import { IfNodeParameterMemberContext } from "./SysMLv2Parser.js";
 import { WhileLoopNodeContext } from "./SysMLv2Parser.js";
 import { ForLoopNodeContext } from "./SysMLv2Parser.js";
 import { ForVariableDeclarationMemberContext } from "./SysMLv2Parser.js";
-import { ForVariableDeclarationContext } from "./SysMLv2Parser.js";
 import { ActionTargetSuccessionContext } from "./SysMLv2Parser.js";
 import { TargetSuccessionContext } from "./SysMLv2Parser.js";
 import { GuardedTargetSuccessionContext } from "./SysMLv2Parser.js";
@@ -483,8 +440,6 @@ import { RenderingDefinitionContext } from "./SysMLv2Parser.js";
 import { RenderingUsageContext } from "./SysMLv2Parser.js";
 import { MetadataDefinitionContext } from "./SysMLv2Parser.js";
 import { PrefixMetadataUsageContext } from "./SysMLv2Parser.js";
-import { MetadataUsageContext } from "./SysMLv2Parser.js";
-import { MetadataUsageDeclarationContext } from "./SysMLv2Parser.js";
 import { MetadataBodyUsageMemberContext } from "./SysMLv2Parser.js";
 import { MetadataBodyUsageContext } from "./SysMLv2Parser.js";
 import { ExtendedDefinitionContext } from "./SysMLv2Parser.js";
@@ -545,18 +500,6 @@ export class SysMLv2ParserVisitor<Result> extends AbstractParseTreeVisitor<Resul
      * @return the visitor result
      */
     visitFeatureReferenceExpression?: (ctx: FeatureReferenceExpressionContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.metadataAccessExpression`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitMetadataAccessExpression?: (ctx: MetadataAccessExpressionContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.invocationExpression`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitInvocationExpression?: (ctx: InvocationExpressionContext) => Result;
     /**
      * Visit a parse tree produced by `SysMLv2Parser.constructorExpression`.
      * @param ctx the parse tree
@@ -1224,24 +1167,6 @@ export class SysMLv2ParserVisitor<Result> extends AbstractParseTreeVisitor<Resul
      */
     visitOwnedRedefinition?: (ctx: OwnedRedefinitionContext) => Result;
     /**
-     * Visit a parse tree produced by `SysMLv2Parser.ownedFeatureChain`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitOwnedFeatureChain?: (ctx: OwnedFeatureChainContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.featureChain`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitFeatureChain?: (ctx: FeatureChainContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.ownedFeatureChaining`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitOwnedFeatureChaining?: (ctx: OwnedFeatureChainingContext) => Result;
-    /**
      * Visit a parse tree produced by `SysMLv2Parser.featureInverting`.
      * @param ctx the parse tree
      * @return the visitor result
@@ -1434,197 +1359,11 @@ export class SysMLv2ParserVisitor<Result> extends AbstractParseTreeVisitor<Resul
      */
     visitInvariant?: (ctx: InvariantContext) => Result;
     /**
-     * Visit a parse tree produced by `SysMLv2Parser.ownedExpressionMember`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitOwnedExpressionMember?: (ctx: OwnedExpressionMemberContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.metadataReference`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitMetadataReference?: (ctx: MetadataReferenceContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.typeReferenceMember`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitTypeReferenceMember?: (ctx: TypeReferenceMemberContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.typeResultMember`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitTypeResultMember?: (ctx: TypeResultMemberContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.referenceTyping`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitReferenceTyping?: (ctx: ReferenceTypingContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.emptyResultMember`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitEmptyResultMember?: (ctx: EmptyResultMemberContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.sequenceOperatorExpression`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitSequenceOperatorExpression?: (ctx: SequenceOperatorExpressionContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.sequenceExpressionListMember`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitSequenceExpressionListMember?: (ctx: SequenceExpressionListMemberContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.bodyArgumentMember`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitBodyArgumentMember?: (ctx: BodyArgumentMemberContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.bodyArgument`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitBodyArgument?: (ctx: BodyArgumentContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.bodyArgumentValue`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitBodyArgumentValue?: (ctx: BodyArgumentValueContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.functionReferenceArgumentMember`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitFunctionReferenceArgumentMember?: (ctx: FunctionReferenceArgumentMemberContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.functionReferenceArgument`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitFunctionReferenceArgument?: (ctx: FunctionReferenceArgumentContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.functionReferenceArgumentValue`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitFunctionReferenceArgumentValue?: (ctx: FunctionReferenceArgumentValueContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.functionReferenceExpression`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitFunctionReferenceExpression?: (ctx: FunctionReferenceExpressionContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.functionReferenceMember`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitFunctionReferenceMember?: (ctx: FunctionReferenceMemberContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.functionReference`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitFunctionReference?: (ctx: FunctionReferenceContext) => Result;
-    /**
      * Visit a parse tree produced by `SysMLv2Parser.featureChainMember`.
      * @param ctx the parse tree
      * @return the visitor result
      */
     visitFeatureChainMember?: (ctx: FeatureChainMemberContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.ownedFeatureChainMember`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitOwnedFeatureChainMember?: (ctx: OwnedFeatureChainMemberContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.featureReferenceMember`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitFeatureReferenceMember?: (ctx: FeatureReferenceMemberContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.featureReference`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitFeatureReference?: (ctx: FeatureReferenceContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.elementReferenceMember`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitElementReferenceMember?: (ctx: ElementReferenceMemberContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.constructorResultMember`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitConstructorResultMember?: (ctx: ConstructorResultMemberContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.constructorResult`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitConstructorResult?: (ctx: ConstructorResultContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.instantiatedTypeMember`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitInstantiatedTypeMember?: (ctx: InstantiatedTypeMemberContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.instantiatedTypeReference`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitInstantiatedTypeReference?: (ctx: InstantiatedTypeReferenceContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.namedArgumentMember`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitNamedArgumentMember?: (ctx: NamedArgumentMemberContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.parameterRedefinition`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitParameterRedefinition?: (ctx: ParameterRedefinitionContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.expressionBodyMember`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitExpressionBodyMember?: (ctx: ExpressionBodyMemberContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.expressionBody`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitExpressionBody?: (ctx: ExpressionBodyContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.booleanValue`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitBooleanValue?: (ctx: BooleanValueContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.realValue`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitRealValue?: (ctx: RealValueContext) => Result;
     /**
      * Visit a parse tree produced by `SysMLv2Parser.interaction`.
      * @param ctx the parse tree
@@ -1679,24 +1418,6 @@ export class SysMLv2ParserVisitor<Result> extends AbstractParseTreeVisitor<Resul
      * @return the visitor result
      */
     visitFlowEnd?: (ctx: FlowEndContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.flowFeatureMember`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitFlowFeatureMember?: (ctx: FlowFeatureMemberContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.flowFeature`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitFlowFeature?: (ctx: FlowFeatureContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.flowFeatureRedefinition`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitFlowFeatureRedefinition?: (ctx: FlowFeatureRedefinitionContext) => Result;
     /**
      * Visit a parse tree produced by `SysMLv2Parser.valuePart`.
      * @param ctx the parse tree
@@ -1943,12 +1664,6 @@ export class SysMLv2ParserVisitor<Result> extends AbstractParseTreeVisitor<Resul
      * @return the visitor result
      */
     visitNonOccurrenceUsageMember?: (ctx: NonOccurrenceUsageMemberContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.occurrenceUsageMember`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitOccurrenceUsageMember?: (ctx: OccurrenceUsageMemberContext) => Result;
     /**
      * Visit a parse tree produced by `SysMLv2Parser.structureUsageMember`.
      * @param ctx the parse tree
@@ -2472,18 +2187,6 @@ export class SysMLv2ParserVisitor<Result> extends AbstractParseTreeVisitor<Resul
      */
     visitFlowPayloadFeature?: (ctx: FlowPayloadFeatureContext) => Result;
     /**
-     * Visit a parse tree produced by `SysMLv2Parser.flowEndSubsetting`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitFlowEndSubsetting?: (ctx: FlowEndSubsettingContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.featureChainPrefix`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitFeatureChainPrefix?: (ctx: FeatureChainPrefixContext) => Result;
-    /**
      * Visit a parse tree produced by `SysMLv2Parser.actionDefinition`.
      * @param ctx the parse tree
      * @return the visitor result
@@ -2789,12 +2492,6 @@ export class SysMLv2ParserVisitor<Result> extends AbstractParseTreeVisitor<Resul
      * @return the visitor result
      */
     visitForVariableDeclarationMember?: (ctx: ForVariableDeclarationMemberContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.forVariableDeclaration`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitForVariableDeclaration?: (ctx: ForVariableDeclarationContext) => Result;
     /**
      * Visit a parse tree produced by `SysMLv2Parser.actionTargetSuccession`.
      * @param ctx the parse tree
@@ -3395,18 +3092,6 @@ export class SysMLv2ParserVisitor<Result> extends AbstractParseTreeVisitor<Resul
      * @return the visitor result
      */
     visitPrefixMetadataUsage?: (ctx: PrefixMetadataUsageContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.metadataUsage`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitMetadataUsage?: (ctx: MetadataUsageContext) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.metadataUsageDeclaration`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitMetadataUsageDeclaration?: (ctx: MetadataUsageDeclarationContext) => Result;
     /**
      * Visit a parse tree produced by `SysMLv2Parser.metadataBodyUsageMember`.
      * @param ctx the parse tree
