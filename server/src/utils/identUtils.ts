@@ -54,3 +54,13 @@ export function extractQualifiedNameAt(lineText: string, character: number): str
 
     return undefined;
 }
+
+/**
+ * Replace line and block comments with spaces while preserving line/offset
+ * positions so index-based scans remain valid.
+ */
+export function stripComments(text: string): string {
+    return text
+        .replace(/\/\*[\s\S]*?\*\//g, m => m.replace(/[^\n]/g, ' '))
+        .replace(/\/\/[^\n]*/g, m => ' '.repeat(m.length));
+}

@@ -33,7 +33,7 @@ import type {
     SysMLModelScope,
 } from './sysmlModelTypes.js';
 
-import { isIdentPart as isWordChar } from '../utils/identUtils.js';
+import { isIdentPart as isWordChar, stripComments } from '../utils/identUtils.js';
 
 // ── String-based extraction helpers (replacing regex) ──
 
@@ -161,16 +161,6 @@ function readCommaSeparatedIdents(text: string, pos: number): string[] {
         }
     }
     return names;
-}
-
-/**
- * Replace line and block comments with spaces while preserving line/offset
- * positions so index-based scans remain valid.
- */
-function stripComments(text: string): string {
-    return text
-        .replace(/\/\*[\s\S]*?\*\//g, m => m.replace(/[^\n]/g, ' '))
-        .replace(/\/\/[^\n]*/g, m => ' '.repeat(m.length));
 }
 
 /**
@@ -1251,7 +1241,7 @@ export class SysMLModelProvider {
                 // Optional 'by <satisfier>' clause
                 const byPos = skipWS(text, afterReq);
                 const [byWord, afterBy] = readIdent(text, byPos);
-                let source = '(standalone)';
+                let source: string | undefined;
                 if (byWord === 'by') {
                     const [byTarget] = readNameOrQuoted(text, skipWS(text, afterBy));
                     if (!byTarget) continue;

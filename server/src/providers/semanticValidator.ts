@@ -3,6 +3,7 @@ import { DocumentManager } from '../documentManager.js';
 import { SysMLModelProvider } from '../model/sysmlModelProvider.js';
 import { getLibraryPackageNames, resolveLibraryType } from '../library/libraryIndex.js';
 import { SysMLElementKind, SysMLSymbol, isDefinition } from '../symbols/sysmlElements.js';
+import { stripComments } from '../utils/identUtils.js';
 
 /**
  * Standard library types that are always available (from Kernel libraries).
@@ -628,7 +629,8 @@ export class SemanticValidator {
                 satisfiedNames = this.satisfyCache.satisfiedNames;
                 satisfyBlockRanges = this.satisfyCache.satisfyBlockRanges;
             } else {
-                satisfiedNames = this.collectWorkspaceRequirementRelationshipNames().satisfiedNames;
+                const relNames = this.collectWorkspaceRequirementRelationshipNames();
+                satisfiedNames = relNames.satisfiedNames;
                 satisfyBlockRanges = new Map();
                 for (const uri of uris) {
                     const text = this.documentManager.getText(uri);
@@ -637,6 +639,10 @@ export class SemanticValidator {
                     }
                 }
                 this.satisfyCache = { versionKey, satisfiedNames, satisfyBlockRanges };
+                // Pre-populate verify cache from the same scan.
+                if (!this.verifyCache || this.verifyCache.versionKey !== versionKey) {
+                    this.verifyCache = { versionKey, verifiedNames: relNames.verifiedNames };
+                }
             }
         } else {
             satisfiedNames = new Set<string>();
@@ -687,14 +693,14 @@ export class SemanticValidator {
      * Adds both the full qualified name and the simple (last segment) name.
      *
      * Patterns matched:
-    *   satisfy QualifiedName by ...
-    *   satisfy QualifiedName;
+     *   satisfy QualifiedName by ...
+     *   satisfy QualifiedName;
      */
     private extractSatisfyReferences(text: string, out: Set<string>): void {
         // Match: satisfy QualifiedName by ...
         //        satisfy QualifiedName;
         //        satisfy requirement X : Y;
-        const stripped = this.stripComments(text);
+        const stripped = stripComments(text);
         const re = /\bsatisfy\s+(?:requirement\s+)?([\w]+(?:::[\w]+)*)\s+(?:by\b|;|:)/g;
         let m: RegExpExecArray | null;
         while ((m = re.exec(stripped)) !== null) {
@@ -712,7 +718,7 @@ export class SemanticValidator {
      */
     private extractSatisfyBlockRanges(text: string): Array<{ startLine: number; endLine: number }> {
         const ranges: Array<{ startLine: number; endLine: number }> = [];
-        const stripped = this.stripComments(text);
+        const stripped = stripComments(text);
         const re = /\bsatisfy\b[^;{]*\{/g;
         let m: RegExpExecArray | null;
 
@@ -788,29 +794,31 @@ export class SemanticValidator {
             const uris = this.documentManager.getUris();
             const versionKey = uris.map(u => u + ':' + this.documentManager.getVersion(u)).join('|');
 
-            // Reuse satisfy cache (already built by checkUnsatisfiedRequirements).
-            if (this.satisfyCache && this.satisfyCache.versionKey === versionKey) {
-                satisfiedNames = this.satisfyCache.satisfiedNames;
-                satisfyBlockRanges = this.satisfyCache.satisfyBlockRanges;
-            } else {
-                satisfiedNames = this.collectWorkspaceRequirementRelationshipNames().satisfiedNames;
-                satisfyBlockRanges = new Map();
-                for (const uri of uris) {
-                    const text = this.documentManager.getText(uri);
-                    if (text) {
-                        satisfyBlockRanges.set(uri, this.extractSatisfyBlockRanges(text));
+            const satisfyCacheValid = this.satisfyCache && this.satisfyCache.versionKey === versionKey;
+            const verifyCacheValid = this.verifyCache && this.verifyCache.versionKey === versionKey;
+
+            // Collect from model once if either cache is stale.
+            if (!satisfyCacheValid || !verifyCacheValid) {
+                const relNames = this.collectWorkspaceRequirementRelationshipNames();
+
+                if (!satisfyCacheValid) {
+                    satisfyBlockRanges = new Map();
+                    for (const uri of uris) {
+                        const text = this.documentManager.getText(uri);
+                        if (text) {
+                            satisfyBlockRanges.set(uri, this.extractSatisfyBlockRanges(text));
+                        }
                     }
+                    this.satisfyCache = { versionKey, satisfiedNames: relNames.satisfiedNames, satisfyBlockRanges };
                 }
-                this.satisfyCache = { versionKey, satisfiedNames, satisfyBlockRanges };
+                if (!verifyCacheValid) {
+                    this.verifyCache = { versionKey, verifiedNames: relNames.verifiedNames };
+                }
             }
 
-            // Build or reuse verify cache.
-            if (this.verifyCache && this.verifyCache.versionKey === versionKey) {
-                verifiedNames = this.verifyCache.verifiedNames;
-            } else {
-                verifiedNames = this.collectWorkspaceRequirementRelationshipNames().verifiedNames;
-                this.verifyCache = { versionKey, verifiedNames };
-            }
+            satisfiedNames = this.satisfyCache!.satisfiedNames;
+            satisfyBlockRanges = this.satisfyCache!.satisfyBlockRanges;
+            verifiedNames = this.verifyCache!.verifiedNames;
         } else {
             satisfiedNames = new Set<string>();
             verifiedNames = new Set<string>();
@@ -872,7 +880,7 @@ export class SemanticValidator {
      *   verify requirement QualifiedName by ...
      */
     private extractVerifyReferences(text: string, out: Set<string>): void {
-        const stripped = this.stripComments(text);
+        const stripped = stripComments(text);
         const re = /\bverify\s+(?:requirement\s+)?([\w]+(?:::[\w]+)*)\s*(?:by\b|;|:|\{)/g;
         let m: RegExpExecArray | null;
         while ((m = re.exec(stripped)) !== null) {
@@ -881,18 +889,6 @@ export class SemanticValidator {
             const lastSeg = ref.includes('::') ? ref.split('::').pop()! : ref;
             out.add(lastSeg);
         }
-    }
-
-    /**
-     * Replace all SysML comments (line and block) with spaces,
-     * preserving string length and newline positions so that character offsets
-     * and line numbers remain valid.
-     */
-    private stripComments(text: string): string {
-        // Replace block comments (preserve newlines), then line comments
-        return text
-            .replace(/\/\*[\s\S]*?\*\//g, m => m.replace(/[^\n]/g, ' '))
-            .replace(/\/\/[^\n]*/g, m => ' '.repeat(m.length));
     }
 
     /** Binary-search a sorted line-offset table to find the 0-based line for a character offset. */

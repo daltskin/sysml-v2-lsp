@@ -224,8 +224,8 @@ export interface RelationshipDTO {
      */
     type: string;
 
-    /** Source element name. */
-    source: string;
+    /** Source element name (absent for shorthand satisfy/verify without `by`). */
+    source?: string;
 
     /** Target element name. */
     target: string;
