@@ -33,7 +33,7 @@ export class DiagnosticsProvider {
         ranges: Array<{ startLine: number; endLine: number }>;
     }>();
 
-    constructor(private documentManager: DocumentManager) {}
+    constructor(private documentManager: DocumentManager) { }
 
     /**
      * Get diagnostics for a parsed document.

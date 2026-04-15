@@ -297,7 +297,7 @@ export class SymbolTable {
             posList.length === 0 ||
             startLine > posList[posList.length - 1].selectionRange.start.line ||
             (startLine === posList[posList.length - 1].selectionRange.start.line &&
-             startChar >= posList[posList.length - 1].selectionRange.start.character)
+                startChar >= posList[posList.length - 1].selectionRange.start.character)
         ) {
             posList.push(symbol);
         } else {
