@@ -67,9 +67,9 @@ function parseOnce(text: string): ParseTiming {
         parser.removeErrorListeners();
         parser.addErrorListener({
             syntaxError: () => { errors++; },
-            reportAmbiguity: () => {},
-            reportAttemptingFullContext: () => {},
-            reportContextSensitivity: () => {},
+            reportAmbiguity: () => { },
+            reportAttemptingFullContext: () => { },
+            reportContextSensitivity: () => { },
         } as any);
         parser.rootNamespace();
     }

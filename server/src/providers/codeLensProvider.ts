@@ -54,8 +54,8 @@ export class CodeLensProvider {
     }
 
     private countReferences(sym: SysMLSymbol): number {
-        // Count symbol references across all open documents
+        // Use O(1) counting instead of allocating a result array
         const symbolTable = this.documentManager.getSymbolTable(sym.uri);
-        return symbolTable ? symbolTable.findReferences(sym.name).length : 0;
+        return symbolTable ? symbolTable.countReferences(sym.name) : 0;
     }
 }

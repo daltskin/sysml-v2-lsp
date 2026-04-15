@@ -27,6 +27,12 @@ const EXPRESSION_OPERATOR_RE =
  * Converts ANTLR parse errors into LSP Diagnostic objects.
  */
 export class DiagnosticsProvider {
+    /** Cached grammar limitation ranges per URI, keyed by document version. */
+    private grammarRangeCache = new Map<string, {
+        version: number;
+        ranges: Array<{ startLine: number; endLine: number }>;
+    }>();
+
     constructor(private documentManager: DocumentManager) {}
 
     /**
@@ -39,7 +45,19 @@ export class DiagnosticsProvider {
         }
 
         const text = this.documentManager.getText(uri);
-        const suppressedRanges = text ? this.findGrammarLimitationRanges(text) : [];
+        const version = this.documentManager.getVersion(uri);
+
+        // Use cached grammar limitation ranges if document version hasn't changed
+        let suppressedRanges: Array<{ startLine: number; endLine: number }>;
+        const cached = this.grammarRangeCache.get(uri);
+        if (cached && cached.version === version) {
+            suppressedRanges = cached.ranges;
+        } else if (text) {
+            suppressedRanges = this.findGrammarLimitationRanges(text);
+            this.grammarRangeCache.set(uri, { version, ranges: suppressedRanges });
+        } else {
+            suppressedRanges = [];
+        }
 
         const diagnostics: Diagnostic[] = [];
 

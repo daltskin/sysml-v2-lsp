@@ -47,10 +47,11 @@ export function parseDocument(text: string): ParseResult {
     // If errors occurred with a pre-seeded DFA, clear ALL DFA states
     // (not just s0) and retry with LL-only mode.  Pre-seeded child
     // states deep in the DFA graph may have bogus ERROR edges.
+    // Reuse the lexer & token stream from the first attempt to skip re-lexing.
     if (result.errors.length > 0 && isDfaPreSeeded()) {
         markDfaNotPreSeeded();
         clearAllDFAStates();
-        return parseDocumentLL(text);
+        return parseDocumentLL(text, result.lexer, result.tokenStream);
     }
 
     // First successful parse with pre-seeded DFA: the pre-seeded
@@ -127,15 +128,29 @@ function parseDocumentCore(text: string): ParseResult {
  * transitions from the ATN directly, producing correct results.
  * As a side effect, it builds correct DFA states for any grammar
  * paths not covered by the snapshot, so future parses benefit.
+ *
+ * Reuses the lexer/token stream from the failed SLL attempt to
+ * avoid re-lexing (tokens are immutable once fill() is called).
  */
-function parseDocumentLL(text: string): ParseResult {
-    const inputStream = CharStream.fromString(text);
-    const lexer = new SysMLv2Lexer(inputStream);
-    const tokenStream = new CommonTokenStream(lexer);
+function parseDocumentLL(text: string, prevLexer?: SysMLv2Lexer, prevTokenStream?: CommonTokenStream): ParseResult {
+    let lexer: SysMLv2Lexer;
+    let tokenStream: CommonTokenStream;
+    let lexMs: number;
 
-    const lexStart = Date.now();
-    tokenStream.fill();
-    const lexMs = Date.now() - lexStart;
+    if (prevLexer && prevTokenStream) {
+        // Reuse existing lexer and token stream — skip re-lexing
+        lexer = prevLexer;
+        tokenStream = prevTokenStream;
+        tokenStream.seek(0);
+        lexMs = 0;
+    } else {
+        const inputStream = CharStream.fromString(text);
+        lexer = new SysMLv2Lexer(inputStream);
+        tokenStream = new CommonTokenStream(lexer);
+        const lexStart = Date.now();
+        tokenStream.fill();
+        lexMs = Date.now() - lexStart;
+    }
 
     const parser = new SysMLv2Parser(tokenStream);
     const errorListener = new SysMLErrorListener();

@@ -7,6 +7,14 @@ import { SYSML_KEYWORDS } from '../utils/sysmlKeywords.js';
 import { Scope } from './scope.js';
 import { SysMLElementKind, SysMLSymbol, isUsage as isUsageKind } from './sysmlElements.js';
 
+// Pre-compiled regex patterns for extractTypeNames() — compiled once at import time
+const RE_KEYWORD_TRUNCATE = /(redefines|subsets|references|connect|bind|first|then|flow|allocate|assign|accept|send|decide|merge|join|fork|via|default)\b.*/i;
+const RE_SPEC = /(?:specializes|:>|:>>)\s*('[^']+'|[A-Za-z_]\w*(?:::\w+)*)(?:\s*,\s*(?:'[^']+'|[A-Za-z_]\w*(?:::\w+)*))*/;
+const RE_DEFINED_BY = /definedby\s*([A-Za-z_]\w*(?:::\w+)*(?:\s*,\s*[A-Za-z_]\w*(?:::\w+)*)*)/;
+const RE_TYPING = /:(?![:>])\s*('[^']+'|[A-Za-z_]\w*(?:::\w+)*)/;
+const RE_QUOTED_NAME = /'([^']+)'/;
+const RE_IDENT_START = /^([A-Za-z_]\w*(?:::\w+)*)/;
+
 /**
  * Builds a symbol table from a parsed SysML document.
  *
@@ -20,6 +28,12 @@ export class SymbolTable {
     private symbolsByUri = new Map<string, SysMLSymbol[]>();
     /** All symbols indexed by simple name for O(1) lookup */
     private symbolsByName = new Map<string, SysMLSymbol[]>();
+    /** Symbols sorted by (line, character) per URI for O(log n) positional lookup */
+    private symbolsByPosition = new Map<string, SysMLSymbol[]>();
+    /** Reverse index: type name → symbols that reference it in typeNames */
+    private typeNameRefs = new Map<string, SysMLSymbol[]>();
+    /** Cached array from getAllSymbols(), invalidated on any mutation */
+    private allSymbolsCache: SysMLSymbol[] | undefined;
     /** The global scope */
     private globalScope: Scope;
 
@@ -65,9 +79,13 @@ export class SymbolTable {
 
     /**
      * Get all symbols in the table.
+     * Returns a cached array — invalidated on symbol add/remove.
      */
     getAllSymbols(): SysMLSymbol[] {
-        return Array.from(this.symbols.values());
+        if (!this.allSymbolsCache) {
+            this.allSymbolsCache = Array.from(this.symbols.values());
+        }
+        return this.allSymbolsCache;
     }
 
     /**
@@ -79,15 +97,39 @@ export class SymbolTable {
 
     /**
      * Find the symbol at a given position in a document.
+     * Uses a position-sorted index with binary search for O(log n) lookup.
      */
     findSymbolAtPosition(uri: string, line: number, character: number): SysMLSymbol | undefined {
-        const symbols = this.getSymbolsForUri(uri);
-        // Find the most specific (smallest range) symbol containing the position
+        const sorted = this.symbolsByPosition.get(uri);
+        if (!sorted || sorted.length === 0) return undefined;
+
+        // Binary search: find the rightmost symbol whose start is <= (line, character)
+        let lo = 0;
+        let hi = sorted.length - 1;
+        while (lo < hi) {
+            const mid = (lo + hi + 1) >>> 1;
+            const r = sorted[mid].selectionRange.start;
+            if (r.line < line || (r.line === line && r.character <= character)) {
+                lo = mid;
+            } else {
+                hi = mid - 1;
+            }
+        }
+
+        // Scan backwards from lo to find the best (smallest) containing symbol.
+        // Symbols are sorted by start position; we only need to check symbols
+        // whose start line is <= our target line.
         let best: SysMLSymbol | undefined;
         let bestSize = Infinity;
 
-        for (const symbol of symbols) {
-            const r = symbol.selectionRange;
+        for (let i = lo; i >= 0; i--) {
+            const sym = sorted[i];
+            const r = sym.selectionRange;
+            // Early exit: if symbol starts on a line well before target,
+            // no earlier symbol can contain the position (single-line selections).
+            if (r.start.line < line - 1 && r.end.line < line) break;
+            if (r.start.line < line && r.end.line < line) continue;
+
             if (
                 line >= r.start.line &&
                 line <= r.end.line &&
@@ -98,7 +140,7 @@ export class SymbolTable {
                     (r.end.line - r.start.line) * 10000 +
                     (r.end.character - r.start.character);
                 if (size < bestSize) {
-                    best = symbol;
+                    best = sym;
                     bestSize = size;
                 }
             }
@@ -109,19 +151,39 @@ export class SymbolTable {
     /**
      * Find all references to a symbol name across all documents.
      * Matches symbols whose name equals the target OR whose typeNames include it.
+     * Uses a reverse index for O(1) typeName lookup.
      */
     findReferences(name: string): SysMLSymbol[] {
         const results: SysMLSymbol[] = [];
         // Start with symbols that share the name (O(1) lookup)
         const byName = this.symbolsByName.get(name);
         if (byName) results.push(...byName);
-        // Also find symbols whose typeNames reference this name
-        for (const symbol of this.symbols.values()) {
-            if (symbol.typeNames.includes(name) && symbol.name !== name) {
-                results.push(symbol);
+        // Also find symbols whose typeNames reference this name (O(1) lookup)
+        const refs = this.typeNameRefs.get(name);
+        if (refs) {
+            for (const sym of refs) {
+                if (sym.name !== name) {
+                    results.push(sym);
+                }
             }
         }
         return results;
+    }
+
+    /**
+     * Count references to a symbol name without allocating a result array.
+     */
+    countReferences(name: string): number {
+        let count = 0;
+        const byName = this.symbolsByName.get(name);
+        if (byName) count += byName.length;
+        const refs = this.typeNameRefs.get(name);
+        if (refs) {
+            for (const sym of refs) {
+                if (sym.name !== name) count++;
+            }
+        }
+        return count;
     }
 
     // --------------------------------------------------------------------------
@@ -138,19 +200,40 @@ export class SymbolTable {
 
     private clearUri(uri: string): void {
         const existing = this.symbolsByUri.get(uri);
-        if (existing) {
+        if (existing && existing.length > 0) {
+            // Collect names and type names that need index updates
+            const affectedNames = new Set<string>();
+            const affectedTypeNames = new Set<string>();
             for (const sym of existing) {
                 this.symbols.delete(sym.qualifiedName);
-                // Remove from name index
-                const nameList = this.symbolsByName.get(sym.name);
-                if (nameList) {
-                    const idx = nameList.indexOf(sym);
-                    if (idx >= 0) nameList.splice(idx, 1);
-                    if (nameList.length === 0) this.symbolsByName.delete(sym.name);
+                affectedNames.add(sym.name);
+                for (const tn of sym.typeNames) {
+                    affectedTypeNames.add(tn);
                 }
             }
+            // Rebuild affected name index entries by filtering out symbols from this URI
+            for (const name of affectedNames) {
+                const list = this.symbolsByName.get(name);
+                if (list) {
+                    const filtered = list.filter(s => s.uri !== uri);
+                    if (filtered.length === 0) this.symbolsByName.delete(name);
+                    else this.symbolsByName.set(name, filtered);
+                }
+            }
+            // Rebuild affected type-name reference entries
+            for (const tn of affectedTypeNames) {
+                const list = this.typeNameRefs.get(tn);
+                if (list) {
+                    const filtered = list.filter(s => s.uri !== uri);
+                    if (filtered.length === 0) this.typeNameRefs.delete(tn);
+                    else this.typeNameRefs.set(tn, filtered);
+                }
+            }
+            // Invalidate cached array
+            this.allSymbolsCache = undefined;
         }
         this.symbolsByUri.set(uri, []);
+        this.symbolsByPosition.set(uri, []);
     }
 
     /**
@@ -195,6 +278,8 @@ export class SymbolTable {
 
     private registerSymbol(symbol: SysMLSymbol, uri: string, scope: Scope): void {
         this.symbols.set(symbol.qualifiedName, symbol);
+        // Invalidate cached array
+        this.allSymbolsCache = undefined;
         const uriSymbols = this.symbolsByUri.get(uri) ?? [];
         uriSymbols.push(symbol);
         this.symbolsByUri.set(uri, uriSymbols);
@@ -202,6 +287,40 @@ export class SymbolTable {
         const nameList = this.symbolsByName.get(symbol.name) ?? [];
         nameList.push(symbol);
         this.symbolsByName.set(symbol.name, nameList);
+        // Maintain position-sorted index (insertion sort — symbols arrive
+        // in document order so this is nearly always an append → O(1) amortized)
+        const posList = this.symbolsByPosition.get(uri) ?? [];
+        const startLine = symbol.selectionRange.start.line;
+        const startChar = symbol.selectionRange.start.character;
+        // Fast path: append if new symbol is after the last one
+        if (
+            posList.length === 0 ||
+            startLine > posList[posList.length - 1].selectionRange.start.line ||
+            (startLine === posList[posList.length - 1].selectionRange.start.line &&
+             startChar >= posList[posList.length - 1].selectionRange.start.character)
+        ) {
+            posList.push(symbol);
+        } else {
+            // Binary search for insertion point
+            let lo = 0, hi = posList.length;
+            while (lo < hi) {
+                const mid = (lo + hi) >>> 1;
+                const mr = posList[mid].selectionRange.start;
+                if (mr.line < startLine || (mr.line === startLine && mr.character < startChar)) {
+                    lo = mid + 1;
+                } else {
+                    hi = mid;
+                }
+            }
+            posList.splice(lo, 0, symbol);
+        }
+        this.symbolsByPosition.set(uri, posList);
+        // Maintain reverse type-name reference index
+        for (const tn of symbol.typeNames) {
+            const refList = this.typeNameRefs.get(tn) ?? [];
+            refList.push(symbol);
+            this.typeNameRefs.set(tn, refList);
+        }
         scope.define(symbol);
     }
 
@@ -454,44 +573,41 @@ export class SymbolTable {
         // e.g. ":BrakeCableconnectfrontLever…" should stop at "connect".
         // Also truncate at redefines/subsets/references which follow a typing
         // and would otherwise be concatenated (e.g. "FuelCmdredefinespwrCmd").
-        text = text.replace(
-            /(redefines|subsets|references|connect|bind|first|then|flow|allocate|assign|accept|send|decide|merge|join|fork|via|default)\b.*/i,
-            '',
-        );
+        text = text.replace(RE_KEYWORD_TRUNCATE, '');
 
         // 1. "specializes A, B" or ":> A, B" (including quoted names)
-        const specMatch = text.match(/(?:specializes|:>|:>>)\s*('[^']+'|[A-Za-z_]\w*(?:::\w+)*)(?:\s*,\s*(?:'[^']+'|[A-Za-z_]\w*(?:::\w+)*))*/);
+        const specMatch = text.match(RE_SPEC);
         if (specMatch) {
             const specStr = text.substring(text.indexOf(specMatch[0]) + specMatch[0].indexOf(specMatch[1]));
             for (const part of specStr.split(',')) {
-                const qm = part.match(/'([^']+)'/);
+                const qm = part.match(RE_QUOTED_NAME);
                 if (qm) { names.push(qm[1]); continue; }
-                const m = part.trim().match(/^([A-Za-z_]\w*(?:::\w+)*)/);
+                const m = part.trim().match(RE_IDENT_START);
                 if (m) names.push(m[1]);
             }
             return names;
         }
 
         // 2. "definedby A, B" — note getText() strips spaces
-        const defByMatch = text.match(/definedby\s*([A-Za-z_]\w*(?:::\w+)*(?:\s*,\s*[A-Za-z_]\w*(?:::\w+)*)*)/);
+        const defByMatch = text.match(RE_DEFINED_BY);
         if (defByMatch) {
             for (const part of defByMatch[1].split(',')) {
-                const m = part.trim().match(/^([A-Za-z_]\w*(?:::\w+)*)/);
+                const m = part.trim().match(RE_IDENT_START);
                 if (m) names.push(m[1]);
             }
             return names;
         }
 
         // 3. ": A, B" (typing shorthand, including quoted names)
-        const typingMatch = text.match(/:(?![:>])\s*('[^']+'|[A-Za-z_]\w*(?:::\w+)*)/);
+        const typingMatch = text.match(RE_TYPING);
         if (typingMatch) {
             // Extract from after the colon
             const fullMatchIdx = text.indexOf(typingMatch[0]);
             const afterColon = text.substring(fullMatchIdx + 1).trim();
             for (const part of afterColon.split(',')) {
-                const qm = part.match(/'([^']+)'/);
+                const qm = part.match(RE_QUOTED_NAME);
                 if (qm) { names.push(qm[1]); continue; }
-                const m = part.trim().match(/^([A-Za-z_]\w*(?:::\w+)*)/);
+                const m = part.trim().match(RE_IDENT_START);
                 if (m) names.push(m[1]);
             }
             return names;

@@ -125,9 +125,19 @@ function levenshtein(a: string, b: string): number {
     return prev[n];
 }
 
+/** Memoization cache for keyword distance lookups — avoids recomputing
+ *  Levenshtein distances for the same identifier across files. */
+const keywordCache = new Map<string, string | undefined>();
+const KEYWORD_CACHE_MAX = 4096;
+
 function findClosestKeyword(identifier: string): string | undefined {
     const lower = identifier.toLowerCase();
     if (lower.length < 4 || DEFINITION_KEYWORDS.has(lower)) return undefined;
+
+    const cached = keywordCache.get(lower);
+    if (cached !== undefined) return cached;
+    if (keywordCache.has(lower)) return undefined; // explicit undefined entry
+
     const maxDistance = lower.length <= 5 ? 1 : 2;
     let bestMatch: string | undefined;
     let bestDist = maxDistance + 1;
@@ -139,6 +149,13 @@ function findClosestKeyword(identifier: string): string | undefined {
             bestMatch = keyword;
         }
     }
+
+    // Evict oldest entries if cache grows too large
+    if (keywordCache.size >= KEYWORD_CACHE_MAX) {
+        const firstKey = keywordCache.keys().next().value;
+        if (firstKey !== undefined) keywordCache.delete(firstKey);
+    }
+    keywordCache.set(lower, bestMatch);
     return bestMatch;
 }
 
@@ -228,15 +245,20 @@ interface SerializedDiagnostic {
     data?: Record<string, unknown>;
 }
 
-export function validateKeywordsFromTokens(tokenStream: CommonTokenStream): SerializedDiagnostic[] {
+export function validateKeywordsFromTokens(tokenStream: CommonTokenStream, prebuiltVisible?: Token[]): SerializedDiagnostic[] {
     const diagnostics: SerializedDiagnostic[] = [];
-    tokenStream.fill();
-    const allTokens = tokenStream.getTokens();
 
-    const visible: Token[] = [];
-    for (let j = 0; j < allTokens.length; j++) {
-        const t = allTokens[j];
-        if (t.channel === 0 && t.type !== Token.EOF) visible.push(t);
+    let visible: Token[];
+    if (prebuiltVisible) {
+        visible = prebuiltVisible;
+    } else {
+        tokenStream.fill();
+        const allTokens = tokenStream.getTokens();
+        visible = [];
+        for (let j = 0; j < allTokens.length; j++) {
+            const t = allTokens[j];
+            if (t.channel === 0 && t.type !== Token.EOF) visible.push(t);
+        }
     }
 
     for (let i = 0; i < visible.length; i++) {
@@ -432,34 +454,27 @@ const BOUNDARY_TOKENS = new Set([
  * When ANTLR reports an error on `}`, `<EOF>`, or `;`, and the previous
  * visible token is an identifier that isn't a keyword, relocate the error
  * to that identifier — it's almost certainly the real problem.
+ *
+ * Accepts a pre-built visible token array + position index to avoid
+ * redundant filtering and O(n) linear searches.
  */
 function improveErrorLocations(
     errors: SerializedError[],
-    tokenStream: CommonTokenStream,
+    visible: Token[],
+    positionIndex: Map<string, number>,
 ): SerializedError[] {
     if (errors.length === 0) return errors;
 
-    tokenStream.fill();
-    const allTokens = tokenStream.getTokens();
-
-    // Build a list of visible tokens for quick lookup
-    const visible: Token[] = [];
-    for (const t of allTokens) {
-        if (t.channel === 0) visible.push(t);
-    }
-
     return errors.map(err => {
-        // Find the token at the error position
-        const errToken = visible.find(
-            t => (t.line - 1) === err.line && t.column === err.column
-        );
-        if (!errToken) return err;
+        // O(1) lookup via position map
+        const errIdx = positionIndex.get(`${err.line}:${err.column}`);
+        if (errIdx === undefined) return err;
+
+        const errToken = visible[errIdx];
 
         // Only relocate for boundary tokens
         if (!BOUNDARY_TOKENS.has(errToken.type) && errToken.type !== Token.EOF) return err;
 
-        // Find the previous visible token
-        const errIdx = visible.indexOf(errToken);
         if (errIdx <= 0) return err;
 
         const prev = visible[errIdx - 1];
@@ -507,14 +522,19 @@ const STATEMENT_START_KEYWORDS: ReadonlySet<string> = new Set([
  * is expected. These are words like "banana" that aren't close enough to any
  * keyword to trigger the typo detector, yet clearly don't belong.
  */
-export function flagUnknownIdentifiers(tokenStream: CommonTokenStream): SerializedDiagnostic[] {
+export function flagUnknownIdentifiers(tokenStream: CommonTokenStream, prebuiltVisible?: Token[]): SerializedDiagnostic[] {
     const diagnostics: SerializedDiagnostic[] = [];
-    tokenStream.fill();
-    const allTokens = tokenStream.getTokens();
 
-    const visible: Token[] = [];
-    for (const t of allTokens) {
-        if (t.channel === 0 && t.type !== Token.EOF) visible.push(t);
+    let visible: Token[];
+    if (prebuiltVisible) {
+        visible = prebuiltVisible;
+    } else {
+        tokenStream.fill();
+        const allTokens = tokenStream.getTokens();
+        visible = [];
+        for (const t of allTokens) {
+            if (t.channel === 0 && t.type !== Token.EOF) visible.push(t);
+        }
     }
 
     for (let i = 0; i < visible.length; i++) {
@@ -635,9 +655,9 @@ function handleParseRequest(msg: ParseRequest): void {
 
     // --- Lex ---
     const lexStart = Date.now();
-    let inputStream = CharStream.fromString(text);
-    let lexer = new SysMLv2Lexer(inputStream);
-    let tokenStream = new CommonTokenStream(lexer);
+    const inputStream = CharStream.fromString(text);
+    const lexer = new SysMLv2Lexer(inputStream);
+    const tokenStream = new CommonTokenStream(lexer);
     tokenStream.fill();
     const lexMs = Date.now() - lexStart;
 
@@ -684,15 +704,13 @@ function handleParseRequest(msg: ParseRequest): void {
     // If the pre-seeded DFA caused bogus errors, clear all DFA states
     // and re-parse with a clean DFA (LL-only).  This mirrors the retry
     // logic in parseDocument.ts on the main thread.
+    // Reuse the existing token stream via seek(0) to avoid re-lexing.
     if (errors.length > 0 && isDfaPreSeeded()) {
         markDfaNotPreSeeded();
         clearAllDFAStates();
 
-        // Re-lex and re-parse from scratch with clean DFA
-        inputStream = CharStream.fromString(text);
-        lexer = new SysMLv2Lexer(inputStream);
-        tokenStream = new CommonTokenStream(lexer);
-        tokenStream.fill();
+        // Reuse token stream — tokens are immutable after fill()
+        tokenStream.seek(0);
 
         const retryParser = new SysMLv2Parser(tokenStream);
         lexer.removeErrorListeners();
@@ -723,16 +741,29 @@ function handleParseRequest(msg: ParseRequest): void {
         markDfaNotPreSeeded();
     }
 
+    // --- Build visible token array once for all post-parse analysis ---
+    tokenStream.fill();
+    const allTokens = tokenStream.getTokens();
+    const visible: Token[] = [];
+    const positionIndex = new Map<string, number>();
+    for (let i = 0; i < allTokens.length; i++) {
+        const t = allTokens[i];
+        if (t.channel === 0 && t.type !== Token.EOF) {
+            positionIndex.set(`${(t.line ?? 1) - 1}:${t.column ?? 0}`, visible.length);
+            visible.push(t);
+        }
+    }
+
     // --- Improve error locations ---
     // ANTLR often reports "mismatched input '}'" or "<EOF>" when the real
     // problem is an unknown identifier on the line/token before.  Walk the
     // errors and relocate them to the actual culprit identifier.
-    errors = improveErrorLocations(errors, tokenStream);
+    errors = improveErrorLocations(errors, visible, positionIndex);
 
     // --- Flag unknown identifiers in statement-start positions ---
     // If an identifier isn't a SysML keyword and appears where a statement
     // keyword is expected, flag it as an error.  This catches "banana" etc.
-    const unknownIdDiags = flagUnknownIdentifiers(tokenStream);
+    const unknownIdDiags = flagUnknownIdentifiers(tokenStream, visible);
 
     const parseMs = Date.now() - parseStart;
 
@@ -742,8 +773,8 @@ function handleParseRequest(msg: ParseRequest): void {
         return; // don't send stale results
     }
 
-    // Keyword validation (uses token stream, runs in ~5ms)
-    const keywordDiagnostics = validateKeywordsFromTokens(tokenStream);
+    // Keyword validation (uses pre-built visible array, runs in ~5ms)
+    const keywordDiagnostics = validateKeywordsFromTokens(tokenStream, visible);
 
     // Merge unknown-identifier diagnostics (avoids duplicates with ANTLR errors)
     const errorPositions = new Set(errors.map(e => `${e.line}:${e.column}`));

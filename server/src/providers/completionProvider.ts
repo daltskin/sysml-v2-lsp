@@ -5,7 +5,7 @@ import {
     TextDocumentPositionParams,
 } from 'vscode-languageserver/node.js';
 import { DocumentManager } from '../documentManager.js';
-import { isDefinition, SysMLElementKind } from '../symbols/sysmlElements.js';
+import { isDefinition, SysMLElementKind, SysMLSymbol } from '../symbols/sysmlElements.js';
 
 /**
  * SysML v2 keyword completions organized by category.
@@ -72,9 +72,9 @@ const SYSML_KEYWORDS: { label: string; kind: CompletionItemKind; detail: string;
  * TODO: integrate antlr4-c3 for grammar-aware contextual completions.
  */
 export class CompletionProvider {
-    /** Cached definition completions, invalidated when symbol count changes. */
+    /** Cached definition completions, invalidated when symbol table changes. */
     private _defCache?: {
-        symbolCount: number;
+        symbols: SysMLSymbol[];
         items: CompletionItem[];
     };
 
@@ -107,8 +107,9 @@ export class CompletionProvider {
         const workspaceTable = this.documentManager.getWorkspaceSymbolTable();
         const allSymbols = workspaceTable.getAllSymbols();
 
-        // Use cached definition items if symbol count hasn't changed
-        if (this._defCache && this._defCache.symbolCount === allSymbols.length) {
+        // Use cached definition items if the underlying array is the same
+        // (getAllSymbols returns a cached array that's only rebuilt on mutation)
+        if (this._defCache && this._defCache.symbols === allSymbols) {
             items.push(...this._defCache.items);
         } else {
             const definitionSymbols = allSymbols.filter((s) => isDefinition(s.kind));
@@ -126,7 +127,7 @@ export class CompletionProvider {
                     sortText: `1_${sym.name}`,
                 });
             }
-            this._defCache = { symbolCount: allSymbols.length, items: defItems };
+            this._defCache = { symbols: allSymbols, items: defItems };
             items.push(...defItems);
         }
 

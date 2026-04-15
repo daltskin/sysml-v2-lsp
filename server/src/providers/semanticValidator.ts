@@ -1237,10 +1237,32 @@ export class SemanticValidator {
         return proseOnly && !hasExprSignal;
     }
 
+    /** Cached line-offset table for indexToRange — avoids O(n) text.slice().split() per call */
+    private lineOffsetCache?: { text: string; offsets: number[] };
+
     private indexToRange(text: string, start: number, length: number) {
-        const prefix = text.slice(0, start);
-        const startLine = prefix.split('\n').length - 1;
-        const startChar = start - (prefix.lastIndexOf('\n') + 1);
+        // Build or reuse line-offset table for this text
+        let offsets: number[];
+        if (this.lineOffsetCache && this.lineOffsetCache.text === text) {
+            offsets = this.lineOffsetCache.offsets;
+        } else {
+            offsets = [0];
+            for (let i = 0; i < text.length; i++) {
+                if (text[i] === '\n') offsets.push(i + 1);
+            }
+            this.lineOffsetCache = { text, offsets };
+        }
+
+        // Binary search for start line
+        let lo = 0;
+        let hi = offsets.length - 1;
+        while (lo < hi) {
+            const mid = (lo + hi + 1) >>> 1;
+            if (offsets[mid] <= start) lo = mid;
+            else hi = mid - 1;
+        }
+        const startLine = lo;
+        const startChar = start - offsets[startLine];
         return {
             start: { line: startLine, character: startChar },
             end: { line: startLine, character: startChar + length },
