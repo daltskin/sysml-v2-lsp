@@ -110,6 +110,11 @@
     "package:server": "npm run build:production && npm pack",
     "clean": "rm -rf clients/vscode/out server/out dist *.vsix *.tgz",
     "update-grammar": "curl -fsSL https://raw.githubusercontent.com/daltskin/grammars-v4/master/sysml-v2/SysMLv2Lexer.g4 -o grammar/SysMLv2Lexer.g4 && curl -fsSL https://raw.githubusercontent.com/daltskin/grammars-v4/master/sysml-v2/SysMLv2Parser.g4 -o grammar/SysMLv2Parser.g4 && echo '✅ Grammar files updated from daltskin/grammars-v4'",
+    "bench": "npx tsx benchmarks/src/runner.ts",
+    "bench:parse": "npx tsx benchmarks/src/runner.ts --suite parse",
+    "bench:providers": "npx tsx benchmarks/src/runner.ts --suite providers",
+    "bench:regression": "npx tsx benchmarks/src/runner.ts --compare",
+    "bench:baseline": "npx tsx benchmarks/src/runner.ts --baseline",
     "prepublishOnly": "npm run build:production",
     "postinstall": "[ -f tsconfig.json ] && [ -d clients/vscode ] && cd clients/vscode && npm install && cd ../.. && cd server && npm install || true"
   },

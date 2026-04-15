@@ -14,3 +14,4 @@ test/fixtures/conformance/
 *.tgz
 *.patch
 .venv/
+benchmarks/results/
