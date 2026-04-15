@@ -19,6 +19,7 @@ import { runSymbolTableSuite } from './suites/symbolTable.bench.js';
 import { runProviderSuite } from './suites/providers.bench.js';
 import { runMemorySuite } from './suites/memory.bench.js';
 import { runThroughputSuite } from './suites/throughput.bench.js';
+import { runFolderLoadSuite } from './suites/folderLoad.bench.js';
 import { buildReport, writeReport, writeBaseline, loadBaseline, type SuiteReport } from './reporters/jsonReporter.js';
 import { compareReports, formatRegressionSummary } from './utils/regression.js';
 import type { BenchmarkOptions } from './utils/harness.js';
@@ -92,7 +93,7 @@ function printHelp(): void {
 SysML v2 LSP Benchmark Runner
 
 Options:
-  --suite <name>     Run specific suite (parse|symbolTable|providers|memory|throughput)
+  --suite <name>     Run specific suite (parse|symbolTable|providers|memory|throughput|folderLoad)
                      Can be repeated. Default: all suites.
   --baseline         Save current results as the baseline for regression comparison.
   --compare          Compare against saved baseline and exit 1 on regression.
@@ -105,18 +106,21 @@ Options:
 }
 
 // ── Suite registry ──────────────────────────────────────────────────
-const SUITE_RUNNERS: Record<string, (opts: BenchmarkOptions) => SuiteReport> = {
+type SuiteRunner = (opts: BenchmarkOptions) => SuiteReport | Promise<SuiteReport>;
+
+const SUITE_RUNNERS: Record<string, SuiteRunner> = {
     parse: runParseSuite,
     symbolTable: runSymbolTableSuite,
     providers: runProviderSuite,
     memory: runMemorySuite,
     throughput: runThroughputSuite,
+    folderLoad: runFolderLoadSuite,
 };
 
 const ALL_SUITES = Object.keys(SUITE_RUNNERS);
 
 // ── Main ────────────────────────────────────────────────────────────
-function main(): void {
+async function main(): Promise<void> {
     const cli = parseArgs();
     const suitesToRun = cli.suites.length > 0 ? cli.suites : ALL_SUITES;
     const benchOpts: BenchmarkOptions = { runs: cli.runs, warmup: cli.warmup };
@@ -143,7 +147,7 @@ function main(): void {
     for (const name of suitesToRun) {
         console.log(`── Running suite: ${name} ${'─'.repeat(50 - name.length)}`);
         const start = performance.now();
-        const report = SUITE_RUNNERS[name](benchOpts);
+        const report = await SUITE_RUNNERS[name](benchOpts);
         const elapsed = performance.now() - start;
 
         suiteReports.push(report);

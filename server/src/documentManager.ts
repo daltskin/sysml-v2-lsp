@@ -1,6 +1,6 @@
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { Diagnostic } from 'vscode-languageserver/node.js';
-import { parseDocument, ParseResult } from './parser/parseDocument.js';
+import { parseDocument, parseDocumentBatch, ParseResult } from './parser/parseDocument.js';
 import { SymbolTable } from './symbols/symbolTable.js';
 import { stripComments } from './utils/identUtils.js';
 
@@ -30,6 +30,30 @@ export class DocumentManager {
 
         const text = document.getText();
         const result = parseDocument(text);
+
+        this.cache.set(uri, {
+            version,
+            text,
+            result,
+            needsParse: false,
+        });
+
+        return result;
+    }
+
+    /**
+     * Parse a document using the batch-optimised path (reuses lexer/parser
+     * instances across calls).  Use this for workspace scanning where many
+     * files are parsed sequentially and the per-file constructor overhead
+     * matters.
+     */
+    parseBatch(uri: string, version: number, text: string): ParseResult {
+        const cached = this.cache.get(uri);
+        if (cached && cached.version === version && !cached.needsParse) {
+            return cached.result;
+        }
+
+        const result = parseDocumentBatch(text);
 
         this.cache.set(uri, {
             version,

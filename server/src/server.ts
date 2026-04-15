@@ -51,6 +51,7 @@ import { ReferencesProvider } from './providers/referencesProvider.js';
 import { RenameProvider } from './providers/renameProvider.js';
 import { SemanticTokensProvider, tokenModifiers, tokenTypes } from './providers/semanticTokensProvider.js';
 import { SemanticValidator } from './providers/semanticValidator.js';
+import { findSysMLFiles, findSysMLFilesAsync, readFilesBatch, DEFAULT_SKIP_DIRS } from './utils/fileDiscovery.js';
 
 /** Convert a file:// URI to a filesystem path, returning undefined for non-file URIs. */
 function toFsPath(uri: string): string | undefined {
@@ -96,6 +97,9 @@ let workspaceRoots: string[] = [];
 
 /** True when the client opened a `.code-workspace` file (multi-file project). */
 let isWorkspaceFile = false;
+
+/** User-configurable set of directory names to skip during workspace scan. */
+let skipDirs: ReadonlySet<string> = new Set(DEFAULT_SKIP_DIRS);
 
 /** Set to true after onInitialized completes (DFA loaded, library indexed). */
 let serverReady = false;
@@ -352,6 +356,8 @@ connection.onInitialized(() => {
             DidChangeConfigurationNotification.type,
             undefined
         );
+        // Pull initial settings from the client
+        pullSettings().catch(() => { /* best effort */ });
     }
 
     // Bootstrap the standard library index for Go-to-Definition on
@@ -411,44 +417,38 @@ connection.onInitialized(() => {
 });
 
 // --------------------------------------------------------------------------
-// Workspace file scanning
+// Settings
 // --------------------------------------------------------------------------
 
 /**
- * Recursively find all .sysml files under a directory.
+ * Fetch the current sysml.scan settings from the client and apply them.
  */
-function findSysMLFiles(dir: string): string[] {
-    const results: string[] = [];
-    let entries: fs.Dirent[];
-    try {
-        entries = fs.readdirSync(dir, { withFileTypes: true });
-    } catch {
-        return results;
-    }
-    for (const entry of entries) {
-        const fullPath = path.join(dir, entry.name);
-        if (entry.isDirectory()) {
-            // Skip directories that are unlikely to contain project files
-            const name = entry.name;
-            if (name === 'node_modules' || name === '.git' ||
-                name === 'temp' || name === 'test' || name === 'tests' ||
-                name === 'out' || name === 'dist' || name === 'build' ||
-                name === 'coverage' || name === '.venv' || name === '__pycache__') {
-                continue;
-            }
-            // Skip nested repositories — they are independent projects
-            // whose files should not be loaded into this workspace.
-            try {
-                fs.statSync(path.join(fullPath, '.git'));
-                continue; // has .git → skip
-            } catch { /* no .git → recurse */ }
-            results.push(...findSysMLFiles(fullPath));
-        } else if (entry.isFile() && (entry.name.endsWith('.sysml') || entry.name.endsWith('.kerml'))) {
-            results.push(fullPath);
-        }
-    }
-    return results;
+async function pullSettings(): Promise<void> {
+    if (!hasConfigurationCapability) return;
+    const config = await connection.workspace.getConfiguration('sysml.scan');
+    applySettings(config);
 }
+
+/**
+ * Apply a settings object from the client.
+ */
+function applySettings(config: Record<string, unknown> | undefined): void {
+    if (!config) return;
+    const raw = config.skipDirectories;
+    if (Array.isArray(raw) && raw.every((v: unknown) => typeof v === 'string')) {
+        skipDirs = new Set(raw as string[]);
+    }
+}
+
+connection.onDidChangeConfiguration((_change) => {
+    // Re-fetch settings from the client (LSP spec says the notification
+    // payload format varies by client, so always pull explicitly).
+    pullSettings().catch(() => { /* best effort */ });
+});
+
+// --------------------------------------------------------------------------
+// Workspace file scanning
+// --------------------------------------------------------------------------
 
 /**
  * Pre-parse a .sysml file from disk into the document manager
@@ -476,7 +476,7 @@ function parseWorkspaceFile(filePath: string): boolean {
  * Scan a workspace folder root and pre-parse all .sysml files found.
  */
 function scanWorkspaceFolder(root: string): number {
-    const files = findSysMLFiles(root);
+    const files = findSysMLFiles(root, skipDirs);
     let count = 0;
     for (const f of files) {
         if (parseWorkspaceFile(f)) count++;
@@ -485,26 +485,44 @@ function scanWorkspaceFolder(root: string): number {
 }
 
 /**
- * Asynchronously scan workspace folders, yielding between files
- * so the LSP event loop stays responsive during startup.
+ * Asynchronously scan workspace folders with concurrent file discovery
+ * and reading, then parse sequentially using the batch parser.
+ *
+ * Pipeline: discover files (async) → read all files (concurrent batches)
+ * → parse each file (sequential, batch-optimised) → yield periodically.
  */
 async function scanWorkspaceFoldersAsync(
     roots: string[],
 ): Promise<{ fileCount: number; scanMs: number }> {
     const scanT0 = Date.now();
-    let fileCount = 0;
+
+    // Phase 1: Discover all .sysml/.kerml files concurrently
+    const fileArrays = await Promise.all(roots.map(r => findSysMLFilesAsync(r, skipDirs)));
     const allFiles: string[] = [];
-    for (const root of roots) {
-        allFiles.push(...findSysMLFiles(root));
-    }
+    for (const arr of fileArrays) allFiles.push(...arr);
+
+    // Phase 2: Read all file contents concurrently (batches of 32)
+    const fileContents = await readFilesBatch(allFiles, 32);
+
+    // Phase 3: Parse sequentially using batch-optimised parser (shared instances)
+    let fileCount = 0;
     for (let i = 0; i < allFiles.length; i++) {
-        if (parseWorkspaceFile(allFiles[i])) fileCount++;
-        // Yield every 4 files so pending LSP requests (hover, completion)
-        // can be served without waiting for the full scan.
+        const filePath = allFiles[i];
+        const uri = pathToFileURL(filePath).toString();
+        // Don't overwrite documents the editor has open
+        if (documents.get(uri)) continue;
+        const content = fileContents.get(filePath);
+        if (content === undefined) continue;
+
+        documentManager.parseBatch(uri, 0, content);
+        fileCount++;
+
+        // Yield every 4 files so pending LSP requests can be served
         if ((i + 1) % 4 === 0) {
             await new Promise<void>(resolve => setImmediate(resolve));
         }
     }
+
     return { fileCount, scanMs: Date.now() - scanT0 };
 }
 
@@ -654,12 +672,16 @@ async function validateDocument(document: TextDocument): Promise<void> {
     // The worker posts diagnostics back via handleWorkerMessage,
     // which also kicks off the main-thread parse for the symbol table.
     if (requestWorkerParse(document)) {
-        // Still parse on the main thread so the semantic tokens provider
-        // and symbol table are available immediately when VS Code
-        // requests them.  The result is cached by version, so the
-        // setImmediate handler's parse() in handleWorkerMessage is a
-        // free cache hit.
-        documentManager.parse(document);
+        // Cache the text without parsing — the ANTLR parse is deferred
+        // until a provider actually needs the parse tree or symbol
+        // table (lazy via ensureParsed).  The worker handles fast
+        // diagnostics; the main-thread parse in handleWorkerMessage's
+        // setImmediate callback is the single parse for this version.
+        documentManager.cacheTextOnly(
+            document.uri,
+            document.version,
+            document.getText(),
+        );
         return;
     }
 

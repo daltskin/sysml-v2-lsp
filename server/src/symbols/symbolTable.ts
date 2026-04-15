@@ -7,6 +7,148 @@ import { SYSML_KEYWORDS } from '../utils/sysmlKeywords.js';
 import { Scope } from './scope.js';
 import { SysMLElementKind, SysMLSymbol, isUsage as isUsageKind } from './sysmlElements.js';
 
+// ── ruleIndex-based lookup tables ───────────────────────────────────
+// These replace the toLowerCase() + string-comparison chains with O(1)
+// numeric lookups, eliminating hundreds of thousands of short-lived
+// string allocations during multi-file symbol table construction.
+
+/** Map ruleIndex → SysMLElementKind for inferKind() */
+const RULE_INDEX_TO_KIND = new Map<number, SysMLElementKind>([
+    [SysMLv2Parser.RULE_package, SysMLElementKind.Package],                       // 178
+    [SysMLv2Parser.RULE_libraryPackage, SysMLElementKind.Package],                // 179
+    [SysMLv2Parser.RULE_partDefinition, SysMLElementKind.PartDef],                // 246
+    [SysMLv2Parser.RULE_attributeDefinition, SysMLElementKind.AttributeDef],      // 223
+    [SysMLv2Parser.RULE_portDefinition, SysMLElementKind.PortDef],                // 248
+    [SysMLv2Parser.RULE_connectionDefinition, SysMLElementKind.ConnectionDef],    // 253
+    [SysMLv2Parser.RULE_interfaceDefinition, SysMLElementKind.InterfaceDef],      // 260
+    [SysMLv2Parser.RULE_actionDefinition, SysMLElementKind.ActionDef],            // 287
+    [SysMLv2Parser.RULE_stateDefinition, SysMLElementKind.StateDef],              // 343
+    [SysMLv2Parser.RULE_requirementDefinition, SysMLElementKind.RequirementDef],  // 384
+    [SysMLv2Parser.RULE_constraintDefinition, SysMLElementKind.ConstraintDef],    // 380
+    [SysMLv2Parser.RULE_itemDefinition, SysMLElementKind.ItemDef],                // 244
+    [SysMLv2Parser.RULE_allocationDefinition, SysMLElementKind.AllocationDef],    // 275
+    [SysMLv2Parser.RULE_useCaseDefinition, SysMLElementKind.UseCaseDef],          // 418
+    [SysMLv2Parser.RULE_enumerationDefinition, SysMLElementKind.EnumDef],         // 225
+    [SysMLv2Parser.RULE_enumeratedValue, SysMLElementKind.EnumUsage],             // 228
+    [SysMLv2Parser.RULE_enumerationUsage, SysMLElementKind.EnumUsage],            // 229
+    [SysMLv2Parser.RULE_calculationDefinition, SysMLElementKind.CalcDef],         // 374
+    [SysMLv2Parser.RULE_viewDefinition, SysMLElementKind.ViewDef],                // 421
+    [SysMLv2Parser.RULE_viewpointDefinition, SysMLElementKind.ViewpointDef],      // 432
+    [SysMLv2Parser.RULE_metadataDefinition, SysMLElementKind.MetadataDef],        // 436
+    [SysMLv2Parser.RULE_partUsage, SysMLElementKind.PartUsage],                   // 247
+    [SysMLv2Parser.RULE_attributeUsage, SysMLElementKind.AttributeUsage],         // 224
+    [SysMLv2Parser.RULE_portUsage, SysMLElementKind.PortUsage],                   // 251
+    [SysMLv2Parser.RULE_connectionUsage, SysMLElementKind.ConnectionUsage],       // 254
+    [SysMLv2Parser.RULE_actionUsage, SysMLElementKind.ActionUsage],               // 296
+    [SysMLv2Parser.RULE_stateUsage, SysMLElementKind.StateUsage],                 // 357
+    [SysMLv2Parser.RULE_requirementUsage, SysMLElementKind.RequirementUsage],     // 398
+    [SysMLv2Parser.RULE_constraintUsage, SysMLElementKind.ConstraintUsage],       // 381
+    [SysMLv2Parser.RULE_itemUsage, SysMLElementKind.ItemUsage],                   // 245
+    [SysMLv2Parser.RULE_allocationUsage, SysMLElementKind.AllocationUsage],       // 276
+    [SysMLv2Parser.RULE_useCaseUsage, SysMLElementKind.UseCaseUsage],             // 419
+    [SysMLv2Parser.RULE_includeUseCaseUsage, SysMLElementKind.IncludeUseCaseUsage], // 420
+    [SysMLv2Parser.RULE_actorUsage, SysMLElementKind.ActorUsage],                 // 395
+    [SysMLv2Parser.RULE_subjectUsage, SysMLElementKind.SubjectUsage],             // 388
+    [SysMLv2Parser.RULE_stakeholderUsage, SysMLElementKind.StakeholderUsage],     // 397
+    [SysMLv2Parser.RULE_referenceUsage, SysMLElementKind.RefUsage],               // 213
+    [SysMLv2Parser.RULE_interfaceUsage, SysMLElementKind.InterfaceUsage],         // 268
+    [SysMLv2Parser.RULE_performActionUsage, SysMLElementKind.PerformActionUsage], // 298
+    [SysMLv2Parser.RULE_exhibitStateUsage, SysMLElementKind.ExhibitStateUsage],   // 359
+    [SysMLv2Parser.RULE_transitionUsage, SysMLElementKind.TransitionUsage],       // 360
+    [SysMLv2Parser.RULE_occurrenceDefinition, SysMLElementKind.OccurrenceDef],    // 231
+    [SysMLv2Parser.RULE_occurrenceUsage, SysMLElementKind.OccurrenceUsage],       // 235
+    [SysMLv2Parser.RULE_renderingDefinition, SysMLElementKind.RenderingDef],      // 434
+    [SysMLv2Parser.RULE_viewUsage, SysMLElementKind.ViewUsage],                   // 426
+    [SysMLv2Parser.RULE_viewpointUsage, SysMLElementKind.ViewpointUsage],         // 433
+    [SysMLv2Parser.RULE_verificationCaseDefinition, SysMLElementKind.VerificationCaseDef], // 414
+    [SysMLv2Parser.RULE_verificationCaseUsage, SysMLElementKind.VerificationCaseUsage],   // 415
+    [SysMLv2Parser.RULE_analysisCaseDefinition, SysMLElementKind.AnalysisCaseDef],        // 412
+    [SysMLv2Parser.RULE_analysisCaseUsage, SysMLElementKind.AnalysisCaseUsage],           // 413
+    [SysMLv2Parser.RULE_aliasMember, SysMLElementKind.Alias],                     // 43
+]);
+
+/** Rules whose children contain a name (identification, name, qualifiedName) */
+const NAME_RULE_INDICES: ReadonlySet<number> = new Set([
+    SysMLv2Parser.RULE_identification,  // 22
+    SysMLv2Parser.RULE_name,            // 20
+    SysMLv2Parser.RULE_qualifiedName,   // 44
+]);
+
+/** Rules that are prefix/extension contexts — should be skipped in name extraction */
+const PREFIX_EXTENSION_RULE_INDICES: ReadonlySet<number> = new Set([
+    SysMLv2Parser.RULE_prefixMetadataAnnotation,   // 169
+    SysMLv2Parser.RULE_prefixMetadataMember,        // 170
+    SysMLv2Parser.RULE_prefixMetadataFeature,       // 171
+    SysMLv2Parser.RULE_prefixMetadataUsage,         // 437
+    SysMLv2Parser.RULE_definitionExtensionKeyword,  // 190
+    SysMLv2Parser.RULE_usageExtensionKeyword,       // 205
+    SysMLv2Parser.RULE_occurrenceDefinitionPrefix,  // 230
+    SysMLv2Parser.RULE_occurrenceUsagePrefix,       // 234
+    SysMLv2Parser.RULE_definitionPrefix,            // 191
+    SysMLv2Parser.RULE_basicDefinitionPrefix,       // 189
+    SysMLv2Parser.RULE_typePrefix,                  // 55
+    SysMLv2Parser.RULE_featurePrefix,               // 88
+    SysMLv2Parser.RULE_basicFeaturePrefix,          // 87
+    SysMLv2Parser.RULE_endFeaturePrefix,            // 86
+]);
+
+/** Rules containing typing / specialization info for collectTypeNamesFromTree() */
+const TYPE_EXTRACTION_RULE_INDICES: ReadonlySet<number> = new Set([
+    SysMLv2Parser.RULE_specialization,          // 66
+    SysMLv2Parser.RULE_ownedSpecialization,      // 67
+    SysMLv2Parser.RULE_subclassification,        // 83
+    SysMLv2Parser.RULE_ownedSubclassification,   // 84
+    SysMLv2Parser.RULE_typings,                  // 101
+    SysMLv2Parser.RULE_featureTyping,            // 109
+    SysMLv2Parser.RULE_ownedFeatureTyping,       // 110
+    SysMLv2Parser.RULE_conjugation,              // 70
+    SysMLv2Parser.RULE_ownedConjugation,         // 71
+    SysMLv2Parser.RULE_disjoining,               // 72
+    SysMLv2Parser.RULE_ownedDisjoining,          // 73
+    SysMLv2Parser.RULE_subsetting,               // 111
+    SysMLv2Parser.RULE_ownedSubsetting,          // 112
+    SysMLv2Parser.RULE_specializationPart,       // 57
+]);
+
+/** Rules to recurse into when looking for type names */
+const TYPE_RECURSE_RULE_INDICES: ReadonlySet<number> = new Set([
+    SysMLv2Parser.RULE_featureSpecialization,     // 100
+    SysMLv2Parser.RULE_featureSpecializationPart, // 98
+    SysMLv2Parser.RULE_featureDeclaration,        // 92
+    SysMLv2Parser.RULE_usageCompletion,           // 210
+    SysMLv2Parser.RULE_definition,                // 192
+    SysMLv2Parser.RULE_usage,                     // 208
+]);
+
+/** Rules containing documentation */
+const DOC_RULE_INDICES: ReadonlySet<number> = new Set([
+    SysMLv2Parser.RULE_comment,          // 30
+    SysMLv2Parser.RULE_documentation,    // 31
+]);
+
+/** Rules for prefix metadata in collectPrefixMetadata() */
+const PREFIX_METADATA_RULE_INDICES: ReadonlySet<number> = new Set([
+    SysMLv2Parser.RULE_prefixMetadataMember,      // 170
+    SysMLv2Parser.RULE_prefixMetadataAnnotation,  // 169
+]);
+
+/** Rules to recurse into for prefix metadata collection */
+const PREFIX_METADATA_RECURSE_RULE_INDICES: ReadonlySet<number> = new Set([
+    SysMLv2Parser.RULE_prefixMetadataFeature,      // 171
+    SysMLv2Parser.RULE_prefixMetadataUsage,         // 437
+    SysMLv2Parser.RULE_definitionExtensionKeyword,  // 190
+    SysMLv2Parser.RULE_usageExtensionKeyword,       // 205
+    SysMLv2Parser.RULE_definitionPrefix,            // 191
+    SysMLv2Parser.RULE_basicDefinitionPrefix,       // 189
+    SysMLv2Parser.RULE_definition,                  // 192
+    SysMLv2Parser.RULE_usage,                       // 208
+    SysMLv2Parser.RULE_occurrenceDefinitionPrefix,  // 230
+    SysMLv2Parser.RULE_occurrenceUsagePrefix,       // 234
+    SysMLv2Parser.RULE_usagePrefix,                 // 207
+    SysMLv2Parser.RULE_unextendedUsagePrefix,       // 206
+    SysMLv2Parser.RULE_basicUsagePrefix,            // 203
+]);
+
 // Pre-compiled regex patterns for extractTypeNames() — compiled once at import time
 const RE_KEYWORD_TRUNCATE = /(redefines|subsets|references|connect|bind|first|then|flow|allocate|assign|accept|send|decide|merge|join|fork|via|default)\b.*/i;
 const RE_SPEC = /(?:specializes|:>|:>>)\s*('[^']+'|[A-Za-z_]\w*(?:::\w+)*)(?:\s*,\s*(?:'[^']+'|[A-Za-z_]\w*(?:::\w+)*))*/;
@@ -396,76 +538,14 @@ export class SymbolTable {
     }
 
     /**
-     * Infer the SysML element kind from the ANTLR rule name.
+     * Infer the SysML element kind from the ANTLR rule index.
+     * Uses a pre-built Map for O(1) lookup — no string allocation.
      */
     private inferKind(
-        ruleName: string,
-        _ctx: ParserRuleContext,
+        _ruleName: string,
+        ctx: ParserRuleContext,
     ): SysMLElementKind | undefined {
-        const lower = ruleName.toLowerCase();
-
-        // Package - match at the Package level (not PackageDeclaration) so that
-        // the sibling PackageBody inherits the package's qualified name.
-        if (lower === 'package' || lower === 'librarypackage') {
-            return SysMLElementKind.Package;
-        }
-
-        // Definitions - use exact match or prefix match to avoid false positives
-        if (lower === 'partdefinition') return SysMLElementKind.PartDef;
-        if (lower === 'attributedefinition') return SysMLElementKind.AttributeDef;
-        if (lower === 'portdefinition') return SysMLElementKind.PortDef;
-        if (lower === 'connectiondefinition') return SysMLElementKind.ConnectionDef;
-        if (lower === 'interfacedefinition') return SysMLElementKind.InterfaceDef;
-        if (lower === 'actiondefinition') return SysMLElementKind.ActionDef;
-        if (lower === 'statedefinition') return SysMLElementKind.StateDef;
-        if (lower === 'requirementdefinition') return SysMLElementKind.RequirementDef;
-        if (lower === 'constraintdefinition') return SysMLElementKind.ConstraintDef;
-        if (lower === 'itemdefinition') return SysMLElementKind.ItemDef;
-        if (lower === 'allocationdefinition') return SysMLElementKind.AllocationDef;
-        if (lower === 'usecasedefinition') return SysMLElementKind.UseCaseDef;
-        if (lower === 'enumerationdefinition') return SysMLElementKind.EnumDef;
-        if (lower === 'enumeratedvalue') return SysMLElementKind.EnumUsage;
-        if (lower === 'enumerationusage') return SysMLElementKind.EnumUsage;
-        if (lower === 'calculationdefinition' || lower === 'calcdefinition') return SysMLElementKind.CalcDef;
-        if (lower === 'viewdefinition') return SysMLElementKind.ViewDef;
-        if (lower === 'viewpointdefinition') return SysMLElementKind.ViewpointDef;
-        if (lower === 'metadatadefinition') return SysMLElementKind.MetadataDef;
-
-        // Usages - use exact match
-        if (lower === 'partusage') return SysMLElementKind.PartUsage;
-        if (lower === 'attributeusage') return SysMLElementKind.AttributeUsage;
-        if (lower === 'portusage') return SysMLElementKind.PortUsage;
-        if (lower === 'connectionusage') return SysMLElementKind.ConnectionUsage;
-        if (lower === 'actionusage') return SysMLElementKind.ActionUsage;
-        if (lower === 'stateusage') return SysMLElementKind.StateUsage;
-        if (lower === 'requirementusage') return SysMLElementKind.RequirementUsage;
-        if (lower === 'constraintusage') return SysMLElementKind.ConstraintUsage;
-        if (lower === 'itemusage') return SysMLElementKind.ItemUsage;
-        if (lower === 'allocationusage') return SysMLElementKind.AllocationUsage;
-        if (lower === 'usecaseusage') return SysMLElementKind.UseCaseUsage;
-        if (lower === 'includeusecaseusage') return SysMLElementKind.IncludeUseCaseUsage;
-        if (lower === 'actorusage') return SysMLElementKind.ActorUsage;
-        if (lower === 'subjectusage') return SysMLElementKind.SubjectUsage;
-        if (lower === 'stakeholderusage') return SysMLElementKind.StakeholderUsage;
-        if (lower === 'referenceusage') return SysMLElementKind.RefUsage;
-        if (lower === 'interfaceusage') return SysMLElementKind.InterfaceUsage;
-        if (lower === 'performactionusage') return SysMLElementKind.PerformActionUsage;
-        if (lower === 'exhibitstateusage') return SysMLElementKind.ExhibitStateUsage;
-        if (lower === 'transitionusage') return SysMLElementKind.TransitionUsage;
-        if (lower === 'occurrencedefinition') return SysMLElementKind.OccurrenceDef;
-        if (lower === 'occurrenceusage') return SysMLElementKind.OccurrenceUsage;
-        if (lower === 'renderingdefinition') return SysMLElementKind.RenderingDef;
-        if (lower === 'viewusage') return SysMLElementKind.ViewUsage;
-        if (lower === 'viewpointusage') return SysMLElementKind.ViewpointUsage;
-        if (lower === 'verificationcasedefinition') return SysMLElementKind.VerificationCaseDef;
-        if (lower === 'verificationcaseusage') return SysMLElementKind.VerificationCaseUsage;
-        if (lower === 'analysiscasedefinition') return SysMLElementKind.AnalysisCaseDef;
-        if (lower === 'analysiscaseusage') return SysMLElementKind.AnalysisCaseUsage;
-
-        // Alias member
-        if (lower === 'aliasmember') return SysMLElementKind.Alias;
-
-        return undefined;
+        return RULE_INDEX_TO_KIND.get(ctx.ruleIndex);
     }
 
     /**
@@ -488,13 +568,7 @@ export class SymbolTable {
 
             // Check child rules named 'identification', 'declarationUsageName', etc.
             if (child instanceof ParserRuleContext) {
-                const childRule = this.getRuleName(child);
-                if (
-                    childRule.toLowerCase().includes('identification') ||
-                    childRule.toLowerCase().includes('declarationname') ||
-                    childRule.toLowerCase().includes('qualifiedname') ||
-                    childRule.toLowerCase() === 'name'
-                ) {
+                if (NAME_RULE_INDICES.has(child.ruleIndex)) {
                     const name = this.extractTextFromSubtree(child);
                     if (name) return name;
                 }
@@ -631,14 +705,8 @@ export class SymbolTable {
         for (let i = 0; i < ctx.getChildCount(); i++) {
             const child = ctx.getChild(i);
             if (!(child instanceof ParserRuleContext)) continue;
-            const rn = this.getRuleName(child).toLowerCase();
-            if (
-                rn.includes('specialization') ||
-                rn.includes('subclassification') ||
-                rn.includes('typing') ||
-                rn.includes('conjugation') ||
-                rn.includes('disjoining')
-            ) {
+            const ri = child.ruleIndex;
+            if (TYPE_EXTRACTION_RULE_INDICES.has(ri)) {
                 // These rules contain qualified-name children;
                 // extract all identifier-like tokens.
                 const childText = child.getText();
@@ -659,14 +727,10 @@ export class SymbolTable {
                 // Recurse into declaration / part / body wrappers that may
                 // contain nested typing rules (but NOT into body rules that
                 // contain children — to avoid collecting types from members).
-                // Do NOT recurse into redefinitions/subsettings — those
-                // reference existing features, not this symbol's type.
-                rn.includes('declaration') ||
-                rn.includes('featurespecialization') ||
-                rn.includes('typings') ||
-                rn.includes('usagecompletion') ||
-                rn === 'usage' ||
-                rn === 'definition'
+                TYPE_RECURSE_RULE_INDICES.has(ri) ||
+                // Also recurse into any rule whose name contains 'declaration'
+                // (covers e.g. interfaceUsageDeclaration, usageDeclaration, etc.)
+                SysMLv2Parser.ruleNames[ri]?.includes('eclaration')
             ) {
                 this.collectTypeNamesFromTree(child, names, depth + 1);
             }
@@ -680,8 +744,7 @@ export class SymbolTable {
         for (let i = 0; i < ctx.getChildCount(); i++) {
             const child = ctx.getChild(i);
             if (child instanceof ParserRuleContext) {
-                const ruleName = this.getRuleName(child).toLowerCase();
-                if (ruleName.includes('comment') || ruleName.includes('doc') || ruleName.includes('documentation')) {
+                if (DOC_RULE_INDICES.has(child.ruleIndex)) {
                     // Get the raw text and strip the comment delimiters
                     const raw = child.getText();
                     if (raw) {
@@ -802,19 +865,7 @@ export class SymbolTable {
      * not be mistaken for the element's own declared name.
      */
     private isPrefixOrExtensionContext(ctx: ParserRuleContext): boolean {
-        const rule = this.getRuleName(ctx).toLowerCase();
-        return (
-            rule.includes('prefixmetadata') ||
-            rule.includes('extensionkeyword') ||
-            rule === 'occurrencedefinitionprefix' ||
-            rule === 'occurrenceusageprefix' ||
-            rule === 'definitionprefix' ||
-            rule === 'basicdefinitionprefix' ||
-            rule === 'typeprefix' ||
-            rule === 'featureprefix' ||
-            rule === 'basicfeatureprefix' ||
-            rule === 'endfeatureprefix'
-        );
+        return PREFIX_EXTENSION_RULE_INDICES.has(ctx.ruleIndex);
     }
 
     /**
@@ -832,16 +883,11 @@ export class SymbolTable {
         for (let i = 0; i < ctx.getChildCount(); i++) {
             const child = ctx.getChild(i);
             if (!(child instanceof ParserRuleContext)) continue;
-            const rule = this.getRuleName(child).toLowerCase();
-            if (rule === 'prefixmetadatamember' || rule === 'prefixmetadataannotation') {
+            const ri = child.ruleIndex;
+            if (PREFIX_METADATA_RULE_INDICES.has(ri)) {
                 const name = this.extractTextFromSubtree(child);
                 if (name) annotations.push(name);
-            } else if (
-                rule.includes('prefix') ||
-                rule.includes('extensionkeyword') ||
-                rule === 'definition' ||
-                rule === 'usage'
-            ) {
+            } else if (PREFIX_METADATA_RECURSE_RULE_INDICES.has(ri)) {
                 // Recurse into prefix/wrapper rules that may contain nested annotations
                 this.collectPrefixMetadata(child, annotations, depth + 1);
             }

@@ -951,8 +951,14 @@ describe('Hover Provider', () => {
         const usage = st.findByName('e')[0];
         expect(usage).toBeDefined();
 
+        // Pre-populate semantic diagnostics — hover no longer triggers
+        // validation itself (it uses cached diagnostics only).
+        const validator = new SemanticValidator(dm);
+        const semanticDiags = validator.validate(uri);
+        dm.setSemanticDiagnostics(uri, semanticDiags);
+
         const provider = new HoverProvider(dm);
-        provider.setSemanticValidator(new SemanticValidator(dm));
+        provider.setSemanticValidator(validator);
         const hover = provider.provideHover({
             textDocument: { uri },
             position: {

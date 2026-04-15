@@ -181,3 +181,101 @@ function parseDocumentLL(text: string, prevLexer?: SysMLv2Lexer, prevTokenStream
         timing: { lexMs, parseMs },
     };
 }
+
+// ── Batch parsing with instance reuse ───────────────────────────────
+// Reuses a single SysMLv2Lexer and SysMLv2Parser instance across
+// multiple files to avoid per-file constructor overhead.  The DFA
+// cache is static (shared across all instances anyway), but the
+// lexer/parser objects themselves carry non-trivial state that is
+// expensive to re-initialise 279+ times during a workspace scan.
+
+/** Shared lexer instance for batch parsing — lazily created. */
+let _batchLexer: SysMLv2Lexer | undefined;
+/** Shared parser instance for batch parsing — lazily created. */
+let _batchParser: SysMLv2Parser | undefined;
+/** Shared error strategy instances to avoid per-parse allocation. */
+const _batchBailStrategy = new BailErrorStrategy();
+const _batchDefaultStrategy = new DefaultErrorStrategy();
+
+function getBatchLexer(input: CharStream): SysMLv2Lexer {
+    if (!_batchLexer) {
+        _batchLexer = new SysMLv2Lexer(input);
+    } else {
+        _batchLexer.inputStream = input;
+        _batchLexer.reset();
+    }
+    _batchLexer.removeErrorListeners();
+    return _batchLexer;
+}
+
+function getBatchParser(tokenStream: CommonTokenStream): SysMLv2Parser {
+    if (!_batchParser) {
+        _batchParser = new SysMLv2Parser(tokenStream);
+    } else {
+        _batchParser.tokenStream = tokenStream;
+    }
+    _batchParser.removeErrorListeners();
+    return _batchParser;
+}
+
+/**
+ * Parse a SysML document reusing shared lexer/parser instances.
+ *
+ * Designed for batch / workspace-scan scenarios where many files are
+ * parsed sequentially.  Avoids allocating new Lexer/Parser objects
+ * per file while preserving the SLL→LL two-stage strategy.
+ *
+ * IMPORTANT: The returned ParseResult references the shared parser/lexer
+ * instances, so callers must NOT hold references across multiple calls.
+ * The DocumentManager only retains tree + tokenStream + errors, which
+ * is fine.
+ */
+export function parseDocumentBatch(text: string): ParseResult {
+    const inputStream = CharStream.fromString(text);
+    const lexer = getBatchLexer(inputStream);
+    const tokenStream = new CommonTokenStream(lexer);
+
+    const lexStart = Date.now();
+    tokenStream.fill();
+    const lexMs = Date.now() - lexStart;
+
+    const parser = getBatchParser(tokenStream);
+    const errorListener = new SysMLErrorListener();
+
+    let tree: ParserRuleContext | null = null;
+    const parseStart = Date.now();
+
+    // Stage 1: SLL (fast path)
+    try {
+        parser.interpreter.predictionMode = PredictionMode.SLL;
+        parser.errorHandler = _batchBailStrategy;
+        tree = parser.rootNamespace();
+    } catch {
+        tree = null;
+    }
+
+    if (!tree) {
+        // Stage 2: LL (full context)
+        tokenStream.seek(0);
+        parser.reset();
+        parser.interpreter.predictionMode = PredictionMode.LL;
+        parser.errorHandler = _batchDefaultStrategy;
+        parser.addErrorListener(errorListener);
+        try {
+            tree = parser.rootNamespace();
+        } catch {
+            // If parsing fails completely, tree remains null
+        }
+    }
+
+    const parseMs = Date.now() - parseStart;
+
+    return {
+        tree,
+        tokenStream,
+        parser,
+        lexer,
+        errors: errorListener.getErrors(),
+        timing: { lexMs, parseMs },
+    };
+}

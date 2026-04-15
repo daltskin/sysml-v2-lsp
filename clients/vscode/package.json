@@ -7,6 +7,24 @@
   "engines": {
     "vscode": "^1.85.0"
   },
+  "contributes": {
+    "configuration": {
+      "title": "SysML v2",
+      "properties": {
+        "sysml.scan.skipDirectories": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [
+            "node_modules", ".git", ".settings",
+            "temp", "test", "tests",
+            "out", "dist", "build", "coverage",
+            ".venv", "__pycache__"
+          ],
+          "markdownDescription": "Directory names to skip when scanning the workspace for `.sysml` / `.kerml` files. Changes take effect on the next workspace scan or server restart."
+        }
+      }
+    }
+  },
   "dependencies": {
     "vscode-languageclient": "^9.0.1"
   },

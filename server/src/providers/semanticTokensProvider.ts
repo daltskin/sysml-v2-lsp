@@ -87,12 +87,23 @@ export const tokenModifiers = [
  * editor and Copilot/MCP chat highlighting agree.
  */
 export class SemanticTokensProvider {
+    /** Cached semantic tokens keyed by URI + version. */
+    private tokenCache?: { uri: string; version: number; tokens: SemanticTokens };
+
     constructor(private documentManager: DocumentManager) { }
 
     provideSemanticTokens(params: SemanticTokensParams): SemanticTokens {
+        const uri = params.textDocument.uri;
+        const version = this.documentManager.getVersion(uri);
+
+        // Return cached tokens if the document hasn't changed.
+        if (this.tokenCache && this.tokenCache.uri === uri && this.tokenCache.version === version) {
+            return this.tokenCache.tokens;
+        }
+
         const builder = new SemanticTokensBuilder();
 
-        const result = this.documentManager.get(params.textDocument.uri);
+        const result = this.documentManager.get(uri);
         if (!result) {
             return builder.build();
         }
@@ -125,7 +136,12 @@ export class SemanticTokensProvider {
             builder.push(line, char, length, tokenType, 0);
         }
 
-        return builder.build();
+        const built = builder.build();
+
+        // Cache the result for this URI + version.
+        this.tokenCache = { uri, version, tokens: built };
+
+        return built;
     }
 
     /**

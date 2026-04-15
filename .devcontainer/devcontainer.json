@@ -7,6 +7,9 @@
       "installJupyterlab": false
     }
   },
+  "mounts": [
+  "source=D:\\apollo-11,target=/workspaces/apollo-11,type=bind"
+  ],
   "postCreateCommand": "npm install && npm run generate && pip3 install --user jupyter ipykernel notebook",
   "customizations": {
     "vscode": {

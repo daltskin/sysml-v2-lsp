@@ -98,11 +98,10 @@ export class HoverProvider {
 
         // Attach semantic diagnostics near the hovered symbol to provide
         // actionable guidance directly in hover.
-        let semanticDiags = this.documentManager.getSemanticDiagnostics(params.textDocument.uri);
-        if (!semanticDiags && this._semanticValidator) {
-            semanticDiags = this._semanticValidator.validate(params.textDocument.uri);
-            this.documentManager.setSemanticDiagnostics(params.textDocument.uri, semanticDiags);
-        }
+        // Use cached diagnostics only — never trigger a full validation
+        // from hover, as it blocks the response.  The deferred 50 ms
+        // timer in validateDocument will populate the cache.
+        const semanticDiags = this.documentManager.getSemanticDiagnostics(params.textDocument.uri);
         const hoverDiags = (semanticDiags ?? []).filter((d) =>
             this.rangeContainsPosition(d.range, params.position),
         );
