@@ -225,6 +225,10 @@ function getBatchParser(tokenStream: CommonTokenStream): SysMLv2Parser {
  * parsed sequentially.  Avoids allocating new Lexer/Parser objects
  * per file while preserving the SLL→LL two-stage strategy.
  *
+ * Mirrors the DFA pre-seed retry logic from parseDocument(): if the
+ * pre-seeded DFA produces errors, all DFA states are cleared and the
+ * file is re-parsed with LL-only mode.
+ *
  * IMPORTANT: The returned ParseResult references the shared parser/lexer
  * instances, so callers must NOT hold references across multiple calls.
  * The DocumentManager only retains tree + tokenStream + errors, which
@@ -246,6 +250,9 @@ export function parseDocumentBatch(text: string): ParseResult {
     const parseStart = Date.now();
 
     // Stage 1: SLL (fast path)
+    // Attach error listener during SLL so errors are captured even
+    // when SLL succeeds but the grammar produces recovery tokens.
+    parser.addErrorListener(errorListener);
     try {
         parser.interpreter.predictionMode = PredictionMode.SLL;
         parser.errorHandler = _batchBailStrategy;
@@ -256,16 +263,71 @@ export function parseDocumentBatch(text: string): ParseResult {
 
     if (!tree) {
         // Stage 2: LL (full context)
+        // Reset error listener state so LL errors don't merge with SLL errors
+        errorListener.clear();
         tokenStream.seek(0);
         parser.reset();
+        parser.addErrorListener(errorListener);
         parser.interpreter.predictionMode = PredictionMode.LL;
         parser.errorHandler = _batchDefaultStrategy;
-        parser.addErrorListener(errorListener);
         try {
             tree = parser.rootNamespace();
         } catch {
             // If parsing fails completely, tree remains null
         }
+    }
+
+    const parseMs = Date.now() - parseStart;
+    const errors = errorListener.getErrors();
+
+    // If errors occurred with a pre-seeded DFA, clear ALL DFA states
+    // and retry with LL-only mode — mirrors parseDocument() logic.
+    if (errors.length > 0 && isDfaPreSeeded()) {
+        markDfaNotPreSeeded();
+        clearAllDFAStates();
+        return parseDocumentBatchLL(text, lexer, tokenStream, lexMs);
+    }
+
+    // Pre-seeded DFA working correctly — clear the flag but keep the
+    // DFA edges for future parses.
+    if (isDfaPreSeeded()) {
+        markDfaNotPreSeeded();
+    }
+
+    return {
+        tree,
+        tokenStream,
+        parser,
+        lexer,
+        errors,
+        timing: { lexMs, parseMs },
+    };
+}
+
+/**
+ * LL-only batch parse — used when pre-seeded DFA produced errors.
+ * Reuses the already-filled token stream to skip re-lexing.
+ */
+function parseDocumentBatchLL(
+    _text: string,
+    lexer: SysMLv2Lexer,
+    tokenStream: CommonTokenStream,
+    lexMs: number,
+): ParseResult {
+    tokenStream.seek(0);
+    const parser = getBatchParser(tokenStream);
+    const errorListener = new SysMLErrorListener();
+    parser.addErrorListener(errorListener);
+
+    let tree: ParserRuleContext | null = null;
+    const parseStart = Date.now();
+
+    parser.interpreter.predictionMode = PredictionMode.LL;
+    parser.errorHandler = _batchDefaultStrategy;
+    try {
+        tree = parser.rootNamespace();
+    } catch {
+        // If parsing fails completely, tree remains null
     }
 
     const parseMs = Date.now() - parseStart;

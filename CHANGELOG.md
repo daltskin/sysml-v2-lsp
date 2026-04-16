@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.13.0]
+
+### Added
+
+- Comprehensive benchmark framework (`benchmarks/`) with 6 suites: parse, symbolTable, providers, memory, throughput, folderLoad — includes CLI runner, JSON baselines, and regression detection
+- Dependabot configuration for weekly npm and GitHub Actions dependency updates
+- Security audit step (`npm audit --audit-level=high`) in CI pipeline
+- Configurable `sysml.scan.skipDirectories` setting for workspace scanning
+
+### Changed
+
+- Symbol table: O(1) `inferKind()` via `ruleIndex` lookup maps, binary-search `findSymbolAtPosition()`, reverse-index `findReferences()`, cached `getAllSymbols()`
+- Batch parsing with shared lexer/parser singletons; token stream reuse on SLL→LL fallback
+- Workspace scanning redesigned as 3-phase async pipeline: concurrent discovery → batched file I/O → sequential batch parse
+- Provider caching: SemanticTokens (URI+version), DiagnosticsProvider (grammar ranges), CompletionProvider (array identity), SemanticValidator (symbol names, library names, line-offset binary search)
+- HoverProvider uses cached diagnostics only — no longer triggers full validation on hover
+- Parse worker builds visible token array once, shared across all post-parse analysis
+- Removed dead `scanWorkspaceFolder` function and superseded `scripts/benchmark-parse.ts`
+- Security: updated `hono` to fix HTML injection via JSX attribute names (GHSA-458j-xx4x-4375)
+- Enforced consistent LF line endings via `.gitattributes`
+- Build artifacts and Python cache excluded from version control
+
 ## [0.12.0]
 
 ### Added

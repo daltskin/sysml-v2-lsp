@@ -49,6 +49,10 @@ export class SysMLErrorListener extends BaseErrorListener {
         return this.errors;
     }
 
+    clear(): void {
+        this.errors = [];
+    }
+
     hasErrors(): boolean {
         return this.errors.length > 0;
     }

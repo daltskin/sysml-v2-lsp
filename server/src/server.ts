@@ -51,7 +51,7 @@ import { ReferencesProvider } from './providers/referencesProvider.js';
 import { RenameProvider } from './providers/renameProvider.js';
 import { SemanticTokensProvider, tokenModifiers, tokenTypes } from './providers/semanticTokensProvider.js';
 import { SemanticValidator } from './providers/semanticValidator.js';
-import { findSysMLFiles, findSysMLFilesAsync, readFilesBatch, DEFAULT_SKIP_DIRS } from './utils/fileDiscovery.js';
+import { findSysMLFilesAsync, readFilesBatch, DEFAULT_SKIP_DIRS } from './utils/fileDiscovery.js';
 
 /** Convert a file:// URI to a filesystem path, returning undefined for non-file URIs. */
 function toFsPath(uri: string): string | undefined {
@@ -470,18 +470,6 @@ function parseWorkspaceFile(filePath: string): boolean {
     const doc = TextDocument.create(uri, 'sysml', 0, content);
     documentManager.parse(doc);
     return true;
-}
-
-/**
- * Scan a workspace folder root and pre-parse all .sysml files found.
- */
-function scanWorkspaceFolder(root: string): number {
-    const files = findSysMLFiles(root, skipDirs);
-    let count = 0;
-    for (const f of files) {
-        if (parseWorkspaceFile(f)) count++;
-    }
-    return count;
 }
 
 /**
