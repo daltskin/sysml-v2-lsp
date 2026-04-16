@@ -13,12 +13,22 @@
       "properties": {
         "sysml.scan.skipDirectories": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [
-            "node_modules", ".git", ".settings",
-            "temp", "test", "tests",
-            "out", "dist", "build", "coverage",
-            ".venv", "__pycache__"
+            "node_modules",
+            ".git",
+            ".settings",
+            "temp",
+            "test",
+            "tests",
+            "out",
+            "dist",
+            "build",
+            "coverage",
+            ".venv",
+            "__pycache__"
           ],
           "markdownDescription": "Directory names to skip when scanning the workspace for `.sysml` / `.kerml` files. Changes take effect on the next workspace scan or server restart."
         }
