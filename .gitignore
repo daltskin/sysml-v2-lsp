@@ -2,6 +2,12 @@ node_modules/
 dist/
 client/out/
 server/out/
+clients/vscode/out/
+
+# Python cache
+__pycache__/
+*.pyc
+
 *.vsix
 .vscode-test/
 *.tsbuildinfo
