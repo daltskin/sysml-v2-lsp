@@ -6,10 +6,25 @@ updates:
       interval: weekly
     open-pull-requests-limit: 10
     groups:
+      eslint:
+        patterns:
+          - "eslint"
+          - "typescript-eslint"
+          - "@eslint/*"
+          - "@typescript-eslint/*"
       minor-and-patch:
         update-types:
           - minor
           - patch
+        exclude-patterns:
+          - "eslint"
+          - "typescript-eslint"
+          - "@eslint/*"
+          - "@typescript-eslint/*"
+    ignore:
+      # Don't bump eslint to v10 until typescript-eslint supports it
+      - dependency-name: "eslint"
+        versions: [">=10.0.0"]
 
   - package-ecosystem: github-actions
     directory: /
