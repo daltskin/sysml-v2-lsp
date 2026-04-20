@@ -118,6 +118,11 @@ sysml-v2-lsp/
 │   └── mcp/                # Mermaid diagram generator
 ├── grammar/                # ANTLR4 grammar files (.g4)
 ├── sysml.library/          # SysML v2 standard library
+├── benchmarks/             # Performance benchmark suite
+│   ├── src/                # Runner, suites, reporters, utilities
+│   ├── baselines/          # Saved baseline for regression detection
+│   ├── results/            # JSON + Markdown output per run
+│   └── fixtures/           # Synthetic .sysml files for benchmarking
 ├── examples/               # Example .sysml models
 ├── test/                   # Unit tests (vitest)
 └── package.json            # Extension manifest + monorepo scripts
@@ -139,6 +144,59 @@ make update-grammar   # Pull latest grammar, rebuild parser + DFA snapshot
 make update-library   # Pull latest SysML v2 standard library
 make dfa              # Regenerate DFA snapshot (after any grammar change)
 make ci               # Full CI pipeline (lint + build + test)
+npm run bench         # Run all benchmark suites
+npm run bench:baseline # Save benchmark baseline
+npm run bench:regression # Compare against baseline
+```
+
+## Benchmarks
+
+A built-in benchmark suite measures parser, symbol table, LSP provider, memory, throughput, and folder-load performance. Results are written as both JSON and Markdown to `benchmarks/results/`.
+
+### Running Benchmarks
+
+```bash
+npm run bench                    # run all suites
+npm run bench:parse              # parse suite only
+npm run bench:providers          # LSP providers suite only
+```
+
+Or use the runner directly for full control:
+
+```bash
+npx tsx benchmarks/src/runner.ts --suite parse --suite symbolTable
+npx tsx benchmarks/src/runner.ts --runs 10 --warmup 3
+npx tsx benchmarks/src/runner.ts --output ./my-results
+```
+
+### Suites
+
+| Suite | What it measures |
+| --- | --- |
+| `parse` | ANTLR4 parse time — cold (no DFA) vs warm (DFA snapshot pre-loaded) |
+| `symbolTable` | Symbol table build and lookup latency |
+| `providers` | LSP features: diagnostics, hover, completion, references, rename, etc. |
+| `memory` | Heap allocation per file and scaling behaviour |
+| `throughput` | End-to-end lines/sec and tokens/sec across all example files |
+| `folderLoad` | Full folder parse + symbol build (examples, standard library, all) |
+
+### Regression Detection
+
+Save a baseline, then compare future runs against it:
+
+```bash
+npm run bench:baseline           # save current results as baseline
+npm run bench:regression         # compare against baseline, exit 1 on regression
+```
+
+The default regression threshold is 20%. Override with `--threshold <n>`.
+
+### Viewing Results
+
+Each run produces a JSON file and a Markdown report in `benchmarks/results/`. To convert an existing JSON result to Markdown:
+
+```bash
+npx tsx benchmarks/src/reporters/markdownReporter.ts benchmarks/results/<file>.json
 ```
 
 ## Grammar Updates

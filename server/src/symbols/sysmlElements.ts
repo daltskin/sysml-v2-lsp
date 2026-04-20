@@ -92,6 +92,8 @@ export interface SysMLSymbol {
     multiplicityRange?: { lower: number; upper: number | '*' };
     /** Prefix metadata annotation names (e.g., ["product"] from `#product part def ...`) */
     metadataAnnotations?: string[];
+    /** Expose target qualified names for view usages (e.g., ["Vehicle", "Vehicle::engine"]) */
+    exposeTargets?: string[];
 }
 
 /**

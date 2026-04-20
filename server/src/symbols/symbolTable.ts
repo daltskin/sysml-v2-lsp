@@ -150,7 +150,9 @@ const PREFIX_METADATA_RECURSE_RULE_INDICES: ReadonlySet<number> = new Set([
 ]);
 
 // Pre-compiled regex patterns for extractTypeNames() — compiled once at import time
-const RE_KEYWORD_TRUNCATE = /(redefines|subsets|references|connect|bind|first|then|flow|allocate|assign|accept|send|decide|merge|join|fork|via|default)\b.*/i;
+// Negative lookbehind (?<![A-Za-z_]) ensures keywords don't match mid-identifier
+// (e.g. "connect" should not match inside "InterconnectionView")
+const RE_KEYWORD_TRUNCATE = /(?<![A-Za-z_])(redefines|subsets|references|connect|bind|first|then|flow|allocate|assign|accept|send|decide|merge|join|fork|via|default)\b.*/i;
 const RE_SPEC = /(?:specializes|:>|:>>)\s*('[^']+'|[A-Za-z_]\w*(?:::\w+)*)(?:\s*,\s*(?:'[^']+'|[A-Za-z_]\w*(?:::\w+)*))*/;
 const RE_DEFINED_BY = /definedby\s*([A-Za-z_]\w*(?:::\w+)*(?:\s*,\s*[A-Za-z_]\w*(?:::\w+)*)*)/;
 const RE_TYPING = /:(?![:>])\s*('[^']+'|[A-Za-z_]\w*(?:::\w+)*)/;
@@ -518,6 +520,10 @@ export class SymbolTable {
         const { multiplicity, multiplicityRange } = isUsageKind(kind) ? this.extractMultiplicity(ctx) : {};
         // Extract prefix metadata annotations (#name)
         const metadataAnnotations = this.extractPrefixMetadataAnnotations(ctx);
+        // Extract expose targets for view usages/definitions
+        const exposeTargets = (kind === SysMLElementKind.ViewUsage || kind === SysMLElementKind.ViewDef)
+            ? this.extractExposeTargets(ctx)
+            : undefined;
 
         return {
             name,
@@ -534,6 +540,7 @@ export class SymbolTable {
             multiplicity,
             multiplicityRange,
             metadataAnnotations: metadataAnnotations.length > 0 ? metadataAnnotations : undefined,
+            exposeTargets: exposeTargets && exposeTargets.length > 0 ? exposeTargets : undefined,
         };
     }
 
@@ -932,6 +939,81 @@ export class SymbolTable {
      */
     private isKeyword(text: string): boolean {
         return SYSML_KEYWORDS.has(text);
+    }
+
+    /**
+     * Extract expose target qualified names from a view body.
+     * Walks viewBody/viewDefinitionBody children to find expose rules,
+     * then extracts the qualified name from membershipExpose or namespaceExpose.
+     */
+    private extractExposeTargets(ctx: ParserRuleContext): string[] {
+        const targets: string[] = [];
+        this.collectExposeTargets(ctx, targets, 0);
+        return targets;
+    }
+
+    private collectExposeTargets(ctx: ParserRuleContext, targets: string[], depth: number): void {
+        if (depth > 6) return;
+        for (let i = 0; i < ctx.getChildCount(); i++) {
+            const child = ctx.getChild(i);
+            if (!(child instanceof ParserRuleContext)) continue;
+            const ri = child.ruleIndex;
+            if (ri === SysMLv2Parser.RULE_expose) {
+                // Extract the qualified name(s) from the expose's child
+                // expose → EXPOSE (membershipExpose | namespaceExpose) relationshipBody
+                const target = this.extractExposeQualifiedName(child);
+                if (target) targets.push(target);
+            } else if (
+                ri === SysMLv2Parser.RULE_viewBody ||
+                ri === SysMLv2Parser.RULE_viewBodyItem ||
+                ri === SysMLv2Parser.RULE_viewDefinitionBody ||
+                ri === SysMLv2Parser.RULE_viewDefinitionBodyItem
+            ) {
+                this.collectExposeTargets(child, targets, depth + 1);
+            }
+        }
+    }
+
+    /**
+     * Extract the qualified name from an expose rule.
+     * Handles both membershipExpose (single name, optionally ::**)
+     * and namespaceExpose (name::* or name::**).
+     */
+    private extractExposeQualifiedName(exposeCtx: ParserRuleContext): string | undefined {
+        for (let i = 0; i < exposeCtx.getChildCount(); i++) {
+            const child = exposeCtx.getChild(i);
+            if (!(child instanceof ParserRuleContext)) continue;
+            const ri = child.ruleIndex;
+            if (ri === SysMLv2Parser.RULE_membershipExpose ||
+                ri === SysMLv2Parser.RULE_namespaceExpose) {
+                // Both wrap membershipImport/namespaceImport which contain qualifiedName
+                // Collect all terminal text to preserve ::, *, ** tokens
+                return this.extractFullExposeText(child);
+            }
+        }
+        return undefined;
+    }
+
+    /**
+     * Extract the full text of an expose target including :: and wildcard tokens.
+     * Returns e.g. "Vehicle::engine", "Pkg::*", "Pkg::**"
+     */
+    private extractFullExposeText(ctx: ParserRuleContext): string | undefined {
+        const parts: string[] = [];
+        this.collectExposeText(ctx, parts);
+        return parts.length > 0 ? parts.join('') : undefined;
+    }
+
+    private collectExposeText(ctx: ParserRuleContext, parts: string[]): void {
+        for (let i = 0; i < ctx.getChildCount(); i++) {
+            const child = ctx.getChild(i);
+            if (child instanceof TerminalNode) {
+                const text = child.symbol.text;
+                if (text) parts.push(text);
+            } else if (child instanceof ParserRuleContext) {
+                this.collectExposeText(child, parts);
+            }
+        }
     }
 
     /**

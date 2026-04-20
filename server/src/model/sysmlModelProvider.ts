@@ -377,6 +377,11 @@ export class SysMLModelProvider {
             attributes['metadataAnnotations'] = symbol.metadataAnnotations.join(', ');
         }
 
+        // Include expose targets for view usages/definitions
+        if (symbol.exposeTargets && symbol.exposeTargets.length > 0) {
+            attributes['exposeTargets'] = symbol.exposeTargets.join(',');
+        }
+
         // Extract direction for ports from the source text
         const direction = this.extractDirection(symbol, lines);
         if (direction) {

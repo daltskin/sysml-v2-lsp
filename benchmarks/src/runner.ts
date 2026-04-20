@@ -21,6 +21,7 @@ import { runMemorySuite } from './suites/memory.bench.js';
 import { runThroughputSuite } from './suites/throughput.bench.js';
 import { runFolderLoadSuite } from './suites/folderLoad.bench.js';
 import { buildReport, writeReport, writeBaseline, loadBaseline, type SuiteReport } from './reporters/jsonReporter.js';
+import { writeMarkdownReport } from './reporters/markdownReporter.js';
 import { compareReports, formatRegressionSummary } from './utils/regression.js';
 import type { BenchmarkOptions } from './utils/harness.js';
 
@@ -169,7 +170,9 @@ async function main(): Promise<void> {
     // Build and write report
     const report = buildReport(suiteReports);
     const reportPath = writeReport(report, cli.outputDir);
+    const mdPath = writeMarkdownReport(report, cli.outputDir);
     console.log(`\nResults written to: ${reportPath}`);
+    console.log(`Markdown report:   ${mdPath}`);
 
     // Baseline handling
     if (cli.baseline) {
