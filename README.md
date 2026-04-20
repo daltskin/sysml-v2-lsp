@@ -171,14 +171,14 @@ npx tsx benchmarks/src/runner.ts --output ./my-results
 
 ### Suites
 
-| Suite | What it measures |
-| --- | --- |
-| `parse` | ANTLR4 parse time — cold (no DFA) vs warm (DFA snapshot pre-loaded) |
-| `symbolTable` | Symbol table build and lookup latency |
-| `providers` | LSP features: diagnostics, hover, completion, references, rename, etc. |
-| `memory` | Heap allocation per file and scaling behaviour |
-| `throughput` | End-to-end lines/sec and tokens/sec across all example files |
-| `folderLoad` | Full folder parse + symbol build (examples, standard library, all) |
+| Suite         | What it measures                                                       |
+| ------------- | ---------------------------------------------------------------------- |
+| `parse`       | ANTLR4 parse time — cold (no DFA) vs warm (DFA snapshot pre-loaded)    |
+| `symbolTable` | Symbol table build and lookup latency                                  |
+| `providers`   | LSP features: diagnostics, hover, completion, references, rename, etc. |
+| `memory`      | Heap allocation per file and scaling behaviour                         |
+| `throughput`  | End-to-end lines/sec and tokens/sec across all example files           |
+| `folderLoad`  | Full folder parse + symbol build (examples, standard library, all)     |
 
 ### Regression Detection
 
