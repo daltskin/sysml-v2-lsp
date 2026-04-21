@@ -26,6 +26,9 @@ package WarmUp {
         ref item fuel : Fuel;
         port p1 : Port1;
         port p2 : ~Port1;
+        out port pOut;
+        in port pIn;
+        inout port pBidi : Port1;
 
         perform action doSomething;
         exhibit state myStates parallel {
@@ -54,6 +57,15 @@ package WarmUp {
         item :> envelopingShapes [1] : Box {
             length1 :>> length = 100;
         }
+
+        // Nested action definitions inside part def
+        action def ProcessInput;
+        action def ComputeOutput;
+
+        // Prefix metadata annotations
+        #Safety part safePart;
+        #Security part securePart;
+        #Safety #Security part dualTagged;
     }
 
     part def Engine {
@@ -192,6 +204,13 @@ package WarmUp {
         end connEnd2 : DrivePort;
     }
 
+    // ---- Connection usage with connect keyword ----
+    part def DirectionalParts {
+        part sender : Vehicle;
+        part receiver : Vehicle;
+        connection dataLink connect sender.pOut to receiver.pIn;
+    }
+
     // ---- Allocation ----
     allocation def LogicalToPhysical {
         end #logical logicalEnd;
@@ -265,6 +284,13 @@ package WarmUp {
     // ---- Metadata definitions ----
     metadata def Safety { attribute isMandatory : Boolean; }
     metadata def Security;
+
+    // State def with 'then state' succession shorthand
+    state def OperatingModes {
+        state idle;
+        then state running;
+        then state faulted;
+    }
     metadata def <fm> failureMode;
     metadata def <l> logical;
     metadata def <p> physical;
@@ -739,6 +765,33 @@ package WarmUp {
             satisfy requirement sv : SafetyViewpoint;
             expose VehicleConfig::**;
             filter @Safety;
+        }
+        view vehicleChildrenOnly : GeneralView {
+            expose VehicleConfig::*;
+        }
+        view vehicleSingleTarget : GeneralView {
+            expose Vehicle;
+        }
+
+        // Satisfy viewpoint inside a view with expose + filter
+        view vehicleStructural : GeneralView {
+            satisfy requirement sv2 : SafetyViewpoint;
+            expose VehicleConfig::**;
+            filter @SysML::PartUsage;
+        }
+
+        // Nested subviews inside a parent view
+        view compositeView : GeneralView {
+            expose VehicleConfig::**;
+
+            view innerDetail : InterconnectionView {
+                expose VehicleConfig;
+            }
+
+            view innerSummary : GeneralView {
+                expose VehicleConfig::**;
+                filter @SysML::RequirementUsage;
+            }
         }
     }
 

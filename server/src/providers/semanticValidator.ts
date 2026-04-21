@@ -1183,6 +1183,8 @@ export class SemanticValidator {
 
         for (const b of blocks) {
             if (this.hasDocumentationOnlyConstraintBody(b.body)) {
+                // `require constraint { doc /* ... */ }` is valid inside viewpoints
+                if (b.isRequire && this.isInsideViewpoint(text, b.bodyOffset)) continue;
                 const trimStart = b.body.search(/\S/);
                 const startInBody = trimStart >= 0 ? trimStart : 0;
                 const trimmedLen = Math.max(1, b.body.trim().length);
@@ -1245,9 +1247,9 @@ export class SemanticValidator {
         return diagnostics;
     }
 
-    private extractConstraintBlocks(text: string): Array<{ body: string; bodyOffset: number; startLine: number }> {
-        const out: Array<{ body: string; bodyOffset: number; startLine: number }> = [];
-        const re = /\b(?:require\s+)?constraint\s*\{/g;
+    private extractConstraintBlocks(text: string): Array<{ body: string; bodyOffset: number; startLine: number; isRequire: boolean }> {
+        const out: Array<{ body: string; bodyOffset: number; startLine: number; isRequire: boolean }> = [];
+        const re = /\b(require\s+)?constraint\s*\{/g;
         let m: RegExpExecArray | null;
 
         while ((m = re.exec(text)) !== null) {
@@ -1265,7 +1267,7 @@ export class SemanticValidator {
             const bodyEnd = i - 1;
             const body = text.slice(bodyStart, bodyEnd);
             const startLine = text.slice(0, bodyStart).split('\n').length - 1;
-            out.push({ body, bodyOffset: bodyStart, startLine });
+            out.push({ body, bodyOffset: bodyStart, startLine, isRequire: !!m[1] });
         }
 
         return out;
@@ -1416,6 +1418,22 @@ export class SemanticValidator {
         const hasExprSignal = /[<>=!+\-*/%()[\].,:]|\b(and|or|not)\b/.test(withoutComments);
         const proseOnly = /^[A-Za-z_\s]+$/.test(withoutComments);
         return proseOnly && !hasExprSignal;
+    }
+
+    private isInsideViewpoint(text: string, offset: number): boolean {
+        const preceding = text.slice(0, offset);
+        let depth = 0;
+        for (let i = preceding.length - 1; i >= 0; i--) {
+            const ch = preceding[i];
+            if (ch === '}') depth++;
+            if (ch === '{') {
+                if (depth > 0) { depth--; continue; }
+                // Found unmatched '{' — check what keyword precedes it
+                const before = preceding.slice(0, i).trimEnd();
+                return /\bviewpoint\b/.test(before.slice(-40));
+            }
+        }
+        return false;
     }
 
     /** Cached line-offset table for indexToRange — avoids O(n) text.slice().split() per call */

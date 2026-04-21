@@ -280,18 +280,18 @@ export const DFA_SNAPSHOT: DecisionSnapshot[] = ${json};
 
 const rootDir = path.resolve(import.meta.dirname || __dirname, '..');
 const exampleFiles = [
-    path.join(rootDir, 'examples/temp/SysML v2 Spec Annex A SimpleVehicleModel.sysml'),
-    path.join(rootDir, 'examples/temp/multiple definition.sysml'),
-    path.join(rootDir, 'examples/temp/batmobile.sysml'),
-    path.join(rootDir, 'examples/temp/charging.sysml'),
-    path.join(rootDir, 'examples/temp/complex-smart-home.sysml'),
-    path.join(rootDir, 'examples/temp/smarthome.sysml'),
-    path.join(rootDir, 'examples/temp/multiplicity.sysml'),
+    path.join(rootDir, 'benchmarks/fixtures/synthetic-100.sysml'),
+    path.join(rootDir, 'benchmarks/fixtures/synthetic-500.sysml'),
+    path.join(rootDir, 'benchmarks/fixtures/synthetic-1000.sysml'),
+    path.join(rootDir, 'examples/smart-home.sysml'),
+    path.join(rootDir, 'examples/smart-home-complex.sysml'),
+    path.join(rootDir, 'examples/smart-home-complex2.sysml'),
+    path.join(rootDir, 'examples/multiplicity.sysml'),
     path.join(rootDir, 'examples/vehicle-model.sysml'),
     path.join(rootDir, 'examples/bike.sysml'),
     path.join(rootDir, 'examples/camera.sysml'),
     path.join(rootDir, 'examples/toaster-system.sysml'),
-    path.join(rootDir, 'examples/temp/dfa-coverage-advanced.sysml'),
+    path.join(rootDir, 'examples/dfa-coverage-advanced.sysml'),
 ];
 
 console.log('Generating DFA snapshot...');
