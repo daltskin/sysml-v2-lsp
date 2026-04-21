@@ -198,6 +198,10 @@ export class SymbolTable {
 
         // Walk the tree and collect symbols
         this.walkTree(parseResult.tree, uri, this.globalScope, '');
+
+        // Post-process: resolve view specialization chains to inherit
+        // filters, rendering, and expose targets from parent view defs
+        this.resolveViewInheritance(uri);
     }
 
     /**
@@ -381,6 +385,73 @@ export class SymbolTable {
     }
 
     /**
+     * Resolve view specialization chains to inherit filters, rendering,
+     * and expose targets from parent view definitions.
+     *
+     * For example, if `view x : PartsTreeView` and `PartsTreeView :> TreeView`,
+     * and TreeView has `render asTreeDiagram`, then x inherits that rendering.
+     */
+    private resolveViewInheritance(uri: string): void {
+        const symbols = this.symbolsByUri.get(uri) ?? [];
+        const viewSymbols = symbols.filter(
+            s => s.kind === SysMLElementKind.ViewUsage || s.kind === SysMLElementKind.ViewDef,
+        );
+        if (viewSymbols.length === 0) return;
+
+        // Build a lookup of all view defs by name (for chain resolution)
+        const viewDefsByName = new Map<string, SysMLSymbol>();
+        for (const s of this.getAllSymbols()) {
+            if (s.kind === SysMLElementKind.ViewDef) {
+                viewDefsByName.set(s.name, s);
+            }
+        }
+
+        for (const view of viewSymbols) {
+            // Walk the specialization chain (max depth 5 to prevent cycles)
+            const visited = new Set<string>();
+            let current: SysMLSymbol | undefined = view;
+            for (let depth = 0; depth < 5 && current; depth++) {
+                if (visited.has(current.name)) break;
+                visited.add(current.name);
+
+                // Follow the type reference to the parent view def
+                const parentName = current.typeNames[0] ?? current.typeName;
+                if (!parentName) break;
+
+                const parent = viewDefsByName.get(parentName);
+                if (!parent) break;
+
+                // Inherit viewFilters from parent if not already set
+                if (parent.viewFilters && parent.viewFilters.length > 0) {
+                    if (!view.viewFilters) {
+                        view.viewFilters = [...parent.viewFilters];
+                    } else {
+                        // Merge: add parent filters that aren't already present
+                        for (const f of parent.viewFilters) {
+                            if (!view.viewFilters.includes(f)) {
+                                view.viewFilters.push(f);
+                            }
+                        }
+                    }
+                }
+
+                // Inherit viewRendering from parent if not already set
+                if (parent.viewRendering && !view.viewRendering) {
+                    view.viewRendering = parent.viewRendering;
+                }
+
+                // Inherit exposeTargets from parent if not already set
+                if (parent.exposeTargets && parent.exposeTargets.length > 0 && (!view.exposeTargets || view.exposeTargets.length === 0)) {
+                    view.exposeTargets = [...parent.exposeTargets];
+                }
+
+                // Continue up the chain
+                current = parent;
+            }
+        }
+    }
+
+    /**
      * Recursively walk the parse tree, extracting SysML element declarations.
      *
      * This is a generic tree walker that inspects rule names to identify
@@ -520,10 +591,12 @@ export class SymbolTable {
         const { multiplicity, multiplicityRange } = isUsageKind(kind) ? this.extractMultiplicity(ctx) : {};
         // Extract prefix metadata annotations (#name)
         const metadataAnnotations = this.extractPrefixMetadataAnnotations(ctx);
-        // Extract expose targets for view usages/definitions
-        const exposeTargets = (kind === SysMLElementKind.ViewUsage || kind === SysMLElementKind.ViewDef)
-            ? this.extractExposeTargets(ctx)
-            : undefined;
+        // Extract expose targets, filters, and rendering for view usages/definitions
+        const isView = kind === SysMLElementKind.ViewUsage || kind === SysMLElementKind.ViewDef;
+        const isPackage = kind === SysMLElementKind.Package;
+        const exposeTargets = isView ? this.extractExposeTargets(ctx) : undefined;
+        const viewFilters = (isView || isPackage) ? this.extractViewFilters(ctx) : undefined;
+        const viewRendering = isView ? this.extractViewRendering(ctx) : undefined;
 
         return {
             name,
@@ -541,6 +614,8 @@ export class SymbolTable {
             multiplicityRange,
             metadataAnnotations: metadataAnnotations.length > 0 ? metadataAnnotations : undefined,
             exposeTargets: exposeTargets && exposeTargets.length > 0 ? exposeTargets : undefined,
+            viewFilters: viewFilters && viewFilters.length > 0 ? viewFilters : undefined,
+            viewRendering: viewRendering || undefined,
         };
     }
 
@@ -718,8 +793,9 @@ export class SymbolTable {
                 // extract all identifier-like tokens.
                 const childText = child.getText();
                 // Strip leading keywords / operators
+                // Note: getText() strips whitespace, so `:` may be directly followed by the type name
                 const stripped = childText
-                    .replace(/^(specializes|:>|:>>|:\s|definedby|subsets|redefines|references|conjugates|disjoints)/i, '');
+                    .replace(/^(specializes|:>>|:>|:|definedby|subsets|redefines|references|conjugates|disjoints)/i, '');
                 for (const part of stripped.split(',')) {
                     // Match quoted names ('...') or plain identifiers
                     const qm = part.match(/'([^']+)'/);
@@ -1014,6 +1090,80 @@ export class SymbolTable {
                 this.collectExposeText(child, parts);
             }
         }
+    }
+
+    /**
+     * Extract element filter expressions from a view body.
+     * Looks for elementFilterMember rules containing `filter @ QualifiedName`.
+     */
+    private extractViewFilters(ctx: ParserRuleContext): string[] {
+        const filters: string[] = [];
+        this.collectViewFilters(ctx, filters, 0);
+        return filters;
+    }
+
+    private collectViewFilters(ctx: ParserRuleContext, filters: string[], depth: number): void {
+        if (depth > 6) return;
+        for (let i = 0; i < ctx.getChildCount(); i++) {
+            const child = ctx.getChild(i);
+            if (!(child instanceof ParserRuleContext)) continue;
+            const ri = child.ruleIndex;
+            if (ri === SysMLv2Parser.RULE_elementFilterMember) {
+                // elementFilterMember → memberPrefix FILTER ownedExpression SEMI
+                // Extract the expression text (e.g., "@ SysML::PartUsage")
+                const text = this.extractFullExposeText(child);
+                if (text) {
+                    // Clean up: remove 'filter' keyword prefix and semicolons
+                    const cleaned = text.replace(/^filter/i, '').replace(/;$/g, '').trim();
+                    if (cleaned) filters.push(cleaned);
+                }
+            } else if (
+                ri === SysMLv2Parser.RULE_viewBody ||
+                ri === SysMLv2Parser.RULE_viewBodyItem ||
+                ri === SysMLv2Parser.RULE_viewDefinitionBody ||
+                ri === SysMLv2Parser.RULE_viewDefinitionBodyItem ||
+                ri === SysMLv2Parser.RULE_packageBody ||
+                ri === SysMLv2Parser.RULE_packageBodyElement
+            ) {
+                this.collectViewFilters(child, filters, depth + 1);
+            }
+        }
+    }
+
+    /**
+     * Extract the view rendering reference from a view body.
+     * Looks for viewRenderingMember rules containing `render QualifiedName`.
+     */
+    private extractViewRendering(ctx: ParserRuleContext): string | undefined {
+        return this.findViewRendering(ctx, 0);
+    }
+
+    private findViewRendering(ctx: ParserRuleContext, depth: number): string | undefined {
+        if (depth > 6) return undefined;
+        for (let i = 0; i < ctx.getChildCount(); i++) {
+            const child = ctx.getChild(i);
+            if (!(child instanceof ParserRuleContext)) continue;
+            const ri = child.ruleIndex;
+            if (ri === SysMLv2Parser.RULE_viewRenderingMember) {
+                // viewRenderingMember → memberPrefix RENDER viewRenderingUsage
+                // Extract the rendering reference text
+                const text = this.extractFullExposeText(child);
+                if (text) {
+                    // Clean up: remove 'render' keyword prefix, semicolons, braces
+                    const cleaned = text.replace(/^render/i, '').replace(/[;{}]/g, '').trim();
+                    if (cleaned) return cleaned;
+                }
+            } else if (
+                ri === SysMLv2Parser.RULE_viewBody ||
+                ri === SysMLv2Parser.RULE_viewBodyItem ||
+                ri === SysMLv2Parser.RULE_viewDefinitionBody ||
+                ri === SysMLv2Parser.RULE_viewDefinitionBodyItem
+            ) {
+                const found = this.findViewRendering(child, depth + 1);
+                if (found) return found;
+            }
+        }
+        return undefined;
     }
 
     /**

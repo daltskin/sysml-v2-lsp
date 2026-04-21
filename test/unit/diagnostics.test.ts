@@ -207,8 +207,12 @@ package Test {
         it('should flag connect statements that link incompatible port types', async () => {
             const text = `
 package Test {
-    port def FuelPort;
-    port def ElectricalPort;
+    port def FuelPort {
+        out item fuel;
+    }
+    port def ElectricalPort {
+        out item power;
+    }
 
     part def Car {
         port fuel : FuelPort;
@@ -814,6 +818,142 @@ package Test {
             const unverified = diags.filter(d => d.code === 'unverified-requirement');
             expect(unverified.length).toBeGreaterThanOrEqual(1);
             expect(unverified[0].message).toContain('vehicleSpec');
+        });
+    });
+
+    describe('port compatibility – transitive type hierarchy', () => {
+        it('should NOT flag ports whose types share a specialization chain', async () => {
+            const text = `
+package Test {
+    port def BasePort {
+        out item data;
+    }
+    port def DerivedPort :> BasePort { }
+    part def System {
+        port a : BasePort;
+        port b : DerivedPort;
+        connection c1 connect a to b;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const portDiags = diags.filter(d => d.code === 'incompatible-port-types');
+            expect(portDiags.length).toBe(0);
+        });
+
+        it('should NOT flag ports whose types share a common ancestor', async () => {
+            const text = `
+package Test {
+    port def BasePort {
+        out item data;
+    }
+    port def PortA :> BasePort { }
+    port def PortB :> BasePort { }
+    part def System {
+        port a : PortA;
+        port b : PortB;
+        connection c1 connect a to b;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const portDiags = diags.filter(d => d.code === 'incompatible-port-types');
+            expect(portDiags.length).toBe(0);
+        });
+
+        it('should NOT flag ports with deep transitive hierarchy (A :> B :> C)', async () => {
+            const text = `
+package Test {
+    port def Root {
+        out item signal;
+    }
+    port def Middle :> Root { }
+    port def Leaf :> Middle { }
+    part def System {
+        port r : Root;
+        port l : Leaf;
+        connection c1 connect r to l;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const portDiags = diags.filter(d => d.code === 'incompatible-port-types');
+            expect(portDiags.length).toBe(0);
+        });
+
+        it('should flag ports with unrelated type hierarchies', async () => {
+            const text = `
+package Test {
+    port def SensorPort {
+        out item reading;
+    }
+    port def ActuatorPort {
+        in item command;
+    }
+    part def System {
+        port s : SensorPort;
+        port a : ActuatorPort;
+        connection c1 connect s to a;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const portDiags = diags.filter(d => d.code === 'incompatible-port-types');
+            expect(portDiags.length).toBeGreaterThanOrEqual(1);
+        });
+    });
+
+    describe('viewpoint satisfaction (view-no-scope)', () => {
+        it('should warn when a view has no expose or filter', async () => {
+            const text = `
+package Test {
+    part def Vehicle { }
+    view emptyView { }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const viewDiags = diags.filter(d => d.code === 'view-no-scope');
+            expect(viewDiags.length).toBeGreaterThanOrEqual(1);
+            expect(viewDiags[0].message).toContain('emptyView');
+        });
+
+        it('should NOT warn when a view has expose targets', async () => {
+            const text = `
+package Test {
+    part def Vehicle { }
+    view scopedView {
+        expose Vehicle;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const viewDiags = diags.filter(d => d.code === 'view-no-scope');
+            expect(viewDiags.length).toBe(0);
+        });
+
+        it('should NOT warn when a view has filter directives', async () => {
+            const text = `
+package Test {
+    part def Vehicle { }
+    view filteredView {
+        filter @SysML::PartUsage;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const viewDiags = diags.filter(d => d.code === 'view-no-scope');
+            expect(viewDiags.length).toBe(0);
+        });
+
+        it('should NOT warn for view definitions (only view usages)', async () => {
+            const text = `
+package Test {
+    view def MyViewDef { }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const viewDiags = diags.filter(d => d.code === 'view-no-scope');
+            expect(viewDiags.length).toBe(0);
         });
     });
 });

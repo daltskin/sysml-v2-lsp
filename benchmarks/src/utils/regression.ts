@@ -2,7 +2,7 @@
  * Regression comparator — compare current results against a baseline.
  */
 
-import type { BenchmarkReport, SuiteReport } from '../reporters/jsonReporter.js';
+import type { BenchmarkReport } from '../reporters/jsonReporter.js';
 
 export interface RegressionResult {
     benchmark: string;

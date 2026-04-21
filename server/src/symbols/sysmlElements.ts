@@ -94,6 +94,10 @@ export interface SysMLSymbol {
     metadataAnnotations?: string[];
     /** Expose target qualified names for view usages (e.g., ["Vehicle", "Vehicle::engine"]) */
     exposeTargets?: string[];
+    /** Element filter expressions for view defs/usages (e.g., ["SysML::PartUsage"]) */
+    viewFilters?: string[];
+    /** View rendering reference (e.g., "Views::asElementTable") */
+    viewRendering?: string;
 }
 
 /**

@@ -14,7 +14,7 @@ import type { SuiteReport } from '../reporters/jsonReporter.js';
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..');
 
 function resetDFA(): void {
-    const dfas = (SysMLv2Parser as any).decisionsToDFA as any[];
+    const dfas = (SysMLv2Parser as unknown as Record<string, unknown[]>).decisionsToDFA as Array<{s0?: undefined; states?: {clear?: () => void}}>;
     for (const dfa of dfas) {
         if (!dfa) continue;
         dfa.s0 = undefined;

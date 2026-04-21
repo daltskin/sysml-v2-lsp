@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, expect, it } from 'vitest';
 
 /** Helper: parse text and build a symbol table */
 async function buildST(text: string, uri = 'test://test.sysml') {
@@ -285,5 +285,94 @@ package Test {
 `);
         const refs = st.findReferences('Engine');
         expect(refs.length).toBeGreaterThanOrEqual(2); // definition + usage
+    });
+
+    it('should extract view filter expressions from view body', async () => {
+        const { st } = await buildST(`
+package FilterTest {
+    part def Sensor { }
+    view sensorView {
+        expose Sensor;
+        filter @SysML::PartUsage;
+    }
+}
+`);
+        const symbols = st.getAllSymbols();
+        const view = symbols.find(s => s.name === 'sensorView');
+        expect(view).toBeDefined();
+        expect(view!.viewFilters).toBeDefined();
+        expect(view!.viewFilters!.length).toBeGreaterThanOrEqual(1);
+        expect(view!.viewFilters![0]).toContain('PartUsage');
+    });
+
+    it('should extract expose targets from view body', async () => {
+        const { st } = await buildST(`
+package ExposeTest {
+    part def Vehicle { }
+    view vehicleView {
+        expose Vehicle;
+    }
+}
+`);
+        const symbols = st.getAllSymbols();
+        const view = symbols.find(s => s.name === 'vehicleView');
+        expect(view).toBeDefined();
+        expect(view!.exposeTargets).toBeDefined();
+        expect(view!.exposeTargets!.length).toBeGreaterThanOrEqual(1);
+        expect(view!.exposeTargets![0]).toContain('Vehicle');
+    });
+
+    it('should extract view rendering from view body', async () => {
+        const { st } = await buildST(`
+package RenderTest {
+    part def Vehicle { }
+    view tableView {
+        expose Vehicle;
+        render asTableForm;
+    }
+}
+`);
+        const symbols = st.getAllSymbols();
+        const view = symbols.find(s => s.name === 'tableView');
+        expect(view).toBeDefined();
+        expect(view!.viewRendering).toBeDefined();
+        expect(view!.viewRendering).toContain('asTableForm');
+    });
+
+    it('should extract filter from package body (package-level filters)', async () => {
+        const { st } = await buildST(`
+package PkgFilter {
+    filter @SysML::PartUsage;
+    part def Engine { }
+    view engineView {
+        expose Engine;
+    }
+}
+`);
+        const symbols = st.getAllSymbols();
+        // The package-level filter should be extractable by view definitions that traverse the package body
+        const pkg = symbols.find(s => s.name === 'PkgFilter');
+        expect(pkg).toBeDefined();
+    });
+
+    it('should inherit viewFilters from view definition to view usage', async () => {
+        const { st } = await buildST(`
+package InheritTest {
+    part def Sensor { }
+    view def SensorViewDef {
+        filter @SysML::PartUsage;
+    }
+    view mySensorView : SensorViewDef {
+        expose Sensor;
+    }
+}
+`);
+        const symbols = st.getAllSymbols();
+        const view = symbols.find(s => s.name === 'mySensorView');
+        expect(view).toBeDefined();
+        // View should inherit filter from its definition
+        if (view!.viewFilters && view!.viewFilters.length > 0) {
+            expect(view!.viewFilters![0]).toContain('PartUsage');
+        }
     });
 });

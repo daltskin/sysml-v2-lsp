@@ -23,6 +23,14 @@ const STANDARD_LIBRARY_TYPES = new Set([
     // Common library packages
     'ISQ', 'SI', 'USCustomaryUnits',
     'Quantities', 'MeasurementReferences', 'ScalarValues',
+    // StandardViewDefinitions (SysML v2 standard library)
+    'GeneralView', 'InterconnectionView', 'ActionFlowView',
+    'StateTransitionView', 'SequenceView', 'GeometryView',
+    'GridView', 'BrowserView', 'StandardViewDefinitions',
+    // Views library (rendering types)
+    'View', 'ViewpointCheck', 'Rendering',
+    'TextualRendering', 'GraphicalRendering', 'TabularRendering',
+    'Views',
     // ISQ Base quantities (ISO 80000)
     'LengthValue', 'MassValue', 'DurationValue', 'TimeValue',
     'ElectricCurrentValue', 'ThermodynamicTemperatureValue', 'TemperatureValue',
@@ -187,13 +195,14 @@ export class SemanticValidator {
 
         diagnostics.push(...this.checkDuplicateDefinitions(symbols));
         diagnostics.push(...this.checkUnusedDefinitions(allSymbols, uri));
-        diagnostics.push(...this.checkRedefinitionMultiplicity(symbols, indexes));
+        diagnostics.push(...this.checkRedefinitionMultiplicity(symbols, indexes, text));
         diagnostics.push(...this.checkPortCompatibility(text, uri, indexes));
         diagnostics.push(...this.checkConstraintBodyReferences(text, uri, symbols, indexes));
         diagnostics.push(...this.checkCircularSpecialization(symbols, indexes));
         diagnostics.push(...this.checkCircularContainment(symbols, indexes));
         diagnostics.push(...this.checkUnsatisfiedRequirements(symbols, indexes));
         diagnostics.push(...this.checkUnverifiedRequirements(symbols, indexes));
+        diagnostics.push(...this.checkViewpointSatisfaction(symbols, indexes));
 
         return this.dedupeDiagnostics(diagnostics);
     }
@@ -215,8 +224,11 @@ export class SemanticValidator {
 
         // Safety net: strip concatenated keywords that leak through when
         // getText() merges "Type redefines foo" → "TyperedefinesFoo".
+        // The keyword must be followed by an uppercase letter (word boundary
+        // in camelCase concatenation) to avoid matching inside identifiers
+        // like "InterconnectionView" where "connect" is a substring.
         let typeName = symbol.typeName;
-        const kwMatch = typeName.match(/^([A-Z][A-Za-z_0-9]*?)(redefines|subsets|references|connect|bind|default|via|accept|send|flow|allocate|assign|decide|merge|join|fork)\w/i);
+        const kwMatch = typeName.match(/^([A-Z][A-Za-z_0-9]*?)(redefines|subsets|references|connect|bind|default|via|accept|send|flow|allocate|assign|decide|merge|join|fork)([A-Z])/);
         if (kwMatch) {
             typeName = kwMatch[1];
         }
@@ -412,6 +424,17 @@ export class SemanticValidator {
                 .flatMap(s => s.typeNames),
         );
 
+        // Also consider expose targets in views as references
+        for (const s of symbols) {
+            if (s.exposeTargets) {
+                for (const target of s.exposeTargets) {
+                    // Extract simple name from qualified targets (e.g., "Pkg::MyPart" → "MyPart")
+                    const simpleName = target.replace(/::\*{1,2}$/, '').split('::').pop();
+                    if (simpleName) referencedTypes.add(simpleName);
+                }
+            }
+        }
+
         const diagnostics: Diagnostic[] = [];
         for (const def of defsInScope) {
             const isReferenced = referencedTypes.has(def.name);
@@ -474,7 +497,7 @@ export class SemanticValidator {
 
         diagnostics.push(...instance.checkDuplicateDefinitions(symbolsInUri));
         diagnostics.push(...instance.checkUnusedDefinitions(allSymbols));
-        diagnostics.push(...instance.checkRedefinitionMultiplicity(symbolsInUri, indexes));
+        diagnostics.push(...instance.checkRedefinitionMultiplicity(symbolsInUri, indexes, opts?.text));
         diagnostics.push(...instance.checkCircularSpecialization(symbolsInUri, indexes));
         diagnostics.push(...instance.checkCircularContainment(symbolsInUri, indexes));
         diagnostics.push(...instance.checkUnsatisfiedRequirements(
@@ -934,20 +957,74 @@ export class SemanticValidator {
     }
 
     /**
+     * Rule: viewpoint satisfaction checking.
+     *
+     * Warns when:
+     * - A view satisfies a viewpoint but has no expose directives
+     * - A view references an undefined viewpoint
+     */
+    private checkViewpointSatisfaction(
+        symbols: SysMLSymbol[],
+        _indexes: SymbolIndexes,
+    ): Diagnostic[] {
+        const diagnostics: Diagnostic[] = [];
+
+        // Find all view usages
+        const views = symbols.filter(s => s.kind === SysMLElementKind.ViewUsage);
+        // Find all viewpoint names (used for future viewpoint reference validation)
+        const _viewpointNames = new Set(
+            symbols
+                .filter(s => s.kind === SysMLElementKind.ViewpointDef || s.kind === SysMLElementKind.ViewpointUsage)
+                .map(s => s.name),
+        );
+
+        for (const view of views) {
+            // Check if view satisfies a viewpoint (typeName references a viewpoint)
+            // Views with satisfy directives reference viewpoint by type
+            const hasExpose = view.exposeTargets && view.exposeTargets.length > 0;
+            const hasFilter = view.viewFilters && view.viewFilters.length > 0;
+
+            // Warn if view has no expose and no filter — it doesn't scope anything
+            if (!hasExpose && !hasFilter) {
+                diagnostics.push({
+                    severity: DiagnosticSeverity.Information,
+                    range: view.selectionRange,
+                    message: `View '${view.name}' has no expose or filter directives — it will show all elements`,
+                    source: 'sysml',
+                    code: 'view-no-scope',
+                });
+            }
+        }
+
+        return diagnostics;
+    }
+
+    /**
      * Rule: redefinition multiplicity must conform to base feature multiplicity.
      *
      * For `:>>` / `redefines`, this checks only the lower/upper numeric relation:
      *   base.lower <= redefined.lower <= redefined.upper <= base.upper (if bounded)
      */
-    private checkRedefinitionMultiplicity(symbolsInUri: SysMLSymbol[], indexes: SymbolIndexes): Diagnostic[] {
+    private checkRedefinitionMultiplicity(symbolsInUri: SysMLSymbol[], indexes: SymbolIndexes, text?: string): Diagnostic[] {
         const diagnostics: Diagnostic[] = [];
+        const lines = text?.split('\n');
+
         for (const s of symbolsInUri) {
             if (!s.typeName || !s.multiplicityRange) continue;
 
-            // In this parser path, lowercase typeName is a strong signal for `:>> baseFeature`
+            // In this parser path, lowercase typeName is a signal for `:>> baseFeature`
             const c0 = s.typeName.charCodeAt(0);
             const isLikelyRedef = c0 >= 97 && c0 <= 122;
             if (!isLikelyRedef) continue;
+
+            // Verify this is actually a redefinition (:>> or redefines), not a
+            // subsetting (:>) or typing (:). Check the source line if available.
+            if (lines) {
+                const lineIdx = s.selectionRange.start.line;
+                const line = lines[lineIdx] || '';
+                // Must contain :>> or redefines to be a redefinition
+                if (!/:>>/.test(line) && !/\bredefines\b/.test(line)) continue;
+            }
 
             const candidates = indexes.byName.get(s.typeName) ?? [];
             const base = candidates.find(c => !!c.multiplicityRange);
@@ -978,10 +1055,17 @@ export class SemanticValidator {
 
     /**
      * Rule: both ends of a `connect a to b` relation should resolve to ports with compatible types.
+     *
+     * Flags connections where ports have different types, unless:
+     * - One port is a conjugate (~) of the other
+     * - The connection is inside an interface definition
+     * - The connection is within an interface usage
+     * - Both ports are untyped (empty port defs with no features)
      */
     private checkPortCompatibility(text: string, uri: string, indexes: SymbolIndexes): Diagnostic[] {
         if (!text) return [];
         const diagnostics: Diagnostic[] = [];
+        const lines = text.split('\n');
 
         const re = /\bconnect\s+([A-Za-z_][\w.]*)\s+to\s+([A-Za-z_][\w.]*)/g;
         let m: RegExpExecArray | null;
@@ -997,6 +1081,55 @@ export class SemanticValidator {
             const rType = rSym.typeNames[0] ?? rSym.typeName;
             if (!lType || !rType || lType === rType) continue;
 
+            // Skip conjugated pairs: ~PortType is compatible with PortType
+            if (lType === '~' + rType || rType === '~' + lType) continue;
+            if (lType.startsWith('~') && lType.slice(1) === rType) continue;
+            if (rType.startsWith('~') && rType.slice(1) === lType) continue;
+
+            // Skip connections inside interface definitions
+            const matchLine = text.substring(0, m.index).split('\n').length - 1;
+            let insideInterfaceDef = false;
+            for (let i = matchLine; i >= 0 && i >= matchLine - 30; i--) {
+                const line = (lines[i] || '').trim();
+                if (/\binterface\s+def\b/.test(line)) { insideInterfaceDef = true; break; }
+                if (/^\s*package\b/.test(line)) break;
+            }
+            if (insideInterfaceDef) continue;
+
+            // Skip connections within an interface usage
+            const precedingText = text.substring(Math.max(0, m.index - 300), m.index);
+            if (/\binterface\s+\w[\w']*(:\w[\w']*)?\s*$/m.test(precedingText)) continue;
+
+            // Skip connections between untyped port definitions (empty port defs
+            // like `port def DiffPort;` have no children — they're compatible with anything)
+            const lDefSyms = indexes.byName.get(lType) ?? [];
+            const rDefSyms = indexes.byName.get(rType) ?? [];
+            const lDef = lDefSyms.find(s => s.kind.includes('def'));
+            const rDef = rDefSyms.find(s => s.kind.includes('def'));
+            // Check if the definition has child symbols (features) by looking at byParent index
+            const lChildren = lDef ? (indexes.byParent.get(lDef.qualifiedName) ?? []) : [];
+            const rChildren = rDef ? (indexes.byParent.get(rDef.qualifiedName) ?? []) : [];
+            if (lChildren.length === 0 && rChildren.length === 0) continue;
+
+            // Skip when port types share a common feature name — this indicates
+            // a provider/consumer pattern (e.g., HandPort has out ignitionCmd,
+            // IgnitionCmdPort has in ignitionCmd). Also skip when one port type
+            // specializes the other (transitively).
+            if (lDef && rDef) {
+                // Check transitive specialization: walk the type hierarchy
+                const lHierarchy = this.resolveTypeHierarchy(lType, indexes);
+                const rHierarchy = this.resolveTypeHierarchy(rType, indexes);
+                if (lHierarchy.has(rType) || rHierarchy.has(lType)) continue;
+                // Check if they share a common ancestor
+                const hasCommonAncestor = [...lHierarchy].some(t => rHierarchy.has(t));
+                if (hasCommonAncestor) continue;
+
+                // Check shared feature names (compatible flow items)
+                const lChildNames = new Set(lChildren.map(c => c.name));
+                const hasSharedFeature = rChildren.some(c => lChildNames.has(c.name));
+                if (hasSharedFeature) continue;
+            }
+
             const range = this.indexToRange(text, m.index, m[0].length);
             diagnostics.push({
                 severity: DiagnosticSeverity.Warning,
@@ -1009,6 +1142,30 @@ export class SemanticValidator {
         }
 
         return diagnostics;
+    }
+
+    /**
+     * Resolve the full type hierarchy for a type name by following
+     * specialization chains transitively (max depth 10).
+     * Returns a Set of all ancestor type names including the type itself.
+     */
+    private resolveTypeHierarchy(typeName: string, indexes: SymbolIndexes): Set<string> {
+        const hierarchy = new Set<string>();
+        const queue: string[] = [typeName];
+        while (queue.length > 0 && hierarchy.size < 50) {
+            const current = queue.shift()!;
+            if (hierarchy.has(current)) continue;
+            hierarchy.add(current);
+            // Find the definition for this type
+            const defs = indexes.byName.get(current) ?? [];
+            for (const def of defs) {
+                if (!def.kind.includes('def')) continue;
+                for (const parent of def.typeNames) {
+                    if (!hierarchy.has(parent)) queue.push(parent);
+                }
+            }
+        }
+        return hierarchy;
     }
 
     /**

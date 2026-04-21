@@ -1,6 +1,7 @@
 import { readFileSync } from 'fs';
 import { join } from 'path';
 import { describe, expect, it } from 'vitest';
+import type { SysMLElementDTO, SysMLModelScope } from '../../server/src/model/sysmlModelTypes.js';
 
 /**
  * Regression tests for use case, actor, stakeholder, and requirement parsing.
@@ -15,8 +16,7 @@ import { describe, expect, it } from 'vitest';
 describe('Use Case & Requirement Element Extraction', () => {
     const fixturesDir = join(__dirname, '..', 'fixtures');
 
-    async function getModelForText(text: string, scopes?: string[]) {
-        const { parseDocument } = await import('../../server/src/parser/parseDocument.js');
+    async function getModelForText(text: string, scopes?: SysMLModelScope[]) {
         const { DocumentManager } = await import('../../server/src/documentManager.js');
         const { SysMLModelProvider } = await import('../../server/src/model/sysmlModelProvider.js');
 
@@ -27,20 +27,20 @@ describe('Use Case & Requirement Element Extraction', () => {
         docManager.parse(doc);
 
         const provider = new SysMLModelProvider(docManager);
-        return provider.getModel(uri, 1, scopes as any);
+        return provider.getModel(uri, 1, scopes);
     }
 
-    async function getModelForFixture(fixturePath: string, scopes?: string[]) {
+    async function getModelForFixture(fixturePath: string, scopes?: SysMLModelScope[]) {
         const text = readFileSync(join(fixturesDir, fixturePath), 'utf-8');
         return getModelForText(text, scopes);
     }
 
     /** Recursively find all elements matching a predicate. */
     function findAll(
-        elements: any[],
-        predicate: (el: any) => boolean,
-    ): any[] {
-        const results: any[] = [];
+        elements: SysMLElementDTO[],
+        predicate: (el: SysMLElementDTO) => boolean,
+    ): SysMLElementDTO[] {
+        const results: SysMLElementDTO[] = [];
         for (const el of elements) {
             if (predicate(el)) results.push(el);
             if (el.children) results.push(...findAll(el.children, predicate));

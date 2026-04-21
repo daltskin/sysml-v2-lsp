@@ -37,7 +37,7 @@ package test{
     part myProductUsage : myProductType;
 }
 `;
-        const { st, result } = await buildST(text);
+        const { st } = await buildST(text);
 
         const symbols = st.getSymbolsForUri('test://test.sysml');
 

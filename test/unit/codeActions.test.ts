@@ -251,8 +251,12 @@ describe('Code Actions — Incompatible Port Types', () => {
     it('should suggest replacing endpoint with a compatible local port', async () => {
         const uri = 'file:///test.sysml';
         const text = `package Test {
-    port def FuelPort;
-    port def ElectricalPort;
+    port def FuelPort {
+        out item fuel;
+    }
+    port def ElectricalPort {
+        out item power;
+    }
 
     part def Car {
         port fuel : FuelPort;

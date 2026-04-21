@@ -24,7 +24,7 @@ interface ParseTiming {
 }
 
 function resetDFA(): void {
-    const dfas = (SysMLv2Parser as any).decisionsToDFA as any[];
+    const dfas = (SysMLv2Parser as unknown as Record<string, unknown[]>).decisionsToDFA as Array<{s0?: undefined; states?: {clear?: () => void}}>;
     for (const dfa of dfas) {
         if (!dfa) continue;
         dfa.s0 = undefined;
@@ -70,7 +70,7 @@ function parseOnce(text: string): ParseTiming {
             reportAmbiguity: () => { },
             reportAttemptingFullContext: () => { },
             reportContextSensitivity: () => { },
-        } as any);
+        });
         parser.rootNamespace();
     }
     const parseMs = performance.now() - parseStart;

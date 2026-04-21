@@ -382,6 +382,16 @@ export class SysMLModelProvider {
             attributes['exposeTargets'] = symbol.exposeTargets.join(',');
         }
 
+        // Include view filters (e.g., "@ SysML::PartUsage")
+        if (symbol.viewFilters && symbol.viewFilters.length > 0) {
+            attributes['viewFilters'] = symbol.viewFilters.join(',');
+        }
+
+        // Include view rendering reference (e.g., "Views::asElementTable")
+        if (symbol.viewRendering) {
+            attributes['viewRendering'] = symbol.viewRendering;
+        }
+
         // Extract direction for ports from the source text
         const direction = this.extractDirection(symbol, lines);
         if (direction) {
