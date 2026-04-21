@@ -1,5 +1,35 @@
 # Changelog
 
+## [0.15.0]
+
+### Added
+
+- View filter, rendering, and expose target extraction in the symbol table
+- View specialization chain resolution — views inherit filters, rendering, and expose targets from parent view defs
+- Viewpoint satisfaction validation rule: warns when a view has no expose or filter directives
+- Standard library view types (`GeneralView`, `InterconnectionView`, `TabularRendering`, etc.) recognised by the semantic validator
+- Grammar: metadata cast expression `(as MetadataType)` in `baseExpression`
+- `viewFilters` and `viewRendering` attributes surfaced in the model DTO
+
+### Changed
+
+- Unused-definition rule now considers expose targets as references
+- Keyword-truncation regex in type-name extraction requires uppercase boundary to avoid false matches inside identifiers like `InterconnectionView`
+- Lint fixes: replaced `any` casts with proper types, removed unused imports and variables
+
+## [0.14.0]
+
+### Added
+
+- Expose target extraction for view usages and view definitions in the symbol table
+- Markdown benchmark reporter for human-readable result summaries
+- Expose targets surfaced as element attributes in the model DTO
+
+### Changed
+
+- CI skips runs on markdown-only changes (`paths-ignore: '**/*.md'`)
+- Keyword-truncation regex uses negative lookbehind to avoid matching mid-identifier
+
 ## [0.13.0]
 
 ### Added
