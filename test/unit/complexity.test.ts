@@ -22,6 +22,7 @@ function sym(overrides: Partial<SysMLSymbol> & { name: string; kind: SysMLElemen
         uri: overrides.uri ?? 'test://test.sysml',
         children: overrides.children ?? [],
         typeNames: overrides.typeNames ?? (overrides.typeName ? [overrides.typeName] : []),
+        specializationNames: overrides.specializationNames ?? [],
         ...overrides,
     };
 }

@@ -72,11 +72,13 @@ export function ensureParsed(ctx: McpContext, uri: string, code?: string): void 
 // ---------------------------------------------------------------------------
 
 export function formatSymbol(sym: SysMLSymbol): Record<string, unknown> {
+    const typingOnly = sym.typeNames.filter(n => !sym.specializationNames.includes(n));
     return {
         name: sym.name,
         kind: sym.kind,
         qualifiedName: sym.qualifiedName,
-        ...(sym.typeNames.length > 0 ? { type: sym.typeNames.join(', ') } : {}),
+        ...(typingOnly.length > 0 ? { type: typingOnly.join(', ') } : {}),
+        ...(sym.specializationNames.length > 0 ? { specializes: sym.specializationNames.join(', ') } : {}),
         ...(sym.documentation ? { documentation: sym.documentation } : {}),
         ...(sym.parentQualifiedName ? { parent: sym.parentQualifiedName } : {}),
         ...(sym.children.length > 0 ? { children: sym.children } : {}),

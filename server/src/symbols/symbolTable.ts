@@ -92,12 +92,19 @@ const PREFIX_EXTENSION_RULE_INDICES: ReadonlySet<number> = new Set([
     SysMLv2Parser.RULE_endFeaturePrefix,            // 86
 ]);
 
-/** Rules containing typing / specialization info for collectTypeNamesFromTree() */
-const TYPE_EXTRACTION_RULE_INDICES: ReadonlySet<number> = new Set([
+/** Rules that represent :> subsetting / specializes / subclassification */
+const TYPE_SPECIALIZATION_RULE_INDICES: ReadonlySet<number> = new Set([
     SysMLv2Parser.RULE_specialization,          // 66
     SysMLv2Parser.RULE_ownedSpecialization,      // 67
     SysMLv2Parser.RULE_subclassification,        // 83
     SysMLv2Parser.RULE_ownedSubclassification,   // 84
+    SysMLv2Parser.RULE_subsetting,               // 111
+    SysMLv2Parser.RULE_ownedSubsetting,          // 112
+    SysMLv2Parser.RULE_specializationPart,       // 57
+]);
+
+/** Rules that represent : typing (feature typing) */
+const TYPE_TYPING_RULE_INDICES: ReadonlySet<number> = new Set([
     SysMLv2Parser.RULE_typings,                  // 101
     SysMLv2Parser.RULE_featureTyping,            // 109
     SysMLv2Parser.RULE_ownedFeatureTyping,       // 110
@@ -105,9 +112,12 @@ const TYPE_EXTRACTION_RULE_INDICES: ReadonlySet<number> = new Set([
     SysMLv2Parser.RULE_ownedConjugation,         // 71
     SysMLv2Parser.RULE_disjoining,               // 72
     SysMLv2Parser.RULE_ownedDisjoining,          // 73
-    SysMLv2Parser.RULE_subsetting,               // 111
-    SysMLv2Parser.RULE_ownedSubsetting,          // 112
-    SysMLv2Parser.RULE_specializationPart,       // 57
+]);
+
+/** Combined set — all rules containing typing / specialization info */
+const TYPE_EXTRACTION_RULE_INDICES: ReadonlySet<number> = new Set([
+    ...TYPE_SPECIALIZATION_RULE_INDICES,
+    ...TYPE_TYPING_RULE_INDICES,
 ]);
 
 /** Rules to recurse into when looking for type names */
@@ -585,6 +595,7 @@ export class SymbolTable {
         const selectionRange = this.extractNameRange(ctx) ?? range;
         // Extract type names for both usages (typing) and definitions (specialization)
         const typeNames = this.extractTypeNames(ctx);
+        const specializationNames = this.extractSpecializationNames(ctx);
         const typeName = typeNames[0];
         const documentation = this.extractDocumentation(ctx);
         // Only extract multiplicity for usages
@@ -607,6 +618,7 @@ export class SymbolTable {
             uri,
             typeName,
             typeNames,
+            specializationNames,
             documentation,
             parentQualifiedName: parentQualifiedName || undefined,
             children: [],
@@ -773,6 +785,36 @@ export class SymbolTable {
     }
 
     /**
+     * Extract only the specialization names (:> / specializes / subsets) from a context.
+     * Uses the same tree-walk as extractTypeNames but restricted to
+     * TYPE_SPECIALIZATION_RULE_INDICES so that : typing names are excluded.
+     * Falls back to the regex path for the :> / specializes operators only.
+     */
+    private extractSpecializationNames(ctx: ParserRuleContext): string[] {
+        const names: string[] = [];
+        this.collectNamesFromTree(ctx, names, 0, TYPE_SPECIALIZATION_RULE_INDICES);
+        if (names.length > 0) return names;
+
+        // Regex fallback: look for :> / specializes / :>> only
+        const fullText = ctx.getText();
+        const braceIdx = fullText.indexOf('{');
+        let text = braceIdx >= 0 ? fullText.substring(0, braceIdx) : fullText;
+        text = text.replace(RE_KEYWORD_TRUNCATE, '');
+
+        const specMatch = text.match(RE_SPEC);
+        if (specMatch) {
+            const specStr = text.substring(text.indexOf(specMatch[0]) + specMatch[0].indexOf(specMatch[1]));
+            for (const part of specStr.split(',')) {
+                const qm = part.match(RE_QUOTED_NAME);
+                if (qm) { names.push(qm[1]); continue; }
+                const m = part.trim().match(RE_IDENT_START);
+                if (m) names.push(m[1]);
+            }
+        }
+        return names;
+    }
+
+    /**
      * Recursively walk the parse tree to find typing / specialization rules.
      * Recurses into declaration wrappers (up to maxDepth) so that
      * `interfaceUsage → interfaceUsageDeclaration → usageDeclaration →
@@ -783,12 +825,25 @@ export class SymbolTable {
         names: string[],
         depth: number,
     ): void {
+        this.collectNamesFromTree(ctx, names, depth, TYPE_EXTRACTION_RULE_INDICES);
+    }
+
+    /**
+     * Core recursive tree walker used by both collectTypeNamesFromTree and
+     * extractSpecializationNames — parameterised on which extraction rule set to use.
+     */
+    private collectNamesFromTree(
+        ctx: ParserRuleContext,
+        names: string[],
+        depth: number,
+        extractionRules: ReadonlySet<number>,
+    ): void {
         if (depth > 6) return; // don't go too deep
         for (let i = 0; i < ctx.getChildCount(); i++) {
             const child = ctx.getChild(i);
             if (!(child instanceof ParserRuleContext)) continue;
             const ri = child.ruleIndex;
-            if (TYPE_EXTRACTION_RULE_INDICES.has(ri)) {
+            if (extractionRules.has(ri)) {
                 // These rules contain qualified-name children;
                 // extract all identifier-like tokens.
                 const childText = child.getText();
@@ -815,7 +870,7 @@ export class SymbolTable {
                 // (covers e.g. interfaceUsageDeclaration, usageDeclaration, etc.)
                 SysMLv2Parser.ruleNames[ri]?.includes('eclaration')
             ) {
-                this.collectTypeNamesFromTree(child, names, depth + 1);
+                this.collectNamesFromTree(child, names, depth + 1, extractionRules);
             }
         }
     }

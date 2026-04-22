@@ -80,6 +80,8 @@ export interface SysMLSymbol {
     typeName?: string;
     /** Type names as an array (populated from typeName for multi-type support). */
     typeNames: string[];
+    /** Names referenced via :> / specializes / subsets (distinct from : typing). */
+    specializationNames: string[];
     /** Documentation string if available */
     documentation?: string;
     /** Parent symbol's qualified name */
