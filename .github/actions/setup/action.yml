@@ -1,25 +1,14 @@
 name: Setup
-description: Checkout, install Node.js, install deps, generate ANTLR parser
+description: Install Node.js, install deps, generate ANTLR parser
 
 inputs:
   node-version:
     description: Node.js version
     default: '24'
-  fetch-depth:
-    description: Git fetch depth (0 for full history)
-    default: '1'
-  token:
-    description: GitHub token for checkout
-    default: ${{ github.token }}
 
 runs:
   using: composite
   steps:
-    - uses: actions/checkout@v6
-      with:
-        fetch-depth: ${{ inputs.fetch-depth }}
-        token: ${{ inputs.token }}
-
     - name: Use Node.js ${{ inputs.node-version }}
       uses: actions/setup-node@v6
       with:

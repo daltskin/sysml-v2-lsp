@@ -19,6 +19,8 @@ jobs:
         node-version: [24]
 
     steps:
+      - uses: actions/checkout@v6
+
       - name: Setup
         uses: ./.github/actions/setup
         with:
