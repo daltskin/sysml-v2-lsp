@@ -8,6 +8,7 @@ Use this checklist when preparing a new release of **sysml-v2-lsp**.
 - [ ] Run the full CI pipeline locally: `make ci` (lint → build → test)
 - [ ] Verify grammar is up to date: `make update-grammar` (if applicable)
 - [ ] Review and triage open issues / PRs — merge or defer
+- [ ] Merge the release PR once CI is green
 - [ ] Verify VSIX packages correctly: `make package`
 - [ ] Verify npm pack looks correct: `npm pack --dry-run`
 - [ ] Test MCP server manually: `npx sysml-mcp`
@@ -18,7 +19,7 @@ Use this checklist when preparing a new release of **sysml-v2-lsp**.
 
 ## Tag & Release
 
-- [ ] Go to **Actions → Prepare Release → Run workflow**
+- [ ] Go to **Actions → Prepare Release → Run workflow** (on `main`)
   - Enter the version (e.g. `0.17.0`)
   - Tick **Dry run** first to validate, then run again without it
 - [ ] The Prepare Release workflow will:
@@ -47,4 +48,3 @@ Use this checklist when preparing a new release of **sysml-v2-lsp**.
   npx @vscode/vsce publish
   ```
 - [ ] Announce the release (GitHub Discussions, README badge, etc.)
-- [ ] Add a new `## [Unreleased]` section to `CHANGELOG.md`
