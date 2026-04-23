@@ -14,16 +14,18 @@ Use this checklist when preparing a new release of **sysml-v2-lsp**.
 
 ## Changelog & Version
 
-- [ ] Update `CHANGELOG.md` — move items from `[Unreleased]` to a new version heading
-- [ ] Confirm the version in `package.json` matches the intended release (the release workflow will sync it from the git tag, but keeping it aligned avoids confusion)
+- [ ] Review `CHANGELOG.md` — ensure `[Unreleased]` (or current version heading) has all changes listed
 
 ## Tag & Release
 
-- [ ] Create and push a git tag:
-  ```bash
-  git tag v<VERSION>
-  git push origin v<VERSION>
-  ```
+- [ ] Go to **Actions → Prepare Release → Run workflow**
+  - Enter the version (e.g. `0.17.0`)
+  - Tick **Dry run** first to validate, then run again without it
+- [ ] The Prepare Release workflow will:
+  - ✅ Build & test
+  - ✅ Bump `package.json` version
+  - ✅ Update `CHANGELOG.md` with version and add fresh `[Unreleased]` section
+  - ✅ Commit, tag, and push — which triggers the Release workflow
 - [ ] Verify the **Release** workflow runs successfully in GitHub Actions
 - [ ] Confirm npm package is published: <https://www.npmjs.com/package/sysml-v2-lsp>
 - [ ] Confirm GitHub Release is created with the `.vsix` asset attached

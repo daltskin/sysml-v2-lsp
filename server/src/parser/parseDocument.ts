@@ -1,7 +1,7 @@
 import { BailErrorStrategy, CharStream, CommonTokenStream, DefaultErrorStrategy, ParserRuleContext, PredictionMode } from 'antlr4ng';
 import { SysMLv2Lexer } from '../generated/SysMLv2Lexer.js';
 import { SysMLv2Parser } from '../generated/SysMLv2Parser.js';
-import { clearAllDFAStates, isDfaPreSeeded, markDfaNotPreSeeded } from './dfaLoader.js';
+import { clearAllDFAStates, hasStaleDfaStates, isDfaPreSeeded, markDfaNotPreSeeded } from './dfaLoader.js';
 import { SyntaxError, SysMLErrorListener } from './errorListener.js';
 
 /**
@@ -44,11 +44,13 @@ export interface ParseResult {
 export function parseDocument(text: string): ParseResult {
     const result = parseDocumentCore(text);
 
-    // If errors occurred with a pre-seeded DFA, clear ALL DFA states
-    // (not just s0) and retry with LL-only mode.  Pre-seeded child
-    // states deep in the DFA graph may have bogus ERROR edges.
+    // If errors occurred and the DFA still has stale pre-seeded states,
+    // clear ALL DFA states and retry with LL-only mode.  Pre-seeded
+    // child states deep in the DFA graph may have bogus ERROR edges.
+    // Uses hasStaleDfaStates() so the retry fires even when a previous
+    // successful parse already cleared the pre-seeded flag.
     // Reuse the lexer & token stream from the first attempt to skip re-lexing.
-    if (result.errors.length > 0 && isDfaPreSeeded()) {
+    if (result.errors.length > 0 && hasStaleDfaStates()) {
         markDfaNotPreSeeded();
         clearAllDFAStates();
         return parseDocumentLL(text, result.lexer, result.tokenStream);
@@ -280,9 +282,9 @@ export function parseDocumentBatch(text: string): ParseResult {
     const parseMs = Date.now() - parseStart;
     const errors = errorListener.getErrors();
 
-    // If errors occurred with a pre-seeded DFA, clear ALL DFA states
-    // and retry with LL-only mode — mirrors parseDocument() logic.
-    if (errors.length > 0 && isDfaPreSeeded()) {
+    // If errors occurred and the DFA still has stale pre-seeded states,
+    // clear ALL DFA states and retry with LL-only mode.
+    if (errors.length > 0 && hasStaleDfaStates()) {
         markDfaNotPreSeeded();
         clearAllDFAStates();
         return parseDocumentBatchLL(text, lexer, tokenStream, lexMs);

@@ -467,6 +467,9 @@ package WarmUp {
             bind engine.fuelIn = fuelCmdPort;
             interface eTx : DriveInterface connect engine.driveOut to transmission.clutch;
             interface fuelIf : FuelInterface connect fuelTank.fuelOut to engine.fuelIn;
+            // Anonymous typed interface usages (no name, just colon TypeName)
+            interface : DriveInterface connect engine.driveOut to transmission.clutch;
+            interface : FuelInterface connect fuelTank.fuelOut to engine.fuelIn;
             allocate actionTree::providePower.genToAmp to eTx;
             bind engine.ctrlPort = p1;
             connect starterMotor.gearPort to engine.flyWheel;

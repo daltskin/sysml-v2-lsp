@@ -1,6 +1,7 @@
 import { Diagnostic, DiagnosticSeverity } from 'vscode-languageserver/node.js';
 import { DocumentManager } from '../documentManager.js';
 import { SyntaxError } from '../parser/errorListener.js';
+import { SysMLv2Lexer } from '../generated/SysMLv2Lexer.js';
 import { stripComments } from '../utils/identUtils.js';
 
 /**
@@ -85,13 +86,27 @@ export class DiagnosticsProvider {
     }
 
     private syntaxErrorToDiagnostic(error: SyntaxError): Diagnostic {
+        let message = error.message;
+
+        // Improve "no viable alternative" / "mismatched input" messages
+        // when a reserved keyword is used where an identifier was expected.
+        const token = error.offendingSymbol;
+        if (token &&
+            token.type !== SysMLv2Lexer.IDENTIFIER &&
+            token.text &&
+            /^[a-z]+$/.test(token.text)) {
+            const word = token.text;
+            const suggestion = 'my' + word.charAt(0).toUpperCase() + word.slice(1);
+            message = `'${word}' is a reserved SysML keyword and cannot be used as a name. Consider renaming it (e.g., '${suggestion}').`;
+        }
+
         return {
             severity: DiagnosticSeverity.Error,
             range: {
                 start: { line: error.line, character: error.column },
                 end: { line: error.line, character: error.column + error.length },
             },
-            message: error.message,
+            message,
             source: 'sysml',
         };
     }

@@ -475,6 +475,11 @@ export class SymbolTable {
             this.registerSymbol(symbol, uri, currentScope);
             // Create a child scope for definitions and packages
             childScope = new Scope(symbol.qualifiedName, currentScope);
+        } else {
+            // Anonymous elements (e.g. `interface : TypeName connect ...`)
+            // have a kind but no name. Register their type names so
+            // "Go to References" on the type definition still finds them.
+            this.registerAnonymousTypeRefs(ctx, uri, parentQualifiedName);
         }
 
         // Walk children
@@ -537,6 +542,85 @@ export class SymbolTable {
             this.typeNameRefs.set(tn, refList);
         }
         scope.define(symbol);
+    }
+
+    /**
+     * For anonymous elements (elements with a recognized kind but no name),
+     * extract type names and register them in the reverse index so that
+     * "Go to References" on a type definition still finds anonymous usages
+     * like `interface : PwrHeaterIface connect ...`.
+     */
+    private registerAnonymousTypeRefs(
+        ctx: ParserRuleContext,
+        uri: string,
+        parentQualifiedName: string,
+    ): void {
+        // Only process contexts that map to a SysML element kind
+        const kind = RULE_INDEX_TO_KIND.get(ctx.ruleIndex);
+        if (kind === undefined) return;
+
+        const typeNames = this.extractTypeNames(ctx);
+        if (typeNames.length === 0) return;
+
+        // Create a minimal symbol for navigation (clicking a reference
+        // should jump to the anonymous usage location in the source).
+        const range = contextToRange(ctx);
+        const anonName = `<anonymous ${kind}>`;
+        const qualifiedName = parentQualifiedName
+            ? `${parentQualifiedName}::${anonName}#${range.start.line}`
+            : `${anonName}#${range.start.line}`;
+
+        const anonSymbol: SysMLSymbol = {
+            name: anonName,
+            kind,
+            qualifiedName,
+            range,
+            selectionRange: range,
+            uri,
+            typeName: typeNames[0],
+            typeNames,
+            parentQualifiedName: parentQualifiedName || undefined,
+            children: [],
+        };
+
+        // Register only in typeNameRefs (not symbolsByName — anonymous
+        // symbols shouldn't appear in outline / completion).
+        for (const tn of typeNames) {
+            const refList = this.typeNameRefs.get(tn) ?? [];
+            refList.push(anonSymbol);
+            this.typeNameRefs.set(tn, refList);
+        }
+
+        // Also register in symbolsByUri and symbolsByPosition so the
+        // reference result has a valid location for navigation.
+        const uriSymbols = this.symbolsByUri.get(uri) ?? [];
+        uriSymbols.push(anonSymbol);
+        this.symbolsByUri.set(uri, uriSymbols);
+
+        const posList = this.symbolsByPosition.get(uri) ?? [];
+        const startLine = range.start.line;
+        const startChar = range.start.character;
+        if (
+            posList.length === 0 ||
+            startLine > posList[posList.length - 1].selectionRange.start.line ||
+            (startLine === posList[posList.length - 1].selectionRange.start.line &&
+                startChar >= posList[posList.length - 1].selectionRange.start.character)
+        ) {
+            posList.push(anonSymbol);
+        } else {
+            let lo = 0, hi = posList.length;
+            while (lo < hi) {
+                const mid = (lo + hi) >>> 1;
+                const mr = posList[mid].selectionRange.start;
+                if (mr.line < startLine || (mr.line === startLine && mr.character < startChar)) {
+                    lo = mid + 1;
+                } else {
+                    hi = mid;
+                }
+            }
+            posList.splice(lo, 0, anonSymbol);
+        }
+        this.symbolsByPosition.set(uri, posList);
     }
 
     /**

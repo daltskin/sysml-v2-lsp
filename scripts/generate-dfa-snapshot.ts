@@ -279,19 +279,18 @@ export const DFA_SNAPSHOT: DecisionSnapshot[] = ${json};
 // ---------------------------------------------------------------------------
 
 const rootDir = path.resolve(import.meta.dirname || __dirname, '..');
+// Files selected for DFA coverage value — each contributes unique grammar
+// paths.  Synthetic benchmarks (synthetic-100/500/1000), camera.sysml, and
+// smart-home.sysml were removed: they add ≤9 DFA states combined and zero
+// new decisions, while costing parse time during snapshot generation.
 const exampleFiles = [
-    path.join(rootDir, 'benchmarks/fixtures/synthetic-100.sysml'),
-    path.join(rootDir, 'benchmarks/fixtures/synthetic-500.sysml'),
-    path.join(rootDir, 'benchmarks/fixtures/synthetic-1000.sysml'),
-    path.join(rootDir, 'examples/smart-home.sysml'),
-    path.join(rootDir, 'examples/smart-home-complex.sysml'),
     path.join(rootDir, 'examples/smart-home-complex2.sysml'),
-    path.join(rootDir, 'examples/multiplicity.sysml'),
-    path.join(rootDir, 'examples/vehicle-model.sysml'),
-    path.join(rootDir, 'examples/bike.sysml'),
-    path.join(rootDir, 'examples/camera.sysml'),
-    path.join(rootDir, 'examples/toaster-system.sysml'),
+    path.join(rootDir, 'examples/smart-home-complex.sysml'),
     path.join(rootDir, 'examples/dfa-coverage-advanced.sysml'),
+    path.join(rootDir, 'examples/vehicle-model.sysml'),
+    path.join(rootDir, 'examples/toaster-system.sysml'),
+    path.join(rootDir, 'examples/multiplicity.sysml'),
+    path.join(rootDir, 'examples/bike.sysml'),
 ];
 
 console.log('Generating DFA snapshot...');
