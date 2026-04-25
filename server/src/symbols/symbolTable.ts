@@ -103,15 +103,23 @@ const TYPE_SPECIALIZATION_RULE_INDICES: ReadonlySet<number> = new Set([
     SysMLv2Parser.RULE_specializationPart,       // 57
 ]);
 
-/** Rules that represent : typing (feature typing) */
+/**
+ * Rules that represent : typing (feature typing).
+ *
+ * NOTE: `conjugation` and `disjoining` (rules 70-73) are not strictly typing
+ * relationships in SysML semantics — they are kept in the typing bucket by
+ * exclusion (i.e. "everything name-bearing that is not a specialization")
+ * so that existing `extractTypeNames` / `typeNames` behaviour is preserved
+ * via the combined `TYPE_EXTRACTION_RULE_INDICES` set.
+ */
 const TYPE_TYPING_RULE_INDICES: ReadonlySet<number> = new Set([
     SysMLv2Parser.RULE_typings,                  // 101
     SysMLv2Parser.RULE_featureTyping,            // 109
     SysMLv2Parser.RULE_ownedFeatureTyping,       // 110
-    SysMLv2Parser.RULE_conjugation,              // 70
-    SysMLv2Parser.RULE_ownedConjugation,         // 71
-    SysMLv2Parser.RULE_disjoining,               // 72
-    SysMLv2Parser.RULE_ownedDisjoining,          // 73
+    SysMLv2Parser.RULE_conjugation,              // 70  (see NOTE above)
+    SysMLv2Parser.RULE_ownedConjugation,         // 71  (see NOTE above)
+    SysMLv2Parser.RULE_disjoining,               // 72  (see NOTE above)
+    SysMLv2Parser.RULE_ownedDisjoining,          // 73  (see NOTE above)
 ]);
 
 /** Combined set — all rules containing typing / specialization info */
@@ -163,7 +171,14 @@ const PREFIX_METADATA_RECURSE_RULE_INDICES: ReadonlySet<number> = new Set([
 // Negative lookbehind (?<![A-Za-z_]) ensures keywords don't match mid-identifier
 // (e.g. "connect" should not match inside "InterconnectionView")
 const RE_KEYWORD_TRUNCATE = /(?<![A-Za-z_])(redefines|subsets|references|connect|bind|first|then|flow|allocate|assign|accept|send|decide|merge|join|fork|via|default)\b.*/i;
+// Variant used by the specialization regex fallback: keeps `subsets` so that
+// it can be matched as a specialization keyword (it is otherwise stripped by
+// RE_KEYWORD_TRUNCATE because the typing regex must not greedily absorb it).
+const RE_KEYWORD_TRUNCATE_SPEC = /(?<![A-Za-z_])(redefines|references|connect|bind|first|then|flow|allocate|assign|accept|send|decide|merge|join|fork|via|default)\b.*/i;
 const RE_SPEC = /(?:specializes|:>|:>>)\s*('[^']+'|[A-Za-z_]\w*(?:::\w+)*)(?:\s*,\s*(?:'[^']+'|[A-Za-z_]\w*(?:::\w+)*))*/;
+// Specialization fallback regex extended to cover the `subsets` keyword used
+// by feature subsetting relationships.
+const RE_SPEC_WITH_SUBSETS = /(?:specializes|subsets|:>|:>>)\s*('[^']+'|[A-Za-z_]\w*(?:::\w+)*)(?:\s*,\s*(?:'[^']+'|[A-Za-z_]\w*(?:::\w+)*))*/;
 const RE_DEFINED_BY = /definedby\s*([A-Za-z_]\w*(?:::\w+)*(?:\s*,\s*[A-Za-z_]\w*(?:::\w+)*)*)/;
 const RE_TYPING = /:(?![:>])\s*('[^']+'|[A-Za-z_]\w*(?:::\w+)*)/;
 const RE_QUOTED_NAME = /'([^']+)'/;
@@ -788,20 +803,22 @@ export class SymbolTable {
      * Extract only the specialization names (:> / specializes / subsets) from a context.
      * Uses the same tree-walk as extractTypeNames but restricted to
      * TYPE_SPECIALIZATION_RULE_INDICES so that : typing names are excluded.
-     * Falls back to the regex path for the :> / specializes operators only.
+     * Falls back to a regex path that covers :> / :>> / specializes / subsets.
      */
     private extractSpecializationNames(ctx: ParserRuleContext): string[] {
         const names: string[] = [];
         this.collectNamesFromTree(ctx, names, 0, TYPE_SPECIALIZATION_RULE_INDICES);
         if (names.length > 0) return names;
 
-        // Regex fallback: look for :> / specializes / :>> only
+        // Regex fallback: look for :> / specializes / :>> / subsets.
+        // Use the spec-aware truncate variant so that `subsets <name>` is not
+        // stripped before we have a chance to match it.
         const fullText = ctx.getText();
         const braceIdx = fullText.indexOf('{');
         let text = braceIdx >= 0 ? fullText.substring(0, braceIdx) : fullText;
-        text = text.replace(RE_KEYWORD_TRUNCATE, '');
+        text = text.replace(RE_KEYWORD_TRUNCATE_SPEC, '');
 
-        const specMatch = text.match(RE_SPEC);
+        const specMatch = text.match(RE_SPEC_WITH_SUBSETS);
         if (specMatch) {
             const specStr = text.substring(text.indexOf(specMatch[0]) + specMatch[0].indexOf(specMatch[1]));
             for (const part of specStr.split(',')) {

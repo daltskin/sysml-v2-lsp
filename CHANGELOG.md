@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- `specializationNames` field on `SysMLSymbol` to explicitly track names referenced via specialization relationships (`:>`, `:>>`, `specializes`, `subsets`, `subclassification`), distinct from feature typing
+- `specializes` key in `formatSymbol` MCP output, surfacing specialization names separately from `type`
+- Regex fallback in specialization extraction now covers the `subsets` keyword (previously only `specializes`, `:>`, `:>>` were matched)
+
+### Changed
+
+- **MCP API surface change**: the `type` field in `formatSymbol` output now contains feature-typing names only and excludes specialization names (which are surfaced via the new `specializes` key). Downstream MCP clients that previously read specialization targets from `type` should switch to reading the `specializes` field.
+
 ## [0.16.0]
 
 ### Added

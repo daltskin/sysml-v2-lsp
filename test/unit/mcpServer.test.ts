@@ -415,6 +415,52 @@ describe('MCP Server Core', () => {
             const formatted = formatSymbol(sym);
             expect(formatted.documentation).toBeUndefined();
             expect(formatted.type).toBeUndefined();
+            expect(formatted.specializes).toBeUndefined();
+        });
+
+        it('should separate type (typing) from specializes (specialization)', () => {
+            handleParse(
+                ctx,
+                `package P {
+                    part def Base;
+                    part def Mid;
+                    part def Derived :> Base, Mid;
+                    part def Container { part inst : Base; }
+                }`,
+                'test.sysml',
+            );
+            const derived = ctx.symbolTable.findByName('Derived')[0];
+            expect(derived).toBeDefined();
+            expect(derived.specializationNames).toEqual(expect.arrayContaining(['Base', 'Mid']));
+            const formattedDerived = formatSymbol(derived);
+            // `Derived :> Base, Mid` is purely a specialization — no typing.
+            expect(formattedDerived.type).toBeUndefined();
+            expect(formattedDerived.specializes).toBe('Base, Mid');
+
+            const inst = ctx.symbolTable.findByName('inst')[0];
+            expect(inst).toBeDefined();
+            const formattedInst = formatSymbol(inst);
+            // `inst : Base` is feature typing — should appear under `type`, not `specializes`.
+            expect(formattedInst.type).toBe('Base');
+            expect(formattedInst.specializes).toBeUndefined();
+        });
+
+        it('should populate specializationNames for the subsets keyword', () => {
+            handleParse(
+                ctx,
+                `package P {
+                    part def A {
+                        attribute baseAttr : String;
+                    }
+                    part def B :> A {
+                        attribute derivedAttr subsets baseAttr;
+                    }
+                }`,
+                'test.sysml',
+            );
+            const derivedAttr = ctx.symbolTable.findByName('derivedAttr')[0];
+            expect(derivedAttr).toBeDefined();
+            expect(derivedAttr.specializationNames).toEqual(expect.arrayContaining(['baseAttr']));
         });
     });
 

@@ -72,7 +72,8 @@ export function ensureParsed(ctx: McpContext, uri: string, code?: string): void 
 // ---------------------------------------------------------------------------
 
 export function formatSymbol(sym: SysMLSymbol): Record<string, unknown> {
-    const typingOnly = sym.typeNames.filter(n => !sym.specializationNames.includes(n));
+    const specSet = new Set(sym.specializationNames);
+    const typingOnly = sym.typeNames.filter(n => !specSet.has(n));
     return {
         name: sym.name,
         kind: sym.kind,
