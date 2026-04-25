@@ -604,6 +604,7 @@ export class SymbolTable {
             uri,
             typeName: typeNames[0],
             typeNames,
+            specializationNames: [],
             parentQualifiedName: parentQualifiedName || undefined,
             children: [],
         };
