@@ -25,6 +25,35 @@ package ValidModel {
         const result = parseDocument(text);
         expect(result.errors.length).toBe(0);
     });
+
+    it('should report reserved keyword used as identifier with a clear message', async () => {
+        const { DocumentManager } = await import('../../server/src/documentManager.js');
+        const { DiagnosticsProvider } = await import('../../server/src/providers/diagnosticsProvider.js');
+
+        const text = `
+package Bikes {
+    part def Frame {
+        attribute material : String;
+    }
+    part def Bicycle {
+        part frame : Frame[1];
+    }
+}
+`;
+        const docManager = new DocumentManager();
+        const uri = 'file:///keyword-test.sysml';
+        const doc = await makeDoc(text, uri);
+        docManager.parse(doc);
+
+        const provider = new DiagnosticsProvider(docManager);
+        const diags = provider.getDiagnostics(uri);
+
+        // Should have at least one diagnostic mentioning 'frame' is a reserved keyword
+        const keywordDiag = diags.find(d => d.message.includes('reserved SysML keyword'));
+        expect(keywordDiag).toBeDefined();
+        expect(keywordDiag!.message).toContain("'frame'");
+        expect(keywordDiag!.message).toContain('renaming');
+    });
 });
 
 /** Create a TextDocument from raw SysML text */

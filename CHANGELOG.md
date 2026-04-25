@@ -11,6 +11,24 @@
 ### Changed
 
 - **MCP API surface change**: the `type` field in `formatSymbol` output now contains feature-typing names only and excludes specialization names (which are surfaced via the new `specializes` key). Downstream MCP clients that previously read specialization targets from `type` should switch to reading the `specializes` field.
+## [0.17.0]
+
+### Added
+
+- Clear error messages when SysML keywords are used as identifiers
+- Prepare Release workflow with manual gate, dry-run, and changelog stamping
+- Composite GitHub Action for shared CI setup steps
+
+### Changed
+
+- DFA snapshot pre-seeded for SLL fast-path parsing (~60% warm, ~27% cold improvement)
+- CI, Release, and Prepare Release workflows deduplicated via composite action
+- Release checklist updated for automated workflow
+
+### Fixed
+
+- "Go to References" now finds anonymous typed usages like `interface : PwrHeaterIface connect ...` ([#34](https://github.com/daltskin/VSCode_SysML_Extension/issues/34))
+- DFA error-retry fires correctly when stale pre-seeded states persist after a previous successful parse
 
 ## [0.16.0]
 

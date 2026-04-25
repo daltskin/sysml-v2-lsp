@@ -22,7 +22,7 @@ import {
 import { parentPort, receiveMessageOnPort } from 'node:worker_threads';
 import { SysMLv2Lexer } from '../generated/SysMLv2Lexer.js';
 import { SysMLv2Parser } from '../generated/SysMLv2Parser.js';
-import { clearAllDFAStates, isDfaPreSeeded, loadDFASnapshot, markDfaNotPreSeeded } from './dfaLoader.js';
+import { clearAllDFAStates, hasStaleDfaStates, isDfaPreSeeded, loadDFASnapshot, markDfaNotPreSeeded } from './dfaLoader.js';
 import { SysMLErrorListener } from './errorListener.js';
 import { WARMUP_TEXT } from './warmupText.js';
 
@@ -455,6 +455,10 @@ const BOUNDARY_TOKENS = new Set([
  * visible token is an identifier that isn't a keyword, relocate the error
  * to that identifier — it's almost certainly the real problem.
  *
+ * Also detects when a reserved keyword is used where an identifier name
+ * is expected (e.g. `part frame`) and produces a clear message instead
+ * of ANTLR's cryptic "no viable alternative at input 'partframe'".
+ *
  * Accepts a pre-built visible token array + position index to avoid
  * redundant filtering and O(n) linear searches.
  */
@@ -472,6 +476,34 @@ function improveErrorLocations(
 
         const errToken = visible[errIdx];
 
+        // ── Keyword-as-identifier detection ──
+        // If the error token is a keyword where a name was expected,
+        // produce a clear "reserved keyword" message.
+        // In the SysML grammar, every alphabetic token that isn't IDENTIFIER
+        // is a keyword — no need to maintain a separate keyword list.
+        if (errToken.type !== SysMLv2Lexer.IDENTIFIER &&
+            errToken.type !== Token.EOF &&
+            errToken.text &&
+            /^[a-z]+$/.test(errToken.text)) {
+            const word = errToken.text;
+            const suggestion = 'my' + word.charAt(0).toUpperCase() + word.slice(1);
+            if (errIdx > 0 && NAME_PRECEDING_KEYWORDS.has(visible[errIdx - 1].type)) {
+                return {
+                    line: err.line,
+                    column: err.column,
+                    length: word.length,
+                    message: `'${word}' is a reserved SysML keyword and cannot be used as a name. Consider renaming it (e.g., '${suggestion}').`,
+                };
+            }
+            return {
+                line: err.line,
+                column: err.column,
+                length: word.length,
+                message: `'${word}' is a reserved SysML keyword and cannot be used as an identifier here.`,
+            };
+        }
+
+        // ── Boundary token relocation ──
         // Only relocate for boundary tokens
         if (!BOUNDARY_TOKENS.has(errToken.type) && errToken.type !== Token.EOF) return err;
 
@@ -701,11 +733,14 @@ function handleParseRequest(msg: ParseRequest): void {
     }
 
     // --- DFA snapshot retry ---
-    // If the pre-seeded DFA caused bogus errors, clear all DFA states
+    // If pre-seeded DFA states caused bogus errors, clear all DFA states
     // and re-parse with a clean DFA (LL-only).  This mirrors the retry
     // logic in parseDocument.ts on the main thread.
+    // Uses hasStaleDfaStates() instead of isDfaPreSeeded() so the retry
+    // fires even when a previous successful parse already cleared the
+    // pre-seeded flag — stale child states can persist in the DFA graph.
     // Reuse the existing token stream via seek(0) to avoid re-lexing.
-    if (errors.length > 0 && isDfaPreSeeded()) {
+    if (errors.length > 0 && hasStaleDfaStates()) {
         markDfaNotPreSeeded();
         clearAllDFAStates();
 

@@ -20,8 +20,10 @@ import { DFA_SNAPSHOT, type DecisionSnapshot } from './dfaSnapshot.js';
 
 /** Sentinel: set to true after loadDFASnapshot() succeeds. */
 let _loaded = false;
-/** Sticky flag: true if loadDFASnapshot() was ever called successfully. */
+/** Sticky flag: true if loadDFASnapshot() was ever loaded in this session. */
 let _everLoaded = false;
+/** Set to true once clearAllDFAStates() has been called to purge stale states. */
+let _dfaStatesCleaned = false;
 
 /** Returns true if the DFA has been pre-seeded from a snapshot. */
 export function isDfaPreSeeded(): boolean {
@@ -31,6 +33,17 @@ export function isDfaPreSeeded(): boolean {
 /** Returns true if a DFA snapshot was ever loaded in this session. */
 export function wasDfaEverPreSeeded(): boolean {
     return _everLoaded;
+}
+
+/**
+ * Returns true if the DFA was pre-seeded and has NOT yet been fully
+ * cleaned.  Used by the error-retry path: stale pre-seeded states
+ * can persist in child DFA nodes even after `markDfaNotPreSeeded()`
+ * clears the top-level flag.  A full `clearAllDFAStates()` is needed
+ * once to purge them.
+ */
+export function hasStaleDfaStates(): boolean {
+    return _everLoaded && !_dfaStatesCleaned;
 }
 
 /**
@@ -98,6 +111,7 @@ export function clearAllDFAStates(): void {
             dfa.states.clear();
         }
     }
+    _dfaStatesCleaned = true;
 }
 
 /**

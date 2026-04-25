@@ -1,0 +1,87 @@
+name: Prepare Release
+
+# Manual trigger with version input — acts as the "gate"
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Release version (e.g. 0.17.0)'
+        required: true
+        type: string
+      dry-run:
+        description: 'Dry run — validate but do not push tag'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_TOKEN }}
+
+      - name: Setup
+        uses: ./.github/actions/setup
+
+      - name: Validate version format
+        run: |
+          if ! echo "${{ inputs.version }}" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+$'; then
+            echo "::error::Invalid version format '${{ inputs.version }}'. Expected semver (e.g. 0.17.0)"
+            exit 1
+          fi
+
+      - name: Check tag does not already exist
+        run: |
+          if git rev-parse "v${{ inputs.version }}" >/dev/null 2>&1; then
+            echo "::error::Tag v${{ inputs.version }} already exists"
+            exit 1
+          fi
+
+      - name: Build & test
+        run: |
+          npm run build
+          npm run test
+
+      - name: Bump package.json version
+        run: npm version "${{ inputs.version }}" --no-git-tag-version
+
+      - name: Stamp CHANGELOG.md version
+        run: |
+          VERSION="${{ inputs.version }}"
+          # Stamp the [Unreleased] heading with version
+          sed -i "s/^## \[Unreleased\]/## [${VERSION}]/" CHANGELOG.md
+          # Add a fresh [Unreleased] section at the top
+          sed -i "/^# Changelog/a\\\n## [Unreleased]" CHANGELOG.md
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Commit version bump & changelog
+        run: |
+          git add package.json package-lock.json CHANGELOG.md
+          git commit -m "chore: release v${{ inputs.version }}"
+
+      - name: Create tag
+        run: git tag "v${{ inputs.version }}"
+
+      - name: Push (or dry-run)
+        run: |
+          if [ "${{ inputs.dry-run }}" = "true" ]; then
+            echo "🏜️ Dry run — skipping push"
+            echo "Would push commit $(git rev-parse HEAD) and tag v${{ inputs.version }}"
+            git log --oneline -3
+          else
+            git push origin main
+            git push origin "v${{ inputs.version }}"
+            echo "✅ Pushed commit and tag v${{ inputs.version }}"
+            echo "The Release workflow will now trigger automatically."
+          fi

@@ -21,17 +21,10 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Use Node.js ${{ matrix.node-version }}
-        uses: actions/setup-node@v6
+      - name: Setup
+        uses: ./.github/actions/setup
         with:
           node-version: ${{ matrix.node-version }}
-          cache: npm
-
-      - name: Install dependencies
-        run: npm install
-
-      - name: Generate ANTLR parser
-        run: npm run generate
 
       - name: Compile TypeScript
         run: npm run compile

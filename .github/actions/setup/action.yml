@@ -1,0 +1,24 @@
+name: Setup
+description: Install Node.js, install deps, generate ANTLR parser
+
+inputs:
+  node-version:
+    description: Node.js version
+    default: '24'
+
+runs:
+  using: composite
+  steps:
+    - name: Use Node.js ${{ inputs.node-version }}
+      uses: actions/setup-node@v6
+      with:
+        node-version: ${{ inputs.node-version }}
+        cache: npm
+
+    - name: Install dependencies
+      shell: bash
+      run: npm install
+
+    - name: Generate ANTLR parser
+      shell: bash
+      run: npm run generate
