@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Bumped dev dependencies: `@types/node` 25.6.2 → 25.7.0, `vite` 8.0.11 → 8.0.12, `vitest` 4.1.5 → 4.1.6 ([#43](https://github.com/daltskin/sysml-v2-lsp/pull/43))
+- Bumped dev dependencies: `typescript-eslint` 8.59.2 → 8.59.3 ([#42](https://github.com/daltskin/sysml-v2-lsp/pull/42))
+- Updated to OMG 2026-04 release
+
 ## [0.18.0]
 
 ### Added
@@ -19,6 +25,7 @@
 ### Changed
 
 - **MCP API surface change**: the `type` field in `formatSymbol` output now contains feature-typing names only and excludes specialization names (which are surfaced via the new `specializes` key). Downstream MCP clients that previously read specialization targets from `type` should switch to reading the `specializes` field.
+
 ## [0.17.0]
 
 ### Added
