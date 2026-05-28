@@ -554,6 +554,68 @@ package Test {
             const diagrams = model.sequenceDiagrams!;
             expect(diagrams).toBeDefined();
         });
+
+        // Issue #44: flow statements inside part def should produce messages
+        it('should extract flow statements from part def as messages', async () => {
+            const model = await getModelForText(`
+package CameraTestSequence {
+    part def CaptureSequence {
+        part photographer;
+        part camera;
+        part storage;
+
+        flow wakeRequest from photographer to camera;
+        flow wakeAck from camera to photographer;
+        flow shutterCommand from photographer to camera;
+        flow frameBuffered from camera to storage;
+        flow persistAck from storage to photographer;
+    }
+}
+`, ['sequenceDiagrams']);
+
+            const diagrams = model.sequenceDiagrams!;
+            expect(diagrams).toBeDefined();
+            const seq = diagrams.find(d => d.name === 'CaptureSequence');
+            expect(seq).toBeDefined();
+            expect(seq!.participants.map(p => p.name)).toEqual(
+                expect.arrayContaining(['photographer', 'camera', 'storage']),
+            );
+            expect(seq!.messages.length).toBeGreaterThanOrEqual(5);
+            const wake = seq!.messages.find(m => m.name === 'wakeRequest');
+            expect(wake).toBeDefined();
+            expect(wake!.from).toBe('photographer');
+            expect(wake!.to).toBe('camera');
+        });
+
+        // Issue #44: message statements with dotted endpoints should reduce
+        // to root participant names so arrows render between lifelines.
+        it('should extract message statements with dotted endpoints', async () => {
+            const model = await getModelForText(`
+package ServerSequenceModel {
+    part def PubSubSequence {
+        part producer;
+        part server;
+        part consumer;
+
+        message publish_message from producer.publish_source_event to server.publish_target_event;
+        message subscribe_message from consumer.subscribe_source_event to server.subscribe_target_event;
+        message deliver_message from server.deliver_source_event to consumer.deliver_target_event;
+    }
+}
+`, ['sequenceDiagrams']);
+
+            const diagrams = model.sequenceDiagrams!;
+            expect(diagrams).toBeDefined();
+            const seq = diagrams.find(d => d.name === 'PubSubSequence');
+            expect(seq).toBeDefined();
+            const pub = seq!.messages.find(m => m.name === 'publish_message');
+            expect(pub).toBeDefined();
+            expect(pub!.from).toBe('producer');
+            expect(pub!.to).toBe('server');
+            const deliver = seq!.messages.find(m => m.name === 'deliver_message');
+            expect(deliver!.from).toBe('server');
+            expect(deliver!.to).toBe('consumer');
+        });
     });
 
     // -------------------------------------------------------------------

@@ -763,6 +763,126 @@ export class SysMLModelProvider {
             }
         }
 
+        // ── D5: flow/message statements inside part/item/interface containers ──
+        // SysML v2 allows `flow X from A to B;` and `message X from A to B;`
+        // inside part defs/usages (and similar containers). These are not
+        // tracked as individual symbols, so we parse them from the body text
+        // and synthesise a sequence diagram with the container's parts/items
+        // as participants.
+        const containerKinds = new Set<SysMLElementKind>([
+            SysMLElementKind.PartDef,
+            SysMLElementKind.PartUsage,
+            SysMLElementKind.ItemDef,
+            SysMLElementKind.ItemUsage,
+            SysMLElementKind.InterfaceDef,
+            SysMLElementKind.InterfaceUsage,
+            SysMLElementKind.ConnectionDef,
+            SysMLElementKind.ConnectionUsage,
+            SysMLElementKind.OccurrenceDef,
+            SysMLElementKind.OccurrenceUsage,
+        ]);
+
+        // Strip dotted/qualified suffix so message endpoints like
+        // `producer.publish_source_event` reduce to `producer` (matches the
+        // root participant name).
+        const rootName = (qualified: string): string => {
+            if (!qualified) return qualified;
+            const dotIdx = qualified.indexOf('.');
+            const head = dotIdx >= 0 ? qualified.substring(0, dotIdx) : qualified;
+            const ccIdx = head.lastIndexOf('::');
+            return ccIdx >= 0 ? head.substring(ccIdx + 2) : head;
+        };
+
+        for (const symbol of symbols) {
+            if (seen.has(symbol.qualifiedName)) continue;
+            if (!containerKinds.has(symbol.kind)) continue;
+
+            const children = this.getChildSymbols(symbol, symbolTable);
+            const fullText = this.getFullElementText(symbol, lines);
+
+            // Collect flow/message statements: `<kw> <name> from <src> to <tgt>`
+            const parsedMessages: MessageDTO[] = [];
+            let occ = 1;
+            for (const keyword of ['flow', 'message']) {
+                for (const { afterPos } of findWordPositionsCI(fullText, keyword)) {
+                    // Skip `succession flow` — handled as a control-flow elsewhere.
+                    // Also skip if the next non-ws token starts a `def` or `:`,
+                    // which would indicate `flow def Foo` or a typed feature.
+                    const nameStart = skipWS(fullText, afterPos);
+                    const [name, afterName] = readIdent(fullText, nameStart);
+                    if (!name || name === 'def') continue;
+                    const fromStart = skipWS(fullText, afterName);
+                    const [fromKw, afterFromKw] = readIdent(fullText, fromStart);
+                    if (fromKw !== 'from') continue;
+                    const srcStart = skipWS(fullText, afterFromKw);
+                    const [srcRaw, afterSrc] = readIdent(fullText, srcStart, true);
+                    if (!srcRaw) continue;
+                    const toStart = skipWS(fullText, afterSrc);
+                    const [toKw, afterToKw] = readIdent(fullText, toStart);
+                    if (toKw !== 'to') continue;
+                    const tgtStart = skipWS(fullText, afterToKw);
+                    const [tgtRaw] = readIdent(fullText, tgtStart, true);
+                    if (!tgtRaw) continue;
+
+                    parsedMessages.push({
+                        name,
+                        from: rootName(srcRaw),
+                        to: rootName(tgtRaw),
+                        payload: name,
+                        occurrence: occ++,
+                        range: this.rangeToDTO(symbol.range),
+                    });
+                }
+            }
+
+            if (parsedMessages.length === 0) continue;
+
+            // Build participants from part/item children. Also synthesise any
+            // participants referenced by messages that aren't declared as
+            // children (e.g., `consumer` in a sibling block) so arrows still
+            // render.
+            const participants: ParticipantDTO[] = [];
+            for (const child of children) {
+                if (child.kind === SysMLElementKind.PartUsage ||
+                    child.kind === SysMLElementKind.ItemUsage ||
+                    child.kind === SysMLElementKind.PartDef ||
+                    child.kind === SysMLElementKind.ItemDef ||
+                    child.kind === SysMLElementKind.RefUsage) {
+                    if (!participants.find(p => p.name === child.name)) {
+                        participants.push({
+                            name: child.name,
+                            type: child.typeNames.join(', ') || child.kind,
+                            range: this.rangeToDTO(child.range),
+                        });
+                    }
+                }
+            }
+            for (const msg of parsedMessages) {
+                for (const endpoint of [msg.from, msg.to]) {
+                    if (endpoint && !participants.find(p => p.name === endpoint)) {
+                        participants.push({
+                            name: endpoint,
+                            type: 'participant',
+                            range: this.rangeToDTO(symbol.range),
+                        });
+                    }
+                }
+            }
+
+            // Replace any earlier items-only diagram for this symbol.
+            const existingIdx = diagrams.findIndex(d => d.name === symbol.name);
+            if (existingIdx >= 0) {
+                diagrams.splice(existingIdx, 1);
+            }
+            diagrams.push({
+                name: symbol.name,
+                participants,
+                messages: parsedMessages,
+                range: this.rangeToDTO(symbol.range),
+            });
+            seen.add(symbol.qualifiedName);
+        }
+
         return diagrams;
     }
 

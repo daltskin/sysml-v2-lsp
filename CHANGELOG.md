@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- Sequence diagram extraction now parses `flow` and `message` statements inside part/item/interface containers, synthesising lifelines from the container's parts/items and arrows from the statement endpoints ([#44](https://github.com/daltskin/sysml-v2-lsp/issues/44))
+- Dotted message endpoints (e.g. `producer.publish_source_event`) are reduced to their root participant name so arrows render correctly between lifelines
+
+### Changed
+
+- Bumped `qs` from 6.15.1 to 6.15.2 ([#45](https://github.com/daltskin/sysml-v2-lsp/pull/45))
+
 ## [0.19.0]
 
 ### Changed
