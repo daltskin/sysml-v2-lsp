@@ -1,4 +1,5 @@
 import * as esbuild from 'esbuild';
+import * as path from 'node:path';
 
 const isProduction = process.argv.includes('--production');
 const isWatch = process.argv.includes('--watch');
@@ -58,5 +59,53 @@ const clientBuild = esbuild.build({
     external: ['vscode'],
 });
 
-await Promise.all([serverBuild, workerBuild, mcpServerBuild, clientBuild]);
+// ---------------------------------------------------------------------------
+// Browser (Web Worker) server bundle — runs the language server inside a
+// vscode.dev web extension host, where there is no Node.js runtime or
+// filesystem. Node built-ins are swapped for lightweight shims, the
+// transport/library platform modules for their `.browser.ts` variants, and
+// `vscode-languageserver/node.js` for the browser entry point.
+// ---------------------------------------------------------------------------
+
+/** Swap `./platform/<connection|libraryFiles>.js` for their `.browser.ts` variants. */
+const browserPlatformPlugin = {
+    name: 'browser-platform',
+    setup(build) {
+        build.onResolve({ filter: /platform\/(connection|libraryFiles)\.js$/ }, (args) => {
+            // Preserve the relative directory prefix (e.g. `../platform/`),
+            // only swapping the `.js` extension for `.browser.ts`.
+            const browserPath = args.path.replace(/\.js$/, '.browser.ts');
+            return { path: path.resolve(args.resolveDir, browserPath) };
+        });
+    },
+};
+
+const shim = (name) => path.resolve('server/src/platform/shims', name);
+
+const browserServerBuild = esbuild.build({
+    ...baseConfig,
+    ...serverMinify,
+    platform: 'browser',
+    target: 'es2022',
+    format: 'iife',
+    entryPoints: ['server/src/server.ts'],
+    outfile: 'dist/server/browserServerMain.js',
+    external: ['vscode'],
+    define: {
+        // The server reads __dirname only to locate the on-disk library,
+        // which is bundled in the browser build, so the value is unused.
+        '__dirname': '"/"',
+    },
+    alias: {
+        'vscode-languageserver/node.js': 'vscode-languageserver/browser',
+        'node:fs': shim('fs.ts'),
+        'node:fs/promises': shim('fs-promises.ts'),
+        'node:path': shim('path.ts'),
+        'node:url': shim('url.ts'),
+        'node:worker_threads': shim('worker_threads.ts'),
+    },
+    plugins: [browserPlatformPlugin],
+});
+
+await Promise.all([serverBuild, workerBuild, mcpServerBuild, clientBuild, browserServerBuild]);
 console.log(isProduction ? '✅ Production build complete' : '✅ Build complete');

@@ -2,7 +2,6 @@ import {
     CodeActionKind,
     CodeActionParams,
     CompletionItem,
-    createConnection,
     DefinitionParams,
     DidChangeConfigurationNotification,
     DocumentFormattingParams,
@@ -15,7 +14,6 @@ import {
     InitializeParams,
     InitializeResult,
     Location,
-    ProposedFeatures,
     ReferenceParams,
     RenameParams,
     SemanticTokens,
@@ -34,10 +32,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { Worker } from 'node:worker_threads';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { DocumentManager } from './documentManager.js';
-import { initLibraryIndex } from './library/libraryIndex.js';
+import { getLibraryFileContent, initLibraryIndex } from './library/libraryIndex.js';
 import { SysMLModelProvider } from './model/sysmlModelProvider.js';
 import type { SysMLModelParams } from './model/sysmlModelTypes.js';
 import { loadDFASnapshot } from './parser/dfaLoader.js';
+import { createServerConnection } from './platform/connection.js';
 import { CodeActionProvider } from './providers/codeActionProvider.js';
 import { CompletionProvider } from './providers/completionProvider.js';
 import { DefinitionProvider } from './providers/definitionProvider.js';
@@ -51,7 +50,7 @@ import { ReferencesProvider } from './providers/referencesProvider.js';
 import { RenameProvider } from './providers/renameProvider.js';
 import { SemanticTokensProvider, tokenModifiers, tokenTypes } from './providers/semanticTokensProvider.js';
 import { SemanticValidator } from './providers/semanticValidator.js';
-import { findSysMLFilesAsync, readFilesBatch, DEFAULT_SKIP_DIRS } from './utils/fileDiscovery.js';
+import { DEFAULT_SKIP_DIRS, findSysMLFilesAsync, readFilesBatch } from './utils/fileDiscovery.js';
 
 /** Convert a file:// URI to a filesystem path, returning undefined for non-file URIs. */
 function toFsPath(uri: string): string | undefined {
@@ -61,8 +60,10 @@ function toFsPath(uri: string): string | undefined {
     return undefined;
 }
 
-// Create a connection using all proposed LSP features
-const connection = createConnection(ProposedFeatures.all);
+// Create a connection using all proposed LSP features.  The transport
+// (Node IPC vs browser Web Worker) is selected by the platform module,
+// which the browser build swaps via the esbuild resolver plugin.
+const connection = createServerConnection();
 
 // Text document manager — handles open/change/close lifecycle
 const documents = new TextDocuments<TextDocument>(TextDocument);
@@ -829,7 +830,9 @@ connection.onRequest('sysml/model', (params: SysMLModelParams) => {
  * Drives the LSP Health section of the status bar tooltip.
  */
 connection.onRequest('sysml/serverStats', () => {
-    const mem = process.memoryUsage();
+    const mem = (typeof process !== 'undefined' && typeof process.memoryUsage === 'function')
+        ? process.memoryUsage()
+        : { heapUsed: 0, heapTotal: 0, rss: 0, external: 0 } as NodeJS.MemoryUsage;
     const toMB = (bytes: number) => Math.round(bytes / 1024 / 1024);
     return {
         uptime: Math.round((Date.now() - serverStartTime) / 1000),
@@ -863,6 +866,16 @@ connection.onRequest('sysml/clearCache', () => {
         symbolTables: stCount,
         semanticTokens: 0,
     };
+});
+
+/**
+ * `sysml/libraryContent` — returns the raw text of a bundled standard
+ * library file by URI.  Lets the editor open `sysml-stdlib:` documents
+ * (Go-to-Definition into the standard library) in the browser build,
+ * where the library lives only in memory inside the worker.
+ */
+connection.onRequest('sysml/libraryContent', (params: { uri: string }) => {
+    return getLibraryFileContent(params?.uri) ?? null;
 });
 
 // --------------------------------------------------------------------------

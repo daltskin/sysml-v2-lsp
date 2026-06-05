@@ -1,6 +1,4 @@
-import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from 'node:fs';
-import { join, resolve } from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { loadLibraryFiles, type LibraryFile } from '../platform/libraryFiles.js';
 
 /**
  * Index of SysML v2 standard library packages and type declarations.
@@ -339,86 +337,73 @@ let index: Map<string, string> | undefined;
 let typeIndex: Map<string, LibraryTypeLocation> | undefined;
 
 /**
- * Build the library index by scanning a directory tree for
- * `.sysml` / `.kerml` files.
+ * Index a single library file's content into the package/type maps.
+ * Pure (no I/O) so it works identically on Node and in the browser.
  */
-function buildIndex(libRoot: string): { packages: Map<string, string>; types: Map<string, LibraryTypeLocation> } {
-    const packages = new Map<string, string>();
-    const types = new Map<string, LibraryTypeLocation>();
+function indexLibraryFile(
+    fileUri: string,
+    content: string,
+    packages: Map<string, string>,
+    types: Map<string, LibraryTypeLocation>,
+): void {
+    const pkgName = extractPackageNameFromHead(content);
+    if (pkgName) {
+        packages.set(pkgName, fileUri);
+    }
 
-    const walk = (dir: string): void => {
-        let entries: string[];
-        try { entries = readdirSync(dir); }
-        catch { return; }
-
-        for (const name of entries) {
-            const full = join(dir, name);
-            try {
-                const stat = statSync(full);
-                if (stat.isDirectory()) {
-                    walk(full);
-                } else if (name.endsWith('.sysml') || name.endsWith('.kerml')) {
-                    const fileUri = pathToFileURL(full).href;
-
-                    // Quick package extraction from first 512 bytes
-                    const fd = openSync(full, 'r');
-                    const buf = Buffer.alloc(512);
-                    readSync(fd, buf, 0, 512, 0);
-                    closeSync(fd);
-
-                    const head = buf.toString('utf8');
-                    const pkgName = extractPackageNameFromHead(head);
-                    if (pkgName) {
-                        packages.set(pkgName, fileUri);
-                    }
-
-                    // Full-file scan for type declarations with line numbers
-                    const content = readFileSync(full, 'utf8');
-                    const lines = content.split('\n');
-                    for (let i = 0; i < lines.length; i++) {
-                        const typeName = extractTypeNameFromLine(lines[i]);
-                        if (typeName) {
-                            // Don't overwrite — first match wins (avoids
-                            // shadowing by reflective re-declarations)
-                            if (!types.has(typeName)) {
-                                types.set(typeName, { uri: fileUri, line: i });
-                            }
-                        }
-                        // Also index usage declarations (e.g. attribute mass)
-                        const usageName = extractUsageNameFromLine(lines[i]);
-                        if (usageName) {
-                            if (!types.has(usageName)) {
-                                types.set(usageName, { uri: fileUri, line: i });
-                            }
-                            // Also index qualified form: Pkg::name
-                            if (pkgName) {
-                                const qualName = `${pkgName}::${usageName}`;
-                                if (!types.has(qualName)) {
-                                    types.set(qualName, { uri: fileUri, line: i });
-                                }
-                            }
-                            // Also index the long quoted name if present
-                            // (e.g. `<ft> 'foot'` → index both `ft` and `foot`)
-                            const longName = extractUsageLongNameFromLine(lines[i]);
-                            if (longName && longName !== usageName) {
-                                if (!types.has(longName)) {
-                                    types.set(longName, { uri: fileUri, line: i });
-                                }
-                                if (pkgName) {
-                                    const qualLong = `${pkgName}::${longName}`;
-                                    if (!types.has(qualLong)) {
-                                        types.set(qualLong, { uri: fileUri, line: i });
-                                    }
-                                }
-                            }
-                        }
+    const lines = content.split('\n');
+    for (let i = 0; i < lines.length; i++) {
+        const typeName = extractTypeNameFromLine(lines[i]);
+        if (typeName) {
+            // Don't overwrite — first match wins (avoids
+            // shadowing by reflective re-declarations)
+            if (!types.has(typeName)) {
+                types.set(typeName, { uri: fileUri, line: i });
+            }
+        }
+        // Also index usage declarations (e.g. attribute mass)
+        const usageName = extractUsageNameFromLine(lines[i]);
+        if (usageName) {
+            if (!types.has(usageName)) {
+                types.set(usageName, { uri: fileUri, line: i });
+            }
+            // Also index qualified form: Pkg::name
+            if (pkgName) {
+                const qualName = `${pkgName}::${usageName}`;
+                if (!types.has(qualName)) {
+                    types.set(qualName, { uri: fileUri, line: i });
+                }
+            }
+            // Also index the long quoted name if present
+            // (e.g. `<ft> 'foot'` → index both `ft` and `foot`)
+            const longName = extractUsageLongNameFromLine(lines[i]);
+            if (longName && longName !== usageName) {
+                if (!types.has(longName)) {
+                    types.set(longName, { uri: fileUri, line: i });
+                }
+                if (pkgName) {
+                    const qualLong = `${pkgName}::${longName}`;
+                    if (!types.has(qualLong)) {
+                        types.set(qualLong, { uri: fileUri, line: i });
                     }
                 }
-            } catch { /* skip unreadable files */ }
+            }
         }
-    };
+    }
+}
 
-    walk(libRoot);
+/**
+ * Build the library index from a set of in-memory `{ uri, content }`
+ * files (supplied by the platform loader).
+ */
+function buildIndexFromFiles(files: LibraryFile[]): { packages: Map<string, string>; types: Map<string, LibraryTypeLocation> } {
+    const packages = new Map<string, string>();
+    const types = new Map<string, LibraryTypeLocation>();
+    for (const file of files) {
+        // Keep raw content available for hover / Go-to-Definition.
+        rawContentByUri.set(file.uri, file.content);
+        indexLibraryFile(file.uri, file.content, packages, types);
+    }
     return { packages, types };
 }
 
@@ -432,32 +417,12 @@ function buildIndex(libRoot: string): { packages: Map<string, string>; types: Ma
  * @returns The number of packages indexed.
  */
 export function initLibraryIndex(serverDir: string, customPath?: string): number {
-    let libRoot: string | undefined;
+    rawContentByUri.clear();
+    fileContentCache.clear();
+    hoverInfoCache.clear();
 
-    if (customPath && customPath.trim()) {
-        const abs = resolve(customPath);
-        if (existsSync(abs)) {
-            libRoot = abs;
-        }
-    }
-
-    if (!libRoot) {
-        // Default: bundled library relative to the server module.
-        // Server lives at <pkg>/dist/server/server.js →
-        // library is at <pkg>/sysml.library/
-        const bundled = resolve(serverDir, '..', '..', 'sysml.library');
-        if (existsSync(bundled)) {
-            libRoot = bundled;
-        }
-    }
-
-    if (!libRoot) {
-        index = new Map();
-        typeIndex = new Map();
-        return 0;
-    }
-
-    const result = buildIndex(libRoot);
+    const files = loadLibraryFiles(serverDir, customPath);
+    const result = buildIndexFromFiles(files);
     index = result.packages;
     typeIndex = result.types;
     return index.size;
@@ -532,6 +497,14 @@ export interface LibraryHoverInfo {
 
 // ---- Caches for library file content and hover info ----
 
+/**
+ * Raw library file content keyed by file URI, captured during
+ * {@link initLibraryIndex}.  This is the single source of truth for
+ * library file text and works identically on Node and in the browser
+ * (where there is no filesystem to read back from).
+ */
+const rawContentByUri = new Map<string, string>();
+
 /** Cache of library file contents keyed by file URI — library files never change at runtime. */
 const fileContentCache = new Map<string, string[]>();
 
@@ -544,22 +517,13 @@ const hoverInfoCache = new Map<string, LibraryHoverInfo | null>();
 /** Maximum number of cached hover info results. */
 const HOVER_CACHE_MAX = 200;
 
-/** Read and cache library file lines. Returns undefined on I/O error. */
+/** Read and cache library file lines. Returns undefined if not indexed. */
 function getCachedFileLines(uri: string): string[] | undefined {
     const cached = fileContentCache.get(uri);
     if (cached) return cached;
 
-    let filePath: string;
-    try {
-        filePath = fileURLToPath(uri);
-    } catch {
-        return undefined;
-    }
-
-    let content: string;
-    try {
-        content = readFileSync(filePath, 'utf8');
-    } catch {
+    const content = rawContentByUri.get(uri);
+    if (content === undefined) {
         return undefined;
     }
 
@@ -572,6 +536,15 @@ function getCachedFileLines(uri: string): string[] | undefined {
     }
     fileContentCache.set(uri, lines);
     return lines;
+}
+
+/**
+ * Get the full raw content of an indexed library file by URI.
+ * Used by the `sysml/libraryContent` request so the editor can open
+ * standard-library files that live only in memory (browser build).
+ */
+export function getLibraryFileContent(uri: string): string | undefined {
+    return rawContentByUri.get(uri);
 }
 
 /**

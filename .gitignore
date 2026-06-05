@@ -13,6 +13,9 @@ __pycache__/
 *.tsbuildinfo
 .DS_Store
 *.log
+
+# Generated standard-library bundle (rebuilt by scripts/bundle-library.mjs)
+server/src/library/bundledLibrary.generated.ts
 .sysml-cache/
 examples/temp/
 /docs/

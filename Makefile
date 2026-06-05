@@ -1,4 +1,4 @@
-.PHONY: help install generate build watch test test-e2e lint package package-server test-package clean update-grammar dfa update-library web
+.PHONY: help install update-deps generate build watch test test-e2e lint package package-server test-package clean update-grammar dfa update-library web
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -6,6 +6,19 @@ help: ## Show this help
 
 install: ## Install all dependencies
 	npm install
+
+update-deps: ## Update npm dependencies (root + sub-packages) and audit for vulnerabilities
+	@echo "📦 Updating dependencies..."
+	npm update
+	cd server && npm update
+	cd clients/vscode && npm update
+	@echo ""
+	@echo "🔍 Auditing for vulnerabilities..."
+	npm audit
+	cd server && npm audit
+	cd clients/vscode && npm audit
+	@echo ""
+	@echo "✅ Dependencies updated and audited"
 
 generate: ## Generate TypeScript parser from ANTLR4 grammar
 	npm run generate

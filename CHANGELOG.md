@@ -4,11 +4,17 @@
 
 ### Added
 
+- **Web extension support**: the language server now runs inside a browser Web Worker on vscode.dev / github.dev, where there is no Node.js runtime or filesystem. A dedicated `dist/server/browserServerMain.js` bundle is produced by esbuild (IIFE, `browser` platform) alongside the existing Node build, and exposed as `browserServerPath` from `index.cjs`
+- Platform abstraction layer (`server/src/platform/`) selecting the LSP transport and standard-library loader per runtime: Node variants use IPC/stdio and the filesystem, while `.browser.ts` variants use the Web Worker `postMessage` channel and an in-memory bundled library. esbuild swaps the modules via a resolver plugin and Node built-in shims (`fs`, `path`, `url`, `worker_threads`)
+- Standard library bundling: `scripts/bundle-library.mjs` embeds every `.sysml` / `.kerml` file into a generated `bundledLibrary.generated.ts` so the library is available in the browser build (run automatically during `build` / `build:production`; the generated file is git-ignored)
+- `sysml/libraryContent` LSP request returns the raw text of a bundled standard-library file by URI, enabling Go-to-Definition into `sysml-stdlib:` documents in the browser build where the library lives only in memory
 - Sequence diagram extraction now parses `flow` and `message` statements inside part/item/interface containers, synthesising lifelines from the container's parts/items and arrows from the statement endpoints ([#44](https://github.com/daltskin/sysml-v2-lsp/issues/44))
 - Dotted message endpoints (e.g. `producer.publish_source_event`) are reduced to their root participant name so arrows render correctly between lifelines
 
 ### Changed
 
+- Library indexing refactored to be platform-agnostic: file scanning is split from indexing so the index is built from in-memory `{ uri, content }` files, with raw library content cached for hover and Go-to-Definition instead of re-reading from disk
+- `sysml/serverStats` guards `process.memoryUsage()` so it degrades gracefully in the browser worker where `process` is unavailable
 - Bumped `qs` from 6.15.1 to 6.15.2 ([#45](https://github.com/daltskin/sysml-v2-lsp/pull/45))
 
 ## [0.19.0]

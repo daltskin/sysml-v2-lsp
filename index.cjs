@@ -20,4 +20,11 @@ const workerPath = path.join(__dirname, 'dist', 'server', 'parseWorker.js');
 /** Absolute path to the bundled MCP server entry point (stdio transport). */
 const mcpServerPath = path.join(__dirname, 'dist', 'server', 'mcpServer.js');
 
-module.exports = { serverPath, workerPath, mcpServerPath };
+/**
+ * Absolute path to the browser (Web Worker) language server bundle.
+ * Load this with `vscode-languageclient/browser` in a web extension host
+ * (e.g. vscode.dev), where there is no Node.js runtime.
+ */
+const browserServerPath = path.join(__dirname, 'dist', 'server', 'browserServerMain.js');
+
+module.exports = { serverPath, workerPath, mcpServerPath, browserServerPath };

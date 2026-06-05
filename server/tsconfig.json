@@ -16,5 +16,9 @@
     "composite": true
   },
   "include": ["src/**/*.ts"],
-  "exclude": ["node_modules"]
+  "exclude": [
+    "node_modules",
+    "src/**/*.browser.ts",
+    "src/library/bundledLibrary.generated.ts"
+  ]
 }
