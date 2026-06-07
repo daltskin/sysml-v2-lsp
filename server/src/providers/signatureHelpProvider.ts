@@ -5,7 +5,7 @@ import {
     SignatureHelpParams,
     SignatureInformation,
     TextDocuments,
-} from 'vscode-languageserver/node.js';
+} from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
 import { SysMLElementKind } from '../symbols/sysmlElements.js';
 import { isIdentPart } from '../utils/identUtils.js';

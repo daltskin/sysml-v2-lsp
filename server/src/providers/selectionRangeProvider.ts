@@ -2,9 +2,9 @@ import {
     SelectionRange,
     SelectionRangeParams,
     Range,
-} from 'vscode-languageserver/node.js';
+} from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { TextDocuments } from 'vscode-languageserver/node.js';
+import { TextDocuments } from 'vscode-languageserver/node';
 
 /** Check if a char code is whitespace (space, tab, CR, LF, etc.) without regex. */
 function isWhitespace(c: number): boolean {

@@ -1,4 +1,4 @@
-import { Range } from 'vscode-languageserver/node.js';
+import { Range } from 'vscode-languageserver/node';
 
 /**
  * Kinds of SysML elements tracked in the symbol table.

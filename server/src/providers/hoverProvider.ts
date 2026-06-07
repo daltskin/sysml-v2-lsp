@@ -4,7 +4,7 @@ import {
     MarkupContent,
     MarkupKind,
     TextDocumentPositionParams,
-} from 'vscode-languageserver/node.js';
+} from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
 import { getLibraryHoverInfo } from '../library/libraryIndex.js';
 import { toMetaclassName } from '../symbols/sysmlElements.js';

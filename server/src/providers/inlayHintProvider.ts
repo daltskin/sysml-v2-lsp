@@ -3,7 +3,7 @@ import {
     InlayHintKind,
     InlayHintParams,
     Position,
-} from 'vscode-languageserver/node.js';
+} from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
 import { isDefinition, isUsage, SysMLElementKind } from '../symbols/sysmlElements.js';
 

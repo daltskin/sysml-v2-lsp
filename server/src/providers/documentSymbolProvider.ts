@@ -1,7 +1,7 @@
 import {
     DocumentSymbol,
     DocumentSymbolParams,
-} from 'vscode-languageserver/node.js';
+} from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
 import { SysMLSymbol, toMetaclassName } from '../symbols/sysmlElements.js';
 import { toSysMLSymbolKind } from './symbolKindMapping.js';

@@ -2,7 +2,7 @@ import {
     SemanticTokens,
     SemanticTokensBuilder,
     SemanticTokensParams,
-} from 'vscode-languageserver/node.js';
+} from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
 import { SysMLv2Lexer } from '../generated/SysMLv2Lexer.js';
 import { SYSML_KEYWORDS } from '../utils/sysmlKeywords.js';

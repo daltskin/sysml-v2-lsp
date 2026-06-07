@@ -1,5 +1,5 @@
 import { ParserRuleContext, TerminalNode, Token } from 'antlr4ng';
-import { Range } from 'vscode-languageserver/node.js';
+import { Range } from 'vscode-languageserver/node';
 import { MultiplicityBoundsContext, SysMLv2Parser } from '../generated/SysMLv2Parser.js';
 import { ParseResult } from '../parser/parseDocument.js';
 import { contextToRange, tokenToRange } from '../parser/positionUtils.js';

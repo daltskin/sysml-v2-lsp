@@ -1,7 +1,7 @@
 import {
     LinkedEditingRangeParams,
     LinkedEditingRanges,
-} from 'vscode-languageserver/node.js';
+} from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
 
 /**

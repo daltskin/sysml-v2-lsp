@@ -1,4 +1,4 @@
-import { SymbolKind } from 'vscode-languageserver/node.js';
+import { SymbolKind } from 'vscode-languageserver/node';
 import { SysMLElementKind } from '../symbols/sysmlElements.js';
 
 /**

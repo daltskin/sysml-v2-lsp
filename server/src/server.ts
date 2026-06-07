@@ -24,7 +24,7 @@ import {
     TextDocumentSyncKind,
     TextEdit,
     WorkspaceEdit,
-} from 'vscode-languageserver/node.js';
+} from 'vscode-languageserver/node';
 
 import * as fs from 'node:fs';
 import * as path from 'node:path';
@@ -185,7 +185,7 @@ function handleWorkerMessage(msg: any): void {
 
     // Convert worker errors → LSP Diagnostics
     // Worker errors are already 0-based (errorListener converts ANTLR 1-based lines).
-    const diagnostics: import('vscode-languageserver/node.js').Diagnostic[] = [];
+    const diagnostics: import('vscode-languageserver/node').Diagnostic[] = [];
     for (const e of errors) {
         const line = Math.max(0, e.line);
         diagnostics.push({

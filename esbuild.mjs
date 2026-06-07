@@ -64,7 +64,7 @@ const clientBuild = esbuild.build({
 // vscode.dev web extension host, where there is no Node.js runtime or
 // filesystem. Node built-ins are swapped for lightweight shims, the
 // transport/library platform modules for their `.browser.ts` variants, and
-// `vscode-languageserver/node.js` for the browser entry point.
+// `vscode-languageserver/node` for the browser entry point.
 // ---------------------------------------------------------------------------
 
 /** Swap `./platform/<connection|libraryFiles>.js` for their `.browser.ts` variants. */
@@ -100,7 +100,7 @@ const browserServerBuild = esbuild.build({
         '__SYSML_BROWSER_SERVER__': 'true',
     },
     alias: {
-        'vscode-languageserver/node.js': 'vscode-languageserver/browser',
+        'vscode-languageserver/node': 'vscode-languageserver/browser',
         'node:fs': shim('fs.ts'),
         'node:fs/promises': shim('fs-promises.ts'),
         'node:path': shim('path.ts'),

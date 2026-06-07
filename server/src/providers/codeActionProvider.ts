@@ -6,7 +6,7 @@ import {
     Position,
     TextEdit,
     WorkspaceEdit
-} from 'vscode-languageserver/node.js';
+} from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
 import { SysMLElementKind, isDefinition } from '../symbols/sysmlElements.js';
 

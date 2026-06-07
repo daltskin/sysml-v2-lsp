@@ -1,5 +1,5 @@
 import { Token } from 'antlr4ng';
-import { Diagnostic, DiagnosticSeverity } from 'vscode-languageserver/node.js';
+import { Diagnostic, DiagnosticSeverity } from 'vscode-languageserver/node';
 import { SysMLv2Lexer } from '../generated/SysMLv2Lexer.js';
 import { ParseResult } from '../parser/parseDocument.js';
 

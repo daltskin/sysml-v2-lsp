@@ -12,7 +12,7 @@ import {
     Connection,
     ProposedFeatures,
     createConnection,
-} from 'vscode-languageserver/node.js';
+} from 'vscode-languageserver/node';
 
 /** Create the server-side LSP connection for the running platform. */
 export function createServerConnection(): Connection {

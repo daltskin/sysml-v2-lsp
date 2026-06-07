@@ -4,7 +4,7 @@ import {
     TypeHierarchyPrepareParams,
     TypeHierarchySubtypesParams,
     TypeHierarchySupertypesParams,
-} from 'vscode-languageserver/node.js';
+} from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
 import { isDefinition, SysMLElementKind, SysMLSymbol } from '../symbols/sysmlElements.js';
 

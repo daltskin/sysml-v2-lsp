@@ -6,7 +6,7 @@
  * spinning up a transport.
  */
 
-import type { Diagnostic } from 'vscode-languageserver/node.js';
+import type { Diagnostic } from 'vscode-languageserver/node';
 import type { ComplexityReport } from './analysis/complexityAnalyzer.js';
 import { analyseComplexity } from './analysis/complexityAnalyzer.js';
 import type { DiagramType } from './mcp/mermaidGenerator.js';

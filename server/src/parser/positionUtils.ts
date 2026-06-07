@@ -1,5 +1,5 @@
 import { Token, ParserRuleContext } from 'antlr4ng';
-import { Position, Range } from 'vscode-languageserver/node.js';
+import { Position, Range } from 'vscode-languageserver/node';
 
 /**
  * Convert an ANTLR token to an LSP Position.

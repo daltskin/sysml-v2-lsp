@@ -1,7 +1,7 @@
 import {
     DefinitionParams,
     Location,
-} from 'vscode-languageserver/node.js';
+} from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
 import { resolveLibraryPackage, resolveLibraryType } from '../library/libraryIndex.js';
 import { extractQualifiedNameAt } from '../utils/identUtils.js';

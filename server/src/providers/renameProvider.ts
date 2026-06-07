@@ -4,7 +4,7 @@ import {
     WorkspaceEdit,
     TextEdit,
     Range,
-} from 'vscode-languageserver/node.js';
+} from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
 import { isIdentPart as isWordChar } from '../utils/identUtils.js';
 

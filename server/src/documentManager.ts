@@ -1,5 +1,5 @@
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { Diagnostic } from 'vscode-languageserver/node.js';
+import { Diagnostic } from 'vscode-languageserver/node';
 import { parseDocument, parseDocumentBatch, ParseResult } from './parser/parseDocument.js';
 import { SymbolTable } from './symbols/symbolTable.js';
 import { stripComments } from './utils/identUtils.js';

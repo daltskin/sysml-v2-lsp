@@ -1323,7 +1323,7 @@ describe('Completion Provider', () => {
 
     it('should include snippet insert text for definitions', async () => {
         const { CompletionProvider } = await import('../../server/src/providers/completionProvider.js');
-        const { InsertTextFormat } = await import('vscode-languageserver/node.js');
+        const { InsertTextFormat } = await import('vscode-languageserver/node');
         const { dm } = await setup(VEHICLE_TEXT);
 
         const provider = new CompletionProvider(dm);

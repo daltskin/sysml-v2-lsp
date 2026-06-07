@@ -2,7 +2,7 @@ import {
     FoldingRangeParams,
     FoldingRange,
     FoldingRangeKind,
-} from 'vscode-languageserver/node.js';
+} from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
 
 /**

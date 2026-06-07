@@ -8,7 +8,7 @@ import {
     SymbolKind,
     Range,
     Position,
-} from 'vscode-languageserver/node.js';
+} from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
 import { SysMLElementKind, SysMLSymbol } from '../symbols/sysmlElements.js';
 import { isIdentPart as isWordChar } from '../utils/identUtils.js';

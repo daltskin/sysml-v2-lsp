@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { CodeActionParams, Diagnostic } from 'vscode-languageserver/node.js';
+import type { CodeActionParams, Diagnostic } from 'vscode-languageserver/node';
 
 /** Create a TextDocument from raw SysML text */
 async function makeDoc(text: string, uri = 'file:///test.sysml') {

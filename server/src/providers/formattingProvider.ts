@@ -3,9 +3,9 @@ import {
     DocumentRangeFormattingParams,
     TextEdit,
     Range,
-} from 'vscode-languageserver/node.js';
+} from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
-import { TextDocuments } from 'vscode-languageserver/node.js';
+import { TextDocuments } from 'vscode-languageserver/node';
 
 /**
  * Provides document formatting for SysML files.

@@ -1,4 +1,4 @@
-import { Diagnostic, DiagnosticSeverity } from 'vscode-languageserver/node.js';
+import { Diagnostic, DiagnosticSeverity } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
 import { SyntaxError } from '../parser/errorListener.js';
 import { SysMLv2Lexer } from '../generated/SysMLv2Lexer.js';

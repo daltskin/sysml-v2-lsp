@@ -5,7 +5,7 @@
  * (e.g., the VS Code extension) for exposing the full semantic model.
  * All shapes use LSP-style positions (0-based line/character).
  */
-import type { TextDocumentIdentifier } from 'vscode-languageserver/node.js';
+import type { TextDocumentIdentifier } from 'vscode-languageserver/node';
 
 // ---------------------------------------------------------------------------
 // Status Notification

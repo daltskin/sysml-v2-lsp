@@ -7,7 +7,7 @@
  * the existing parse cache (via DocumentManager) so responses are near-instant.
  */
 
-import { Range } from 'vscode-languageserver/node.js';
+import { Range } from 'vscode-languageserver/node';
 import { analyseComplexity } from '../analysis/complexityAnalyzer.js';
 import { DocumentManager } from '../documentManager.js';
 import { ParseResult } from '../parser/parseDocument.js';

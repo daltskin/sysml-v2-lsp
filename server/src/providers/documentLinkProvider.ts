@@ -4,7 +4,7 @@ import {
     DocumentLinkParams,
     Range,
     TextDocuments,
-} from 'vscode-languageserver/node.js';
+} from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
 import { resolveLibraryPackage } from '../library/libraryIndex.js';
 import { isIdentPart as isIdentChar } from '../utils/identUtils.js';
