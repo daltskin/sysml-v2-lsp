@@ -402,6 +402,7 @@ function buildIndexFromFiles(files: LibraryFile[]): { packages: Map<string, stri
     for (const file of files) {
         // Keep raw content available for hover / Go-to-Definition.
         rawContentByUri.set(file.uri, file.content);
+        rawContentByNormalizedUri.set(normalizeStdlibUri(file.uri), file.content);
         indexLibraryFile(file.uri, file.content, packages, types);
     }
     return { packages, types };
@@ -418,6 +419,7 @@ function buildIndexFromFiles(files: LibraryFile[]): { packages: Map<string, stri
  */
 export function initLibraryIndex(serverDir: string, customPath?: string): number {
     rawContentByUri.clear();
+    rawContentByNormalizedUri.clear();
     fileContentCache.clear();
     hoverInfoCache.clear();
 
@@ -505,6 +507,22 @@ export interface LibraryHoverInfo {
  */
 const rawContentByUri = new Map<string, string>();
 
+/**
+ * Raw library file content keyed by a *normalised* `sysml-stdlib:` URI.
+ *
+ * Go-to-Definition targets the bundled `sysml-stdlib:///…` URIs
+ * produced by `libraryUriForPath` (empty authority, triple slash).
+ * When the client opens such a target, VS Code parses it into a
+ * `vscode.Uri` whose empty authority is then dropped on `toString()`,
+ * yielding the single-slash form `sysml-stdlib:/…`.  The content
+ * provider sends *that* string back to the server, so an exact map
+ * lookup against the triple-slash key fails.  Encoding can also differ
+ * (e.g. `(` stays literal via `vscode.Uri` but is `%28` via
+ * `encodeURIComponent`).  This map keys content by a canonical form so
+ * either spelling resolves to the same file.
+ */
+const rawContentByNormalizedUri = new Map<string, string>();
+
 /** Cache of library file contents keyed by file URI — library files never change at runtime. */
 const fileContentCache = new Map<string, string[]>();
 
@@ -539,12 +557,31 @@ function getCachedFileLines(uri: string): string[] | undefined {
 }
 
 /**
+ * Canonicalise a `sysml-stdlib:` URI for tolerant comparison.
+ *
+ * Strips the scheme and any leading slashes (so empty-authority
+ * triple-slash and single-slash spellings collapse together) and
+ * decodes percent-encoding so the segment text matches regardless of
+ * whether it was produced by `encodeURIComponent` or `vscode.Uri`.
+ */
+function normalizeStdlibUri(uri: string): string {
+    const withoutScheme = uri.replace(/^sysml-stdlib:\/*/i, '');
+    try {
+        return decodeURIComponent(withoutScheme);
+    } catch {
+        return withoutScheme;
+    }
+}
+
+/**
  * Get the full raw content of an indexed library file by URI.
  * Used by the `sysml/libraryContent` request so the editor can open
  * standard-library files that live only in memory (browser build).
  */
 export function getLibraryFileContent(uri: string): string | undefined {
-    return rawContentByUri.get(uri);
+    const exact = rawContentByUri.get(uri);
+    if (exact !== undefined) return exact;
+    return rawContentByNormalizedUri.get(normalizeStdlibUri(uri));
 }
 
 /**

@@ -95,6 +95,9 @@ const browserServerBuild = esbuild.build({
         // The server reads __dirname only to locate the on-disk library,
         // which is bundled in the browser build, so the value is unused.
         '__dirname': '"/"',
+        // Flag the browser build so the server skips spawning a parse worker
+        // (worker_threads is unavailable in the browser; parsing runs inline).
+        '__SYSML_BROWSER_SERVER__': 'true',
     },
     alias: {
         'vscode-languageserver/node.js': 'vscode-languageserver/browser',

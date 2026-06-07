@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Browser build no longer attempts to spawn a `worker_threads` parse worker (unavailable in the Web Worker runtime); parsing now runs inline, guarded by a new `__SYSML_BROWSER_SERVER__` compile-time flag injected via esbuild's `define`, avoiding a misleading worker-failure log
+- Go-to-Definition into bundled `sysml-stdlib:` documents now resolves regardless of URI spelling: library content is additionally keyed by a canonical form so triple-slash/single-slash authority variants and differing percent-encoding (`vscode.Uri` vs `encodeURIComponent`) all map to the same file
+
 ## [0.21.0]
 
 ## [0.20.0]

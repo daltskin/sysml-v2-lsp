@@ -114,6 +114,16 @@ const earlyOpenUris = new Set<string>();
 /** Next request ID for the parse worker. */
 let workerRequestId = 0;
 
+/**
+ * Compile-time flag injected by esbuild's `define` in the browser build.
+ * It is left undefined in the Node builds, so guard every read with `typeof`.
+ */
+declare const __SYSML_BROWSER_SERVER__: boolean | undefined;
+
+/** True when running inside the browser (Web Worker) language-server bundle. */
+const isBrowserServer =
+    typeof __SYSML_BROWSER_SERVER__ !== 'undefined' && __SYSML_BROWSER_SERVER__;
+
 /** The parse worker thread (spawned lazily). */
 let parseWorker: Worker | undefined;
 /** True when the worker is available (spawned + not crashed). */
@@ -125,6 +135,13 @@ let workerReady = false;
  * snapshot independently.
  */
 function spawnParseWorker(): void {
+    // The browser has no worker_threads; parsing runs inline on the
+    // language-server worker. Skip the spawn (and its misleading failure
+    // log) entirely rather than attempting and catching the throw.
+    if (isBrowserServer) {
+        connection.console.log('Parse worker disabled in browser; parsing runs inline');
+        return;
+    }
     const workerPath = path.join(__dirname, 'parseWorker.js');
     try {
         parseWorker = new Worker(workerPath);
