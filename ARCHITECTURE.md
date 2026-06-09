@@ -45,6 +45,11 @@ A Language Server Protocol implementation for SysML v2, structured as a client/s
 - **scope.ts** — Manages nested lexical scopes for name resolution (package → definition → usage).
 - **sysmlElements.ts** — Type definitions for SysML element kinds (PartDef, PartUsage, etc.).
 
+### Analysis Layer (`server/src/analysis/`)
+
+- **typeGraph.ts** — Builds a **super-type graph** with *kinded* edges (specialization, subsetting, redefinition, feature-typing, and injected implicit defaults). Every definition is automatically linked to the standard-library root type for its kind (e.g. `part def Wheel` → `Parts::Part`), and the fixed library backbone hierarchy (`Part :> Item :> Object :> Occurrence`, …) is seeded so cross-kind reasoning works without parsing the full library. A depth-first search (DFS) answers "does type A specialize type B?". Consumed by `SemanticValidator` for the `incompatible-specialization` type-error check.
+- **complexityAnalyzer.ts** — Computes model complexity metrics for the complexity code lens.
+
 ### Provider Layer (`server/src/providers/`)
 
 Each LSP feature is implemented as a standalone provider class:

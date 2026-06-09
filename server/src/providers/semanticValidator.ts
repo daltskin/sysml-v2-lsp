@@ -4,6 +4,13 @@ import { getLibraryPackageNames, resolveLibraryType } from '../library/libraryIn
 import { SysMLModelProvider } from '../model/sysmlModelProvider.js';
 import { SysMLElementKind, SysMLSymbol, isDefinition } from '../symbols/sysmlElements.js';
 import { stripComments } from '../utils/identUtils.js';
+import {
+    buildSuperTypeGraph,
+    familyOfDefinitionKind,
+    implicitRootName,
+    SuperTypeGraph,
+    TypeFamily,
+} from '../analysis/typeGraph.js';
 
 /**
  * Standard library types that are always available (from Kernel libraries).
@@ -113,6 +120,12 @@ export class SemanticValidator {
     /** Cached library package names — never changes after init. */
     private libraryNamesCache?: Set<string>;
 
+    /** Cached super-type graph, invalidated when the workspace symbol set changes. */
+    private typeGraphCache?: {
+        symbols: SysMLSymbol[];
+        graph: SuperTypeGraph;
+    };
+
     constructor(private readonly documentManager: DocumentManager) {
         this.modelProvider = new SysMLModelProvider(documentManager);
     }
@@ -180,6 +193,7 @@ export class SemanticValidator {
 
         const text = this.documentManager.getText(uri) ?? '';
         const indexes = this.getOrBuildIndexes(allSymbols);
+        const typeGraph = this.getOrBuildTypeGraph(allSymbols);
 
         const diagnostics: Diagnostic[] = [];
 
@@ -200,6 +214,7 @@ export class SemanticValidator {
         diagnostics.push(...this.checkConstraintBodyReferences(text, uri, symbols, indexes));
         diagnostics.push(...this.checkCircularSpecialization(symbols, indexes));
         diagnostics.push(...this.checkCircularContainment(symbols, indexes));
+        diagnostics.push(...this.checkSpecializationConformance(symbols, indexes, typeGraph));
         diagnostics.push(...this.checkUnsatisfiedRequirements(symbols, indexes));
         diagnostics.push(...this.checkUnverifiedRequirements(symbols, indexes));
         diagnostics.push(...this.checkViewpointSatisfaction(symbols, indexes));
@@ -1166,6 +1181,124 @@ export class SemanticValidator {
             }
         }
         return hierarchy;
+    }
+
+    /**
+     * Build (or reuse a cached) super-type graph for the whole workspace.
+     *
+     * The graph is keyed on the identity of the `allSymbols` array returned
+     * by the workspace symbol table, which is replaced whenever any symbol is
+     * added or removed — so the cache is invalidated automatically.
+     */
+    private getOrBuildTypeGraph(allSymbols: SysMLSymbol[]): SuperTypeGraph {
+        if (this.typeGraphCache && this.typeGraphCache.symbols === allSymbols) {
+            return this.typeGraphCache.graph;
+        }
+        const graph = buildSuperTypeGraph(allSymbols);
+        this.typeGraphCache = { symbols: allSymbols, graph };
+        return graph;
+    }
+
+    /**
+     * Rule: incompatible specialization.
+     *
+     * A definition may only specialize (`:>` / `specializes`) another type
+     * whose implicit library root lies on the same generalization line.
+     * SysML v2 roots every definition kind at a standard-library type
+     * (`part def` → `Parts::Part`, `attribute def` → `Base::DataValue`, …)
+     * and those roots form a fixed hierarchy (`Part :> Item :> Object :>
+     * Occurrence`, `DataValue`, …) under `Anything`.
+     *
+     * The super-type graph seeds that backbone hierarchy, so a depth-first
+     * search (DFS) between the two roots decides compatibility: a part def
+     * specializing an item def is valid (`Part :> Item`), whereas a part def
+     * specializing an attribute def is not (occurrences and data values are
+     * disjoint).  Unresolved / library / lowercase feature references are
+     * skipped to avoid false positives.
+     */
+    private checkSpecializationConformance(
+        symbolsInUri: SysMLSymbol[],
+        indexes: SymbolIndexes,
+        graph: SuperTypeGraph,
+    ): Diagnostic[] {
+        const diagnostics: Diagnostic[] = [];
+
+        for (const symbol of symbolsInUri) {
+            if (!isDefinition(symbol.kind)) continue;
+
+            const subRoot = implicitRootName(symbol.kind);
+            if (subRoot === undefined) continue;
+
+            // Explicit specialization targets are captured in typeNames /
+            // specializationNames for definitions.
+            const refs = new Set<string>([
+                ...symbol.typeNames,
+                ...symbol.specializationNames,
+            ]);
+
+            for (const ref of refs) {
+                // Resolve the reference to a user-defined definition; only
+                // those carry a reliable kind we can classify.  Skip
+                // lowercase feature references (subsetting of a feature, not a
+                // type) and unresolved/library names to avoid false positives.
+                const target = this.resolveDefinitionRef(ref, indexes);
+                if (!target || target.qualifiedName === symbol.qualifiedName) continue;
+
+                const supRoot = implicitRootName(target.kind);
+                if (supRoot === undefined || supRoot === subRoot) continue;
+
+                // DFS over the standard-library root backbone: the
+                // specialization is valid when either root is reachable from
+                // the other (e.g. Part :> Item).  Only flag when neither is.
+                if (graph.specializes(subRoot, supRoot) || graph.specializes(supRoot, subRoot)) {
+                    continue;
+                }
+
+                const subFamily = familyOfDefinitionKind(symbol.kind);
+                const supFamily = familyOfDefinitionKind(target.kind);
+                const detail = (subFamily !== undefined && supFamily !== undefined && subFamily !== supFamily)
+                    ? `${this.familyLabel(subFamily)} and ${this.familyLabel(supFamily)} types belong to disjoint type families`
+                    : `'${subRoot}' and '${supRoot}' are unrelated in the SysML type hierarchy`;
+
+                diagnostics.push({
+                    severity: DiagnosticSeverity.Error,
+                    range: symbol.selectionRange,
+                    message:
+                        `Incompatible specialization: '${symbol.name}' (${symbol.kind}) ` +
+                        `cannot specialize '${target.name}' (${target.kind}) — ${detail}`,
+                    source: 'sysml',
+                    code: 'incompatible-specialization',
+                    data: { typeName: target.name },
+                });
+            }
+        }
+
+        return diagnostics;
+    }
+
+    /** Human-readable label for a type family, used in diagnostics. */
+    private familyLabel(family: TypeFamily): string {
+        return family === TypeFamily.DataValue ? 'data value' : 'occurrence';
+    }
+
+    /**
+     * Resolve a specialization reference to a single user-defined definition
+     * symbol, or `undefined` when it does not unambiguously name one (e.g. a
+     * lowercase feature reference, a library type, or an unresolved name).
+     */
+    private resolveDefinitionRef(ref: string, indexes: SymbolIndexes): SysMLSymbol | undefined {
+        // Use the last segment of qualified names (e.g. `Pkg::Foo` → `Foo`).
+        const name = ref.split('::').pop() ?? ref;
+        if (!name) return undefined;
+
+        // Lowercase leading character → feature reference (subsetting), not a type.
+        const ch0 = name.charCodeAt(0);
+        if (ch0 >= 97 && ch0 <= 122) return undefined;
+
+        const defs = (indexes.definitionsByName.get(name) ?? [])
+            .filter(s => isDefinition(s.kind));
+        // Only act when the name resolves unambiguously to one definition.
+        return defs.length === 1 ? defs[0] : undefined;
     }
 
     /**

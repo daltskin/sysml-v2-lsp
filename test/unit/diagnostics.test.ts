@@ -195,6 +195,70 @@ package Test {
         });
     });
 
+    describe('incompatible specialization (super-type graph)', () => {
+        it('should flag a part def specializing an attribute def', async () => {
+            const text = `
+package Test {
+    attribute def Mass;
+    part def Wheel :> Mass;
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const incompat = diags.filter(d => d.code === 'incompatible-specialization');
+            expect(incompat.length).toBeGreaterThanOrEqual(1);
+            expect(incompat[0].message).toContain("'Wheel'");
+            expect(incompat[0].message).toContain("'Mass'");
+        });
+
+        it('should flag an attribute def specializing a part def', async () => {
+            const text = `
+package Test {
+    part def Person;
+    attribute def ForceUnit :> Person;
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const incompat = diags.filter(d => d.code === 'incompatible-specialization');
+            expect(incompat.length).toBeGreaterThanOrEqual(1);
+        });
+
+        it('should NOT flag a part def specializing another part def', async () => {
+            const text = `
+package Test {
+    part def Vehicle;
+    part def Car :> Vehicle;
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const incompat = diags.filter(d => d.code === 'incompatible-specialization');
+            expect(incompat.length).toBe(0);
+        });
+
+        it('should NOT flag a part def specializing an item def (compatible families)', async () => {
+            // Part specializes Item in the standard library, so this is valid.
+            const text = `
+package Test {
+    item def Cargo;
+    part def Container :> Cargo;
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const incompat = diags.filter(d => d.code === 'incompatible-specialization');
+            expect(incompat.length).toBe(0);
+        });
+
+        it('should NOT flag specialization of unresolved / library types', async () => {
+            const text = `
+package Test {
+    part def Wheel :> UnknownThing;
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const incompat = diags.filter(d => d.code === 'incompatible-specialization');
+            expect(incompat.length).toBe(0);
+        });
+    });
+
     describe('invalid multiplicity bounds', () => {
         it('should flag when lower bound exceeds upper bound', async () => {
             const text = `
