@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.23.0]
+
 ### Fixed
 
 - Removed a stale `import/no-unresolved` eslint-disable directive (the `import` plugin is not configured, so the rule was undefined and `npm run lint` errored) and three unused `@typescript-eslint/no-unused-vars` disable directives in the browser platform shims; `npm run lint` is now clean
