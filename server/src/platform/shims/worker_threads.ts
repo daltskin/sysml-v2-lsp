@@ -8,8 +8,6 @@
  * stub simply makes that fallback engage.
  */
 
-/* eslint-disable @typescript-eslint/no-unused-vars */
-
 export class Worker {
     constructor(_path: string, _opts?: unknown) {
         throw new Error('worker_threads is not available in the browser; using inline parsing');

@@ -2,6 +2,17 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Removed a stale `import/no-unresolved` eslint-disable directive (the `import` plugin is not configured, so the rule was undefined and `npm run lint` errored) and three unused `@typescript-eslint/no-unused-vars` disable directives in the browser platform shims; `npm run lint` is now clean
+
+### Changed
+
+- Bumped dependencies: `esbuild` 0.28.0 → 0.28.1, `vite` 8.0.16 → 8.1.2, `vitest` 4.1.8 → 4.1.9, `vscode-languageserver` 10.0.0 → 10.0.1 ([#64](https://github.com/daltskin/sysml-v2-lsp/pull/64), [#58](https://github.com/daltskin/sysml-v2-lsp/pull/58))
+- Bumped dev dependencies: `typescript-eslint` 8.60.1 → 8.62.1 ([#56](https://github.com/daltskin/sysml-v2-lsp/pull/56))
+- Bumped dependencies: `hono` 4.12.23 → 4.12.27 ([#60](https://github.com/daltskin/sysml-v2-lsp/pull/60)), `undici` 7.27.2 → 7.28.0 ([#61](https://github.com/daltskin/sysml-v2-lsp/pull/61)), `form-data` 4.0.5 → 4.0.6 ([#62](https://github.com/daltskin/sysml-v2-lsp/pull/62))
+- Bumped `actions/checkout` GitHub Action from v6 to v7 in CI and release workflows ([#63](https://github.com/daltskin/sysml-v2-lsp/pull/63))
+
 ## [0.22.0]
 
 ### Fixed

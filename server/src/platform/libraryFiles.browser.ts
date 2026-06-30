@@ -11,7 +11,7 @@
  * esbuild resolver plugin (see esbuild.mjs).
  */
 
-// eslint-disable-next-line import/no-unresolved -- generated at build time
+// Generated at build time by scripts/bundle-library.mjs.
 import { BUNDLED_LIBRARY } from '../library/bundledLibrary.generated.js';
 
 /** A standard-library source file: its URI and full text content. */

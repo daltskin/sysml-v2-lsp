@@ -7,7 +7,7 @@
       "installJupyterlab": false
     }
   },
-  "postCreateCommand": "npm install && npm run generate && pip3 install --user jupyter ipykernel notebook",
+  "postCreateCommand": "sudo chown -R node:node /workspaces/sysml-v2-lsp && npm install && npm run generate && pip3 install --user jupyter ipykernel notebook",
   "customizations": {
     "vscode": {
       "extensions": [

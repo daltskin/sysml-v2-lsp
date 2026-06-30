@@ -6,8 +6,6 @@
  * The stubs return empty results so the scan no-ops cleanly.
  */
 
-/* eslint-disable @typescript-eslint/no-unused-vars */
-
 export async function readFile(_path: string, _enc?: unknown): Promise<string> {
     throw new Error('fs/promises.readFile is not available in the browser');
 }

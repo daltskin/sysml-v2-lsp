@@ -8,8 +8,6 @@
  * degrade gracefully (workspace disk scanning simply finds nothing).
  */
 
-/* eslint-disable @typescript-eslint/no-unused-vars */
-
 export class Dirent {
     name = '';
     isDirectory(): boolean { return false; }
