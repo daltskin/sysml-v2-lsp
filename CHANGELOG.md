@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.24.0]
+
 ### Added
 
 - **Control-node support for action flows** ([daltskin/VSCode_SysML_Extension#62](https://github.com/daltskin/VSCode_SysML_Extension/issues/62)) — `fork`, `join`, `merge` and `decide` control nodes are now extracted as first-class symbols with their own element kinds (`ForkNode`, `JoinNode`, `MergeNode`, `DecisionNode`) and SysML v2 metaclass names, instead of being silently dropped. Downstream consumers can now distinguish a `join` (synchronization bar) from a `merge`/`decide` (diamond) authoritatively rather than guessing from node names.
