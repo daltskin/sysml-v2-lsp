@@ -18,6 +18,10 @@ export enum SysMLElementKind {
     ActionDef = 'action def',
     ActionUsage = 'action',
     PerformActionUsage = 'perform action',
+    ForkNode = 'fork',
+    JoinNode = 'join',
+    MergeNode = 'merge',
+    DecisionNode = 'decide',
     StateDef = 'state def',
     StateUsage = 'state',
     ExhibitStateUsage = 'exhibit state',
@@ -142,6 +146,10 @@ export function toMetaclassName(kind: SysMLElementKind): string {
         case SysMLElementKind.ActionDef: return 'ActionDefinition';
         case SysMLElementKind.ActionUsage: return 'ActionUsage';
         case SysMLElementKind.PerformActionUsage: return 'PerformActionUsage';
+        case SysMLElementKind.ForkNode: return 'ForkNode';
+        case SysMLElementKind.JoinNode: return 'JoinNode';
+        case SysMLElementKind.MergeNode: return 'MergeNode';
+        case SysMLElementKind.DecisionNode: return 'DecisionNode';
         case SysMLElementKind.StateDef: return 'StateDefinition';
         case SysMLElementKind.StateUsage: return 'StateUsage';
         case SysMLElementKind.ExhibitStateUsage: return 'ExhibitStateUsage';

@@ -35,6 +35,18 @@ import type {
 
 import { isIdentPart as isWordChar, stripComments } from '../utils/identUtils.js';
 
+/**
+ * Maps SysML v2 control-node element kinds to their activity-diagram node type.
+ * These kinds are emitted authoritatively by the symbol extractor, so the
+ * activity builder no longer needs to guess control-node types from text.
+ */
+const CONTROL_NODE_TYPE: ReadonlyMap<SysMLElementKind, string> = new Map([
+    [SysMLElementKind.ForkNode, 'fork'],
+    [SysMLElementKind.JoinNode, 'join'],
+    [SysMLElementKind.MergeNode, 'merge'],
+    [SysMLElementKind.DecisionNode, 'decision'],
+]);
+
 // ── String-based extraction helpers (replacing regex) ──
 
 /**
@@ -913,7 +925,8 @@ export class SysMLModelProvider {
 
             const children = this.getChildSymbols(symbol, symbolTable);
             const hasChildActions = children.some(c =>
-                c.kind === SysMLElementKind.ActionUsage || c.kind === SysMLElementKind.ActionDef,
+                c.kind === SysMLElementKind.ActionUsage || c.kind === SysMLElementKind.ActionDef
+                || CONTROL_NODE_TYPE.has(c.kind),
             );
 
             // For action usages, only include if they have child actions
@@ -930,15 +943,22 @@ export class SysMLModelProvider {
             for (const child of children) {
                 const childText = this.getElementText(child, lines);
 
+                const controlType = CONTROL_NODE_TYPE.get(child.kind);
                 if (child.kind === SysMLElementKind.ActionUsage ||
-                    child.kind === SysMLElementKind.ActionDef) {
-                    // Determine action node type
-                    let actionType = 'action';
-                    const lowerText = childText.toLowerCase();
-                    if (lowerText.includes('fork')) actionType = 'fork';
-                    else if (lowerText.includes('join')) actionType = 'join';
-                    else if (lowerText.includes('merge')) actionType = 'merge';
-                    else if (lowerText.includes('decide')) actionType = 'decision';
+                    child.kind === SysMLElementKind.ActionDef ||
+                    controlType !== undefined) {
+                    // Determine action node type. Prefer the authoritative element
+                    // kind — fork/join/merge/decide are distinct SysML v2 control
+                    // nodes emitted by the parser — and only fall back to text
+                    // inspection for plain actions written with control keywords.
+                    let actionType = controlType ?? 'action';
+                    if (controlType === undefined) {
+                        const lowerText = childText.toLowerCase();
+                        if (lowerText.includes('fork')) actionType = 'fork';
+                        else if (lowerText.includes('join')) actionType = 'join';
+                        else if (lowerText.includes('merge')) actionType = 'merge';
+                        else if (lowerText.includes('decide')) actionType = 'decision';
+                    }
 
                     const subActions = this.getChildSymbols(child, symbolTable)
                         .filter(c => c.kind === SysMLElementKind.ActionUsage || c.kind === SysMLElementKind.ActionDef)
@@ -947,6 +967,7 @@ export class SysMLModelProvider {
                     actions.push({
                         name: child.name,
                         type: actionType,
+                        kind: actionType,
                         isDefinition: child.kind === SysMLElementKind.ActionDef,
                         range: this.rangeToDTO(child.range),
                         parent: symbol.name,
@@ -1783,17 +1804,20 @@ export class SysMLModelProvider {
         symbolTable: SymbolTable,
         lines: string[],
     ): ActivityActionDTO {
-        const childText = this.getElementText(symbol, lines);
-        let actionType = 'action';
-        const lowerText = childText.toLowerCase();
-        if (lowerText.includes('fork')) actionType = 'fork';
-        else if (lowerText.includes('join')) actionType = 'join';
-        else if (lowerText.includes('merge')) actionType = 'merge';
-        else if (lowerText.includes('decide')) actionType = 'decision';
+        const controlType = CONTROL_NODE_TYPE.get(symbol.kind);
+        let actionType = controlType ?? 'action';
+        if (controlType === undefined) {
+            const lowerText = this.getElementText(symbol, lines).toLowerCase();
+            if (lowerText.includes('fork')) actionType = 'fork';
+            else if (lowerText.includes('join')) actionType = 'join';
+            else if (lowerText.includes('merge')) actionType = 'merge';
+            else if (lowerText.includes('decide')) actionType = 'decision';
+        }
 
         return {
             name: symbol.name,
             type: actionType,
+            kind: actionType,
             isDefinition: symbol.kind === SysMLElementKind.ActionDef,
             range: this.rangeToDTO(symbol.range),
         };

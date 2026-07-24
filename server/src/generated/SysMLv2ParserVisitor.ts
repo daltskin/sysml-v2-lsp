@@ -446,12 +446,10 @@ import { ExtendedDefinitionContext } from "./SysMLv2Parser.js";
 import { ExtendedUsageContext } from "./SysMLv2Parser.js";
 import { FilterPackageImportDeclarationContext } from "./SysMLv2Parser.js";
 import { NamespaceImportDirectContext } from "./SysMLv2Parser.js";
-import { CalculationUsageDeclarationContext } from "./SysMLv2Parser.js";
 import { EmptyActionUsage_Context } from "./SysMLv2Parser.js";
 import { EmptyFeature_Context } from "./SysMLv2Parser.js";
 import { EmptyMultiplicity_Context } from "./SysMLv2Parser.js";
 import { EmptyUsage_Context } from "./SysMLv2Parser.js";
-import { FilterPackageImportContext } from "./SysMLv2Parser.js";
 import { NonFeatureChainPrimaryExpressionContext } from "./SysMLv2Parser.js";
 import { PortConjugationContext } from "./SysMLv2Parser.js";
 
@@ -3129,12 +3127,6 @@ export class SysMLv2ParserVisitor<Result> extends AbstractParseTreeVisitor<Resul
      */
     visitNamespaceImportDirect?: (ctx: NamespaceImportDirectContext) => Result;
     /**
-     * Visit a parse tree produced by `SysMLv2Parser.calculationUsageDeclaration`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitCalculationUsageDeclaration?: (ctx: CalculationUsageDeclarationContext) => Result;
-    /**
      * Visit a parse tree produced by `SysMLv2Parser.emptyActionUsage_`.
      * @param ctx the parse tree
      * @return the visitor result
@@ -3158,12 +3150,6 @@ export class SysMLv2ParserVisitor<Result> extends AbstractParseTreeVisitor<Resul
      * @return the visitor result
      */
     visitEmptyUsage_?: (ctx: EmptyUsage_Context) => Result;
-    /**
-     * Visit a parse tree produced by `SysMLv2Parser.filterPackageImport`.
-     * @param ctx the parse tree
-     * @return the visitor result
-     */
-    visitFilterPackageImport?: (ctx: FilterPackageImportContext) => Result;
     /**
      * Visit a parse tree produced by `SysMLv2Parser.nonFeatureChainPrimaryExpression`.
      * @param ctx the parse tree

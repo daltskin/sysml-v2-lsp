@@ -40,6 +40,10 @@ const RULE_INDEX_TO_KIND = new Map<number, SysMLElementKind>([
     [SysMLv2Parser.RULE_portUsage, SysMLElementKind.PortUsage],                   // 251
     [SysMLv2Parser.RULE_connectionUsage, SysMLElementKind.ConnectionUsage],       // 254
     [SysMLv2Parser.RULE_actionUsage, SysMLElementKind.ActionUsage],               // 296
+    [SysMLv2Parser.RULE_mergeNode, SysMLElementKind.MergeNode],                   // 305
+    [SysMLv2Parser.RULE_decisionNode, SysMLElementKind.DecisionNode],             // 306
+    [SysMLv2Parser.RULE_joinNode, SysMLElementKind.JoinNode],                     // 307
+    [SysMLv2Parser.RULE_forkNode, SysMLElementKind.ForkNode],                     // 308
     [SysMLv2Parser.RULE_stateUsage, SysMLElementKind.StateUsage],                 // 357
     [SysMLv2Parser.RULE_requirementUsage, SysMLElementKind.RequirementUsage],     // 398
     [SysMLv2Parser.RULE_constraintUsage, SysMLElementKind.ConstraintUsage],       // 381

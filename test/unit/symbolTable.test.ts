@@ -376,3 +376,60 @@ package InheritTest {
         }
     });
 });
+
+describe('Control nodes (fork/join/merge/decide)', () => {
+    it('should extract fork/join/merge/decide as distinct symbol kinds', async () => {
+        const { SysMLElementKind } = await import('../../server/src/symbols/sysmlElements.js');
+        const { st } = await buildST(`
+package PluginTest {
+    action testParallelFlow {
+        action startStep;
+        fork myFork;
+        join myJoin;
+        merge myMerge;
+        decide myDecide;
+    }
+}
+`);
+        const symbols = st.getAllSymbols();
+
+        const fork = symbols.find(s => s.name === 'myFork');
+        const join = symbols.find(s => s.name === 'myJoin');
+        const merge = symbols.find(s => s.name === 'myMerge');
+        const decide = symbols.find(s => s.name === 'myDecide');
+
+        expect(fork?.kind).toBe(SysMLElementKind.ForkNode);
+        expect(join?.kind).toBe(SysMLElementKind.JoinNode);
+        expect(merge?.kind).toBe(SysMLElementKind.MergeNode);
+        expect(decide?.kind).toBe(SysMLElementKind.DecisionNode);
+    });
+
+    it('should distinguish a join node from a fork node (issue #62)', async () => {
+        const { SysMLElementKind } = await import('../../server/src/symbols/sysmlElements.js');
+        const { st } = await buildST(`
+package P {
+    action a {
+        fork f;
+        join j;
+    }
+}
+`);
+        const symbols = st.getAllSymbols();
+        const fork = symbols.find(s => s.name === 'f');
+        const join = symbols.find(s => s.name === 'j');
+
+        expect(fork?.kind).toBe(SysMLElementKind.ForkNode);
+        expect(join?.kind).toBe(SysMLElementKind.JoinNode);
+        // The two control nodes must not collapse to the same kind.
+        expect(fork?.kind).not.toBe(join?.kind);
+    });
+
+    it('should map control-node kinds to their SysML v2 metaclass names', async () => {
+        const { SysMLElementKind, toMetaclassName } = await import('../../server/src/symbols/sysmlElements.js');
+        expect(toMetaclassName(SysMLElementKind.ForkNode)).toBe('ForkNode');
+        expect(toMetaclassName(SysMLElementKind.JoinNode)).toBe('JoinNode');
+        expect(toMetaclassName(SysMLElementKind.MergeNode)).toBe('MergeNode');
+        expect(toMetaclassName(SysMLElementKind.DecisionNode)).toBe('DecisionNode');
+    });
+});
+

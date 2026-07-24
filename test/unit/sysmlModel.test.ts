@@ -499,6 +499,41 @@ package Test {
                 expect(subDiagram.flows.find(f => f.from === 'stepX' && f.to === 'stepY')).toBeDefined();
             }
         });
+
+        // ------ Control nodes: fork/join/merge/decide (issue #62) ------
+
+        it('should emit fork/join/merge/decide control nodes with authoritative types', async () => {
+            const model = await getModelForText(`
+package PluginTest {
+    action testParallelFlow {
+        action startStep;
+        action taskA;
+        action taskB;
+        fork myFork;
+        join myJoin;
+        merge myMerge;
+        decide myDecide;
+    }
+}
+`, ['activityDiagrams']);
+
+            const diagrams = model.activityDiagrams!;
+            const diagram = diagrams.find(d => d.name === 'testParallelFlow');
+            expect(diagram).toBeDefined();
+
+            const byName = (n: string) => diagram!.actions.find(a => a.name === n);
+
+            // Control nodes must be present with the correct type derived from
+            // the LSP element kind — NOT guessed from the node name.
+            expect(byName('myFork')?.type).toBe('fork');
+            expect(byName('myJoin')?.type).toBe('join');
+            expect(byName('myMerge')?.type).toBe('merge');
+            expect(byName('myDecide')?.type).toBe('decision');
+
+            // The join must not collapse to a merge/decision (the root cause of #62).
+            expect(byName('myJoin')?.type).not.toBe('merge');
+            expect(byName('myJoin')?.type).not.toBe('decision');
+        });
     });
 
     // -------------------------------------------------------------------

@@ -2,6 +2,24 @@
 
 ## [Unreleased]
 
+### Added
+
+- **Control-node support for action flows** ([daltskin/VSCode_SysML_Extension#62](https://github.com/daltskin/VSCode_SysML_Extension/issues/62)) — `fork`, `join`, `merge` and `decide` control nodes are now extracted as first-class symbols with their own element kinds (`ForkNode`, `JoinNode`, `MergeNode`, `DecisionNode`) and SysML v2 metaclass names, instead of being silently dropped. Downstream consumers can now distinguish a `join` (synchronization bar) from a `merge`/`decide` (diamond) authoritatively rather than guessing from node names.
+  - The `sysml/model` activity-diagram output now emits these control nodes with the correct `type`/`kind`.
+  - The activity (Action Flow) Mermaid preview renders `fork`/`join` as synchronization bars and `merge`/`decide` as diamonds.
+
+### Changed
+
+- **Updated the ANTLR grammar to the latest OMG SysML v2 release** — pulled the refreshed grammar from `daltskin/sysml-v2-grammar` and regenerated the parser and DFA snapshot. Refinements include a tightened `payloadFeature`, a `memberPrefix` on `annotatingMember`, `framedConcernUsage` now using `requirementBody`/`constraintUsageDeclaration`, and removal of obsolete stub rules (`filterPackageImport`, `calculationUsageDeclaration`).
+- Folded in Dependabot dependency bumps: `@types/node` 25 → 26, `vite` → 8.1.5, `vitest` → 4.1.10, `vscode-languageserver` → 10.1.0, `eslint` → 9.39.5, `typescript-eslint` → 8.65.0, `brace-expansion` → 1.1.16/5.0.8 ([#67](https://github.com/daltskin/sysml-v2-lsp/pull/67), [#69](https://github.com/daltskin/sysml-v2-lsp/pull/69), [#71](https://github.com/daltskin/sysml-v2-lsp/pull/71), [#72](https://github.com/daltskin/sysml-v2-lsp/pull/72)).
+- Bumped `actions/setup-node` from v6 to v7 in the release and setup workflows ([#70](https://github.com/daltskin/sysml-v2-lsp/pull/70)).
+- Pinned `@hono/node-server` to `^2.0.9` via `overrides` to clear a transitive advisory in the (stdio-only, unreachable) HTTP transport of `@modelcontextprotocol/sdk`; `npm audit` is now clean.
+
+### Fixed
+
+- Corrected the stale `update-grammar` npm script to fetch from `daltskin/sysml-v2-grammar` (matching the Makefile) instead of the old `daltskin/grammars-v4` path.
+- Made the test suite reliable under parallel load by raising Vitest's `hookTimeout` to match `testTimeout`, fixing intermittent DFA-snapshot load timeouts in `beforeAll`.
+
 ## [0.23.0]
 
 ### Fixed

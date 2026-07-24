@@ -706,6 +706,24 @@ describe('MCP Server Core', () => {
             expect(result.diagram).toContain('flowchart');
         });
 
+        it('should render fork/join as bars and decide/merge as diamonds in the activity view (issue #62)', () => {
+            const controlModel = `action testParallelFlow {
+    action startStep;
+    fork myFork;
+    join myJoin;
+    merge myMerge;
+    decide myDecide;
+}`;
+            const result = handlePreview(ctx, { code: controlModel });
+            expect(result.diagramType).toBe('activity');
+            // fork/join → bar-style rectangle nodes
+            expect(result.diagram).toContain('fork myFork"]');
+            expect(result.diagram).toContain('join myJoin"]');
+            // decide/merge → diamond nodes  {"..."}
+            expect(result.diagram).toContain('{"decide myDecide"}');
+            expect(result.diagram).toContain('{"merge myMerge"}');
+        });
+
         it('should auto-detect state diagram for state-heavy code', () => {
             const stateModel = `state def DeviceStates {
     state idle;
