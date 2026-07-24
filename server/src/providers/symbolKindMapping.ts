@@ -44,6 +44,13 @@ export function toSysMLSymbolKind(kind: SysMLElementKind): SymbolKind {
         case SysMLElementKind.PerformActionUsage:
             return SymbolKind.Method;
 
+        // Control-flow nodes (fork/join/merge/decide) → Event
+        case SysMLElementKind.ForkNode:
+        case SysMLElementKind.JoinNode:
+        case SysMLElementKind.MergeNode:
+        case SysMLElementKind.DecisionNode:
+            return SymbolKind.Event;
+
         // Behavioral: states → Event (better semantic fit than Enum)
         case SysMLElementKind.StateDef:
         case SysMLElementKind.StateUsage:

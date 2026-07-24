@@ -446,12 +446,10 @@ import { ExtendedDefinitionContext } from "./SysMLv2Parser.js";
 import { ExtendedUsageContext } from "./SysMLv2Parser.js";
 import { FilterPackageImportDeclarationContext } from "./SysMLv2Parser.js";
 import { NamespaceImportDirectContext } from "./SysMLv2Parser.js";
-import { CalculationUsageDeclarationContext } from "./SysMLv2Parser.js";
 import { EmptyActionUsage_Context } from "./SysMLv2Parser.js";
 import { EmptyFeature_Context } from "./SysMLv2Parser.js";
 import { EmptyMultiplicity_Context } from "./SysMLv2Parser.js";
 import { EmptyUsage_Context } from "./SysMLv2Parser.js";
-import { FilterPackageImportContext } from "./SysMLv2Parser.js";
 import { NonFeatureChainPrimaryExpressionContext } from "./SysMLv2Parser.js";
 import { PortConjugationContext } from "./SysMLv2Parser.js";
 
@@ -4902,16 +4900,6 @@ export class SysMLv2ParserListener implements ParseTreeListener {
      */
     exitNamespaceImportDirect?: (ctx: NamespaceImportDirectContext) => void;
     /**
-     * Enter a parse tree produced by `SysMLv2Parser.calculationUsageDeclaration`.
-     * @param ctx the parse tree
-     */
-    enterCalculationUsageDeclaration?: (ctx: CalculationUsageDeclarationContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.calculationUsageDeclaration`.
-     * @param ctx the parse tree
-     */
-    exitCalculationUsageDeclaration?: (ctx: CalculationUsageDeclarationContext) => void;
-    /**
      * Enter a parse tree produced by `SysMLv2Parser.emptyActionUsage_`.
      * @param ctx the parse tree
      */
@@ -4951,16 +4939,6 @@ export class SysMLv2ParserListener implements ParseTreeListener {
      * @param ctx the parse tree
      */
     exitEmptyUsage_?: (ctx: EmptyUsage_Context) => void;
-    /**
-     * Enter a parse tree produced by `SysMLv2Parser.filterPackageImport`.
-     * @param ctx the parse tree
-     */
-    enterFilterPackageImport?: (ctx: FilterPackageImportContext) => void;
-    /**
-     * Exit a parse tree produced by `SysMLv2Parser.filterPackageImport`.
-     * @param ctx the parse tree
-     */
-    exitFilterPackageImport?: (ctx: FilterPackageImportContext) => void;
     /**
      * Enter a parse tree produced by `SysMLv2Parser.nonFeatureChainPrimaryExpression`.
      * @param ctx the parse tree

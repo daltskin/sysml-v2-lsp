@@ -106,6 +106,10 @@ const STYLE_PALETTE: Record<string, { fill: string; stroke: string; color: strin
     ActionDef: { fill: '#e8eaf6', stroke: '#3F51B5', color: '#1A237E' },
     ActionUsage: { fill: '#e3f2fd', stroke: '#2196F3', color: '#0D47A1' },
     PerformActionUsage: { fill: '#e3f2fd', stroke: '#2196F3', color: '#0D47A1' },
+    ForkNode: { fill: '#37474F', stroke: '#263238', color: '#FFFFFF' },
+    JoinNode: { fill: '#37474F', stroke: '#263238', color: '#FFFFFF' },
+    MergeNode: { fill: '#fff3e0', stroke: '#FB8C00', color: '#E65100' },
+    DecisionNode: { fill: '#fff3e0', stroke: '#FB8C00', color: '#E65100' },
     StateDef: { fill: '#f3e5f5', stroke: '#9C27B0', color: '#4A148C' },
     StateUsage: { fill: '#fce4ec', stroke: '#E91E63', color: '#880E4F' },
     ExhibitStateUsage: { fill: '#fce4ec', stroke: '#E91E63', color: '#880E4F' },
@@ -204,7 +208,11 @@ export function inferDiagramType(symbols: SysMLSymbol[]): DiagramType {
 
     const actionCount = (kinds.get(SysMLElementKind.ActionDef) ?? 0)
         + (kinds.get(SysMLElementKind.ActionUsage) ?? 0)
-        + (kinds.get(SysMLElementKind.PerformActionUsage) ?? 0);
+        + (kinds.get(SysMLElementKind.PerformActionUsage) ?? 0)
+        + (kinds.get(SysMLElementKind.ForkNode) ?? 0)
+        + (kinds.get(SysMLElementKind.JoinNode) ?? 0)
+        + (kinds.get(SysMLElementKind.MergeNode) ?? 0)
+        + (kinds.get(SysMLElementKind.DecisionNode) ?? 0);
 
     const stateCount = (kinds.get(SysMLElementKind.StateDef) ?? 0)
         + (kinds.get(SysMLElementKind.StateUsage) ?? 0)
@@ -393,6 +401,50 @@ function generateGeneralView(symbols: SysMLSymbol[], symbolTable: Map<string, Sy
 // Activity → Mermaid flowchart
 // ---------------------------------------------------------------------------
 
+/** Control-node kinds that participate in an action flow (fork/join/merge/decide). */
+const CONTROL_NODE_KINDS: ReadonlySet<SysMLElementKind> = new Set([
+    SysMLElementKind.ForkNode,
+    SysMLElementKind.JoinNode,
+    SysMLElementKind.MergeNode,
+    SysMLElementKind.DecisionNode,
+]);
+
+/** Whether a symbol kind is an action step or a control node (both flow in the activity view). */
+function isActionLike(kind: SysMLElementKind): boolean {
+    return kind === SysMLElementKind.ActionUsage
+        || kind === SysMLElementKind.PerformActionUsage
+        || CONTROL_NODE_KINDS.has(kind);
+}
+
+/**
+ * Build the Mermaid node declaration for an action step or control node.
+ *
+ * Control nodes use SysML v2 graphical notation shapes:
+ *   - fork / join  → synchronization bar (rendered as a dark bar-style node)
+ *   - decide / merge → diamond (decision/merge notation)
+ * Ordinary actions render as a labelled rectangle.
+ */
+function actionNodeDecl(
+    id: string,
+    sym: SysMLSymbol,
+    indent: string,
+    typeSuffix = '',
+): { line: string; styleKind: string } {
+    const label = escapeLabel(sym.name);
+    switch (sym.kind) {
+        case SysMLElementKind.ForkNode:
+            return { line: `${indent}${id}["▬ fork ${label}"]`, styleKind: 'ForkNode' };
+        case SysMLElementKind.JoinNode:
+            return { line: `${indent}${id}["▬ join ${label}"]`, styleKind: 'JoinNode' };
+        case SysMLElementKind.DecisionNode:
+            return { line: `${indent}${id}{"decide ${label}"}`, styleKind: 'DecisionNode' };
+        case SysMLElementKind.MergeNode:
+            return { line: `${indent}${id}{"merge ${label}"}`, styleKind: 'MergeNode' };
+        default:
+            return { line: `${indent}${id}["▶ ${label}${typeSuffix}"]`, styleKind: 'ActionUsage' };
+    }
+}
+
 function generateActivityView(symbols: SysMLSymbol[], symbolTable: Map<string, SysMLSymbol>): MermaidResult {
     const lines: string[] = [
         '%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#e3f2fd", "lineColor": "#546E7A"}}}%%',
@@ -405,10 +457,7 @@ function generateActivityView(symbols: SysMLSymbol[], symbolTable: Map<string, S
     const actionDefs = symbols.filter(s =>
         s.kind === SysMLElementKind.ActionDef
     );
-    const actions = symbols.filter(s =>
-        s.kind === SysMLElementKind.ActionUsage
-        || s.kind === SysMLElementKind.PerformActionUsage
-    );
+    const actions = symbols.filter(s => isActionLike(s.kind));
 
     // Build parent→children index (sym.children is not populated by the parser)
     const childrenOf = buildChildrenIndex([...symbolTable.values()]);
@@ -420,17 +469,14 @@ function generateActivityView(symbols: SysMLSymbol[], symbolTable: Map<string, S
         elementCount++;
 
         const childActions = (childrenOf.get(def.qualifiedName) ?? [])
-            .filter(c =>
-                c.kind === SysMLElementKind.ActionUsage
-                || c.kind === SysMLElementKind.PerformActionUsage
-            );
+            .filter(c => isActionLike(c.kind));
 
         let prevId: string | undefined;
         for (const action of childActions) {
             const actionId = safeId(action.qualifiedName);
-            const label = escapeLabel(action.name);
-            lines.push(`        ${actionId}["▶ ${label}"]`);
-            nodeStyles.set(actionId, 'ActionUsage');
+            const { line, styleKind } = actionNodeDecl(actionId, action, '        ');
+            lines.push(line);
+            nodeStyles.set(actionId, styleKind);
             elementCount++;
 
             if (prevId) {
@@ -448,10 +494,10 @@ function generateActivityView(symbols: SysMLSymbol[], symbolTable: Map<string, S
             continue; // Already rendered inside a subgraph
         }
         const actionId = safeId(action.qualifiedName);
-        const label = escapeLabel(action.name);
         const typeStr = action.typeNames.length > 0 ? `\\n: ${action.typeNames[0]}` : '';
-        lines.push(`    ${actionId}["▶ ${label}${typeStr}"]`);
-        nodeStyles.set(actionId, 'ActionUsage');
+        const { line, styleKind } = actionNodeDecl(actionId, action, '    ', typeStr);
+        lines.push(line);
+        nodeStyles.set(actionId, styleKind);
         elementCount++;
     }
 
