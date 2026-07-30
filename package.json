@@ -126,7 +126,7 @@
     "antlr-ng": "^1.0.10",
     "esbuild": "^0.28.0",
     "eslint": "^9.39.0",
-    "typescript": "^6.0.2",
+    "typescript": "^7.0.2",
     "typescript-eslint": "^8.58.2",
     "vite": "^8.0.8",
     "vitest": "^4.0.0",
