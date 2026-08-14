@@ -1,4 +1,4 @@
-.PHONY: help install update-deps generate build watch test test-e2e lint package package-server test-package clean update-grammar dfa update-library web
+.PHONY: help install update-deps generate build watch test lint package package-server test-package clean update-grammar dfa update-library ci web
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -31,9 +31,6 @@ watch: ## Watch mode for development
 
 test: ## Run unit tests (vitest)
 	npm run test
-
-test-e2e: ## Run VS Code E2E tests
-	npm run test:e2e
 
 lint: ## Run ESLint
 	npm run lint

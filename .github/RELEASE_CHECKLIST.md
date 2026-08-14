@@ -45,6 +45,6 @@ Use this checklist when preparing a new release of **sysml-v2-lsp**.
 - [ ] Test MCP server end-to-end: `npx sysml-mcp` — verify tools, resources, and prompts
 - [ ] Publish to VS Code Marketplace (if not automated):
   ```bash
-  npx @vscode/vsce publish
+  npx --yes @vscode/vsce@3.9.2 publish
   ```
 - [ ] Announce the release (GitHub Discussions, README badge, etc.)

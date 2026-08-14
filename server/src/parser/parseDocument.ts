@@ -12,7 +12,7 @@ export interface ParseResult {
     tree: ParserRuleContext | null;
     /** The token stream (for position lookup and semantic tokens) */
     tokenStream: CommonTokenStream;
-    /** The parser instance (needed for antlr4-c3 completion) */
+    /** The parser instance, available to contextual completion providers. */
     parser: SysMLv2Parser;
     /** The lexer instance */
     lexer: SysMLv2Lexer;

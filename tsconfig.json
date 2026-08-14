@@ -13,7 +13,7 @@
     "sourceMap": true
   },
   "references": [
-    { "path": "./client" },
+    { "path": "./clients/vscode" },
     { "path": "./server" }
   ],
   "files": []
