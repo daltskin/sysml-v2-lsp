@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.25.0]
+
 ### Changed
 
 - Reduced development dependency exposure by running pinned `@vscode/vsce` on demand, relying on Vitest's Vite dependency, and removing the unused `antlr4-c3` package.
