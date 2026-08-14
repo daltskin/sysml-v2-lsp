@@ -814,6 +814,37 @@ describe('Formatting Provider', () => {
             }
         }
     });
+
+    it('should not over-indent lines after single-line elements with inline block comments', async () => {
+        const { FormattingProvider } = await import('../../server/src/providers/formattingProvider.js');
+        const text = [
+            'package interfaces {',
+            'item def HttpRequest { doc /* An HTTP request message. */ }',
+            'item def HttpResponse { doc /* An HTTP response message. */ }',
+            'part def Foo {',
+            'attribute x : Integer;',
+            '}',
+            '}',
+        ].join('\n');
+        const doc = await makeDoc(text);
+
+        const provider = new FormattingProvider(mockDocs([doc]));
+        const edits = provider.provideDocumentFormatting({
+            textDocument: { uri: doc.uri },
+            options: { tabSize: 4, insertSpaces: true },
+        });
+
+        expect(edits.length).toBe(1);
+        const lines = edits[0].newText.split('\n');
+        // Both single-line elements are siblings at one indent level.
+        expect(lines[1]).toBe('    item def HttpRequest { doc /* An HTTP request message. */ }');
+        expect(lines[2]).toBe('    item def HttpResponse { doc /* An HTTP response message. */ }');
+        // The following block must stay at the same sibling level, not drift deeper.
+        expect(lines[3]).toBe('    part def Foo {');
+        expect(lines[4]).toBe('        attribute x : Integer;');
+        expect(lines[5]).toBe('    }');
+        expect(lines[6]).toBe('}');
+    });
 });
 
 // ===================================================================

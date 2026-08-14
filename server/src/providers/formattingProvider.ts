@@ -226,9 +226,13 @@ export class FormattingProvider {
             } else if (c === '"' || c === "'") {
                 inString = true;
                 stringChar = c;
-            } else if (c === '/' && i + 1 < line.length) {
-                if (line[i + 1] === '/') break; // line comment
-                if (line[i + 1] === '*') break; // block comment start
+            } else if (c === '/' && i + 1 < line.length && line[i + 1] === '/') {
+                break; // line comment — ignore rest of line
+            } else if (c === '/' && i + 1 < line.length && line[i + 1] === '*') {
+                // Block comment: skip inline /* ... */ so braces after it are still counted.
+                const end = line.indexOf('*/', i + 2);
+                if (end === -1) break; // unterminated on this line — rest is comment
+                i = end + 1; // resume scanning after the closing */
             } else if (c === char) {
                 count++;
             }
