@@ -12,7 +12,7 @@
         "${workspaceFolder}/examples"
       ],
       "outFiles": [
-        "${workspaceFolder}/client/out/**/*.js"
+        "${workspaceFolder}/clients/vscode/out/**/*.js"
       ],
       "preLaunchTask": "npm: compile"
     },

@@ -49,6 +49,13 @@ npm run watch        # recompiles on file changes
 ```
 
 Use the **"Client + Server"** compound debug configuration to debug both sides simultaneously.
+The TypeScript project and build scripts use `clients/vscode/` as the canonical extension source directory.
+
+Release packaging downloads the pinned VS Code packaging CLI on demand, keeping its dependency tree out of normal development and CI installs:
+
+```bash
+npm run package
+```
 
 ## Client Examples
 

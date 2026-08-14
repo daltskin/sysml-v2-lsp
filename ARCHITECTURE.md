@@ -2,7 +2,7 @@
 
 ## Overview
 
-A Language Server Protocol implementation for SysML v2, structured as a client/server monorepo. The server runs in a separate Node.js process, communicating with the VS Code extension (client) via IPC.
+A Language Server Protocol implementation for SysML v2, structured as a client/server monorepo. The server runs in a separate Node.js process, communicating with the VS Code extension in `clients/vscode/` via IPC.
 
 ## Data Flow
 

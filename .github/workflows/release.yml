@@ -46,7 +46,7 @@ jobs:
         run: npm publish --access public
 
       - name: Package VSIX
-        run: npx @vscode/vsce package --no-dependencies
+        run: npx --yes @vscode/vsce@3.9.2 package --no-dependencies
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v3

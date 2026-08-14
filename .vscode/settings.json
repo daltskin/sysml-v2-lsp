@@ -2,7 +2,7 @@
   "typescript.tsdk": "node_modules/typescript/lib",
   "editor.formatOnSave": true,
   "files.exclude": {
-    "client/out": true,
+    "clients/vscode/out": true,
     "server/out": true,
     "node_modules": true
   }

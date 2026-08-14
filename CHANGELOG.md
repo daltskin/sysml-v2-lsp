@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Changed
+
+- Reduced development dependency exposure by running pinned `@vscode/vsce` on demand, relying on Vitest's Vite dependency, and removing the unused `antlr4-c3` package.
+- Standardized build, debug, lint, and test configuration on the canonical VS Code client under `clients/vscode/`.
+- Removed the stale `test:e2e` npm script and Make target, which referenced an untracked test runner that does not exist.
+- Refreshed npm lockfiles with compatible security fixes; root, server, and VS Code client audits are clean.
+
 ## [0.24.0]
 
 ### Added
