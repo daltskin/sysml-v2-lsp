@@ -81,6 +81,10 @@ export function formatSymbol(sym: SysMLSymbol): Record<string, unknown> {
         ...(typingOnly.length > 0 ? { type: typingOnly.join(', ') } : {}),
         ...(sym.specializationNames.length > 0 ? { specializes: sym.specializationNames.join(', ') } : {}),
         ...(sym.documentation ? { documentation: sym.documentation } : {}),
+        ...(sym.source ? { source: sym.source } : {}),
+        ...(sym.target ? { target: sym.target } : {}),
+        ...(sym.transitionTrigger ? { trigger: sym.transitionTrigger } : {}),
+        ...(sym.controlFlows && sym.controlFlows.length > 0 ? { controlFlows: sym.controlFlows } : {}),
         ...(sym.parentQualifiedName ? { parent: sym.parentQualifiedName } : {}),
         ...(sym.children.length > 0 ? { children: sym.children } : {}),
         location: {

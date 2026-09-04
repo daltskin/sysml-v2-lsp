@@ -2,6 +2,21 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- **Anonymous binary connections no longer overwrite their source part usage** ([daltskin/VSCode_SysML_Extension#80](https://github.com/daltskin/VSCode_SysML_Extension/issues/80)) — shorthand connections such as `connect a.outP to b.inP;` now remain anonymous instead of being assigned the source endpoint name. This preserves the source usage's type reference and prevents false-positive `unused-definition` diagnostics, while explicitly named connection usages retain their declared names.
+- **Visibility is now derived from the parsed membership prefix** ([daltskin/VSCode_SysML_Extension#82](https://github.com/daltskin/VSCode_SysML_Extension/issues/82)) — words such as `protected`, `private`, or `public` inside documentation and element bodies no longer assign a false visibility modifier. Explicit visibility declarations remain available to model consumers.
+- **Documentation extraction now respects element ownership and KerML comment processing** ([daltskin/VSCode_SysML_Extension#83](https://github.com/daltskin/VSCode_SysML_Extension/issues/83)) — documentation on a nested member no longer leaks to its package or another ancestor, and multiline block-comment indentation, `*` gutters, and the following single space are removed according to KerML 8.2.3.3.2. Named documentation declarations are also extracted correctly.
+- **State transitions now retain their parsed source, target, and accepter** ([daltskin/VSCode_SysML_Extension#84](https://github.com/daltskin/VSCode_SysML_Extension/issues/84)) — anonymous transitions receive collision-free synthetic names instead of overwriting their source state, `getSymbols` exposes endpoint metadata, `sysml/model` emits transition relationships, and MCP state previews render nested states with their transition edges.
+- **Activity diagrams now follow declared successions instead of declaration order** ([daltskin/VSCode_SysML_Extension#85](https://github.com/daltskin/VSCode_SysML_Extension/issues/85)) — action symbols retain grammar-derived `first`/`then` control-flow edges, including branches and explicit `start`/`done` links. MCP activity previews render those edges and no longer fabricate a linear chain between adjacent declarations; activity DTO extraction retains compatibility with shorthand succession forms.
+- **Resolved feature kinds now use canonical metaclass names** ([daltskin/VSCode_SysML_Extension#86](https://github.com/daltskin/VSCode_SysML_Extension/issues/86)) — `resolvedTypes` distinguishes parts, ports, attributes, references, actions, performed actions, states, exhibited states, and other usage kinds instead of collapsing most features to `reference`. Feature payloads now also retain available multiplicity, direction, visibility, derived, and readonly metadata.
+- **Dependency security updates** — refreshed the root lockfile to use `fast-uri` 3.1.7, `qs` 6.16.0, and `side-channel` 1.1.1, resolving all known npm audit findings. The root, server, and VS Code client dependency trees now report zero vulnerabilities.
+
+### Changed
+
+- **MCP tools now return native `structuredContent` payloads** ([daltskin/VSCode_SysML_Extension#81](https://github.com/daltskin/VSCode_SysML_Extension/issues/81)) — every tool result also retains an equivalent serialized JSON text block for compatibility with older MCP clients.
+- **Copilot-specific MCP instructions are now opt-in** — standalone stdio clients receive host-neutral initialization, tool descriptions, and preview responses by default. Setting `SYSML_MCP_COPILOT_MODE=1` retains the `renderMermaidDiagram` workflow required by the bundled VS Code integration.
+
 ## [0.25.0]
 
 ### Changed

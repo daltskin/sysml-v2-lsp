@@ -416,6 +416,29 @@ package B {
             const unused = diags.filter(d => d.code === 'unused-definition');
             expect(unused.length).toBe(0);
         });
+
+        it('should count part usages used as connect sources and targets', async () => {
+            const text = `
+package Demo {
+    port def Signal;
+    part def Source {
+        port outP : Signal;
+    }
+    part def Sink {
+        port inP : Signal;
+    }
+    part assembly {
+        part a : Source;
+        part b : Sink;
+        connect a.outP to b.inP;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unused = diags.filter(d => d.code === 'unused-definition');
+
+            expect(unused).toHaveLength(0);
+        });
     });
 
     describe('circular containment', () => {

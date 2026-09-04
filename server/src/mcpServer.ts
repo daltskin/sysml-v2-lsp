@@ -33,29 +33,24 @@ import {
     handleResourceKeywords,
     handleValidate,
 } from './mcpCore.js';
+import {
+    buildStructuredToolResponse,
+    COPILOT_PREVIEW_INSTRUCTION,
+    COPILOT_SERVER_INSTRUCTIONS,
+    isCopilotMode,
+} from './mcpToolResponse.js';
 
 // ---------------------------------------------------------------------------
 // Server setup
 // ---------------------------------------------------------------------------
 
+const copilotMode = isCopilotMode();
+
 const server = new McpServer(
-    { name: 'sysml-v2', version: '0.1.4' },
+    { name: 'sysml-v2', version: '0.1.5' },
     {
         capabilities: { logging: {} },
-        instructions:
-            'SysML v2 Model Context server. CRITICAL RULES:\n' +
-            '1. Call EXACTLY the tool(s) the user asked for — nothing more. Never add extra tool calls.\n' +
-            '2. "preview" means ONLY the preview tool. NEVER call getComplexity alongside preview.\n' +
-            '3. getComplexity may ONLY be called when the user literally asks for "complexity" or "metrics".\n' +
-            '4. AFTER calling the preview tool, you MUST IMMEDIATELY call the "renderMermaidDiagram" tool.\n' +
-            '   Pass the "mermaidMarkup" field from the preview response as the "markup" parameter.\n' +
-            '   Pass the "title" field as the "title" parameter.\n' +
-            '   Do NOT paste mermaid markup as text — it will not render visually.\n' +
-            '   The renderMermaidDiagram tool is the ONLY way to display diagrams to the user.\n' +
-            '5. After rendering the diagram, reply with ONLY a brief one-sentence summary.\n' +
-            '   NEVER show raw JSON, mermaid markup, element counts, participant counts, or semantic notes.\n' +
-            '6. If the user asks "visualise/visualize this file" (or similar), use preview/visualise/visualize/visualiseFile/visualizeFile.\n' +
-            '   Do NOT use getDefinition or getComplexity for these requests.',
+        ...(copilotMode ? { instructions: COPILOT_SERVER_INSTRUCTIONS } : {}),
     },
 );
 
@@ -78,9 +73,7 @@ server.registerTool(
             uri: z.string().optional().describe('A URI/name to identify this document (defaults to "untitled.sysml")'),
         },
     },
-    async ({ code, uri }) => ({
-        content: [{ type: 'text' as const, text: JSON.stringify(handleParse(ctx, code, uri), null, 2) }],
-    }),
+    async ({ code, uri }) => buildStructuredToolResponse(handleParse(ctx, code, uri)),
 );
 
 server.registerTool(
@@ -96,9 +89,7 @@ server.registerTool(
             uri: z.string().optional().describe('A URI/name to identify this document'),
         },
     },
-    async ({ code, uri }) => ({
-        content: [{ type: 'text' as const, text: JSON.stringify(handleValidate(ctx, code, uri), null, 2) }],
-    }),
+    async ({ code, uri }) => buildStructuredToolResponse(handleValidate(ctx, code, uri)),
 );
 
 server.registerTool(
@@ -118,9 +109,7 @@ server.registerTool(
             code: z.string().optional().describe('SysML source code to parse before running diagnostics'),
         },
     },
-    async ({ uri, code }) => ({
-        content: [{ type: 'text' as const, text: JSON.stringify(handleGetDiagnostics(ctx, uri, code), null, 2) }],
-    }),
+    async ({ uri, code }) => buildStructuredToolResponse(handleGetDiagnostics(ctx, uri, code)),
 );
 
 // Natural-language alias to improve tool resolution for prompts like
@@ -138,9 +127,7 @@ server.registerTool(
             code: z.string().optional().describe('SysML source code to parse before running diagnostics'),
         },
     },
-    async ({ uri, code }) => ({
-        content: [{ type: 'text' as const, text: JSON.stringify(handleGetDiagnostics(ctx, uri, code), null, 2) }],
-    }),
+    async ({ uri, code }) => buildStructuredToolResponse(handleGetDiagnostics(ctx, uri, code)),
 );
 
 // Natural-language alias to improve tool resolution for prompts like
@@ -157,9 +144,7 @@ server.registerTool(
             uri: z.string().optional().describe('A URI/name to identify this document'),
         },
     },
-    async ({ code, uri }) => ({
-        content: [{ type: 'text' as const, text: JSON.stringify(handleValidate(ctx, code, uri), null, 2) }],
-    }),
+    async ({ code, uri }) => buildStructuredToolResponse(handleValidate(ctx, code, uri)),
 );
 
 server.registerTool(
@@ -178,9 +163,7 @@ server.registerTool(
             code: z.string().optional().describe('SysML source code to parse before listing symbols'),
         },
     },
-    async (args) => ({
-        content: [{ type: 'text' as const, text: JSON.stringify(handleGetSymbols(ctx, args), null, 2) }],
-    }),
+    async (args) => buildStructuredToolResponse(handleGetSymbols(ctx, args)),
 );
 
 server.registerTool(
@@ -198,9 +181,7 @@ server.registerTool(
             uri: z.string().optional().describe('Document URI for the provided code (defaults to "untitled.sysml")'),
         },
     },
-    async ({ name, code, uri }) => ({
-        content: [{ type: 'text' as const, text: JSON.stringify(handleGetDefinition(ctx, name, code, uri), null, 2) }],
-    }),
+    async ({ name, code, uri }) => buildStructuredToolResponse(handleGetDefinition(ctx, name, code, uri)),
 );
 
 server.registerTool(
@@ -217,9 +198,7 @@ server.registerTool(
             uri: z.string().optional().describe('Document URI for the provided code (defaults to "untitled.sysml")'),
         },
     },
-    async ({ name, code, uri }) => ({
-        content: [{ type: 'text' as const, text: JSON.stringify(handleGetReferences(ctx, name, code, uri), null, 2) }],
-    }),
+    async ({ name, code, uri }) => buildStructuredToolResponse(handleGetReferences(ctx, name, code, uri)),
 );
 
 server.registerTool(
@@ -236,9 +215,7 @@ server.registerTool(
             uri: z.string().optional().describe('Document URI for the provided code (defaults to "untitled.sysml")'),
         },
     },
-    async ({ name, code, uri }) => ({
-        content: [{ type: 'text' as const, text: JSON.stringify(handleGetHierarchy(ctx, name, code, uri), null, 2) }],
-    }),
+    async ({ name, code, uri }) => buildStructuredToolResponse(handleGetHierarchy(ctx, name, code, uri)),
 );
 
 server.registerTool(
@@ -254,9 +231,7 @@ server.registerTool(
             uri: z.string().optional().describe('Document URI for the provided code (defaults to "untitled.sysml")'),
         },
     },
-    async ({ code, uri }) => ({
-        content: [{ type: 'text' as const, text: JSON.stringify(handleGetModelSummary(ctx, code, uri), null, 2) }],
-    }),
+    async ({ code, uri }) => buildStructuredToolResponse(handleGetModelSummary(ctx, code, uri)),
 );
 
 server.registerTool(
@@ -283,9 +258,7 @@ server.registerTool(
             code: z.string().optional().describe('SysML source code to parse before analysing complexity'),
         },
     },
-    async ({ uri, code }) => ({
-        content: [{ type: 'text' as const, text: JSON.stringify(handleGetComplexity(ctx, uri, code), null, 2) }],
-    }),
+    async ({ uri, code }) => buildStructuredToolResponse(handleGetComplexity(ctx, uri, code)),
 );
 
 const previewInputSchema = {
@@ -334,15 +307,9 @@ function buildPreviewToolResponse(args: {
     }
 
     if (!resolvedCode) {
-        return {
-            content: [
-                {
-                    type: 'text' as const,
-                    text:
-                        'No SysML source is available to visualise. Provide `code`, or provide a `uri` that has been parsed in this MCP session.',
-                },
-            ],
-        };
+        return buildStructuredToolResponse({
+            error: 'No SysML source is available to visualise. Provide `code`, or provide a `uri` that has been parsed in this MCP session.',
+        });
     }
 
     const result = handlePreview(ctx, {
@@ -373,27 +340,10 @@ function buildPreviewToolResponse(args: {
         renderData.syntaxErrors = result.errors;
     }
 
-    // Return TWO content blocks:
-    // 1. Strict behavioural instructions for the model
-    // 2. Minimal data needed for renderMermaidDiagram
-    return {
-        content: [
-            {
-                type: 'text' as const,
-                text: 'ACTION REQUIRED: You MUST now call the "renderMermaidDiagram" tool to display this diagram.\n' +
-                    'Pass the "mermaidMarkup" field from the data below as the "markup" parameter and the "title" field as the "title" parameter.\n\n' +
-                    'AFTER the diagram renders, respond with ONLY a single brief sentence such as ' +
-                    '"Here is your <diagramType> diagram." and nothing else.\n' +
-                    'Do NOT show or describe: mermaid markup, JSON data, element counts, participant counts, ' +
-                    'interaction counts, semantic notes, or any raw tool output.\n' +
-                    'If there are syntaxErrors in the data, mention them briefly. Otherwise output NOTHING extra.',
-            },
-            {
-                type: 'text' as const,
-                text: JSON.stringify(renderData, null, 2),
-            },
-        ],
-    };
+    return buildStructuredToolResponse(
+        renderData,
+        copilotMode ? COPILOT_PREVIEW_INSTRUCTION : undefined,
+    );
 }
 
 server.registerTool(
@@ -406,11 +356,13 @@ server.registerTool(
             '"show me the diagram", or "preview this model". ' +
             'Supports General, Activity, State, Sequence, Use Case, and Interconnection views — ' +
             'the best type is auto-detected from the code, or you can specify one. ' +
-            'Optionally provide original code to see a diff of what changed.\n\n' +
-            'RENDERING: The response includes a `mermaidMarkup` field containing valid Mermaid syntax. ' +
-            'After receiving the response, you MUST call the `renderMermaidDiagram` tool, passing ' +
-            'the mermaidMarkup value as the `markup` parameter and the title as the `title` parameter. ' +
-            'This is the ONLY way to show the diagram visually to the user.',
+            'Optionally provide original code to see a diff of what changed.' +
+            (copilotMode
+                ? '\n\nRENDERING: The response includes a `mermaidMarkup` field containing valid Mermaid syntax. ' +
+                    'After receiving the response, you MUST call the `renderMermaidDiagram` tool, passing ' +
+                    'the mermaidMarkup value as the `markup` parameter and the title as the `title` parameter. ' +
+                    'This is the ONLY way to show the diagram visually to the user.'
+                : ' Returns Mermaid markup in the structured response for the client to render or process.'),
         inputSchema: previewInputSchema,
     },
     async ({ code, originalCode, diagramType, focus, uri }) => buildPreviewToolResponse({ code, originalCode, diagramType, focus, uri }),

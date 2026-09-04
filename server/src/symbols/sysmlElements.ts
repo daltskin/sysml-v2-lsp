@@ -88,6 +88,16 @@ export interface SysMLSymbol {
     specializationNames: string[];
     /** Documentation string if available */
     documentation?: string;
+    /** Visibility declared on the owning membership; omitted for default public visibility. */
+    visibility?: 'public' | 'private' | 'protected';
+    /** Source reference for a transition usage. */
+    source?: string;
+    /** Target reference for a transition usage. */
+    target?: string;
+    /** Accepter text used to trigger a transition usage. */
+    transitionTrigger?: string;
+    /** Explicit succession edges owned by an action definition or usage. */
+    controlFlows?: { source: string; target: string; guard?: string }[];
     /** Parent symbol's qualified name */
     parentQualifiedName?: string;
     /** Child symbol qualified names */
