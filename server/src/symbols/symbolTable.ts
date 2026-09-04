@@ -685,8 +685,21 @@ export class SymbolTable {
             return undefined;
         }
 
-        // Extract the name from the context
-        const name = this.extractName(ctx);
+        const range = contextToRange(ctx);
+        const transition = kind === SysMLElementKind.TransitionUsage
+            ? this.extractTransitionDetails(ctx)
+            : undefined;
+
+        // Anonymous transitions still need symbols so their endpoints can be
+        // exposed to diagram consumers. Give them a readable, location-based
+        // synthetic name rather than incorrectly using the source state name.
+        const name = transition
+            ? transition.declaredName ?? (
+                transition.source && transition.target
+                    ? `<transition ${transition.source} to ${transition.target}>#${range.start.line + 1}`
+                    : undefined
+            )
+            : this.extractName(ctx);
         if (!name) {
             return undefined;
         }
@@ -695,13 +708,15 @@ export class SymbolTable {
             ? `${parentQualifiedName}::${name}`
             : name;
 
-        const range = contextToRange(ctx);
-        const selectionRange = this.extractNameRange(ctx) ?? range;
+        const selectionRange = transition && !transition.declaredName
+            ? range
+            : this.extractNameRange(ctx) ?? range;
         // Extract type names for both usages (typing) and definitions (specialization)
         const typeNames = this.extractTypeNames(ctx);
         const specializationNames = this.extractSpecializationNames(ctx);
         const typeName = typeNames[0];
         const documentation = this.extractDocumentation(ctx);
+        const visibility = this.extractVisibility(ctx);
         // Only extract multiplicity for usages
         const { multiplicity, multiplicityRange } = isUsageKind(kind) ? this.extractMultiplicity(ctx) : {};
         // Extract prefix metadata annotations (#name)
@@ -709,9 +724,11 @@ export class SymbolTable {
         // Extract expose targets, filters, and rendering for view usages/definitions
         const isView = kind === SysMLElementKind.ViewUsage || kind === SysMLElementKind.ViewDef;
         const isPackage = kind === SysMLElementKind.Package;
+        const isAction = kind === SysMLElementKind.ActionDef || kind === SysMLElementKind.ActionUsage;
         const exposeTargets = isView ? this.extractExposeTargets(ctx) : undefined;
         const viewFilters = (isView || isPackage) ? this.extractViewFilters(ctx) : undefined;
         const viewRendering = isView ? this.extractViewRendering(ctx) : undefined;
+        const controlFlows = isAction ? this.extractControlFlows(ctx) : undefined;
 
         return {
             name,
@@ -724,6 +741,11 @@ export class SymbolTable {
             typeNames,
             specializationNames,
             documentation,
+            visibility,
+            source: transition?.source,
+            target: transition?.target,
+            transitionTrigger: transition?.trigger,
+            controlFlows: controlFlows && controlFlows.length > 0 ? controlFlows : undefined,
             parentQualifiedName: parentQualifiedName || undefined,
             children: [],
             multiplicity,
@@ -746,11 +768,168 @@ export class SymbolTable {
         return RULE_INDEX_TO_KIND.get(ctx.ruleIndex);
     }
 
+    /** Extract a transition's declaration name, source, target, and accepter. */
+    private extractTransitionDetails(ctx: ParserRuleContext): {
+        declaredName?: string;
+        source?: string;
+        target?: string;
+        trigger?: string;
+    } {
+        let declaredName: string | undefined;
+        let source: string | undefined;
+        let target: string | undefined;
+        let trigger: string | undefined;
+
+        for (let i = 0; i < ctx.getChildCount(); i++) {
+            const child = ctx.getChild(i);
+            if (!(child instanceof ParserRuleContext)) continue;
+
+            if (child.ruleIndex === SysMLv2Parser.RULE_usageDeclaration) {
+                declaredName = this.findRuleText(
+                    child,
+                    SysMLv2Parser.RULE_identification,
+                );
+            } else if (child.ruleIndex === SysMLv2Parser.RULE_featureChainMember) {
+                source = this.cleanTransitionText(child.getText());
+            } else if (child.ruleIndex === SysMLv2Parser.RULE_transitionSuccessionMember) {
+                target = this.findRuleText(
+                    child,
+                    SysMLv2Parser.RULE_ownedReferenceSubsetting,
+                );
+            } else if (child.ruleIndex === SysMLv2Parser.RULE_triggerActionMember) {
+                trigger = this.findRuleText(
+                    child,
+                    SysMLv2Parser.RULE_payloadParameterMember,
+                );
+            }
+        }
+
+        return { declaredName, source, target, trigger };
+    }
+
+    /** Find and clean the text of the first descendant with a given rule. */
+    private findRuleText(ctx: ParserRuleContext, ruleIndex: number): string | undefined {
+        if (ctx.ruleIndex === ruleIndex) {
+            return this.cleanTransitionText(ctx.getText());
+        }
+        for (let i = 0; i < ctx.getChildCount(); i++) {
+            const child = ctx.getChild(i);
+            if (child instanceof ParserRuleContext) {
+                const text = this.findRuleText(child, ruleIndex);
+                if (text) return text;
+            }
+        }
+        return undefined;
+    }
+
+    /** Remove SysML quoting while retaining qualified and dotted references. */
+    private cleanTransitionText(text: string): string | undefined {
+        const cleaned = text.replace(/'([^']+)'/g, '$1').trim();
+        return cleaned || undefined;
+    }
+
+    /** Extract explicit first/then successions owned by an action body. */
+    private extractControlFlows(
+        ctx: ParserRuleContext,
+    ): { source: string; target: string; guard?: string }[] {
+        const flows: { source: string; target: string; guard?: string }[] = [];
+        const seen = new Set<string>();
+
+        const addFlow = (source?: string, target?: string, guard?: string): void => {
+            if (!source || !target || source === target) return;
+            const key = `${source}->${target}:${guard ?? ''}`;
+            if (seen.has(key)) return;
+            seen.add(key);
+            flows.push({ source, target, ...(guard ? { guard } : {}) });
+        };
+
+        const visit = (node: ParserRuleContext, isRoot = false): void => {
+            // A nested action owns its own successions.
+            if (!isRoot && (
+                node.ruleIndex === SysMLv2Parser.RULE_actionDefinition ||
+                node.ruleIndex === SysMLv2Parser.RULE_actionUsage
+            )) return;
+
+            if (node.ruleIndex === SysMLv2Parser.RULE_successionAsUsage) {
+                const endpoints: string[] = [];
+                this.collectRuleTexts(
+                    node,
+                    SysMLv2Parser.RULE_ownedReferenceSubsetting,
+                    endpoints,
+                );
+                addFlow(endpoints[0], endpoints[1]);
+                return;
+            }
+
+            if (node.ruleIndex === SysMLv2Parser.RULE_guardedSuccession) {
+                const source = this.findRuleText(node, SysMLv2Parser.RULE_featureChainMember);
+                const target = this.findRuleText(
+                    node,
+                    SysMLv2Parser.RULE_ownedReferenceSubsetting,
+                );
+                const guard = this.findRuleText(node, SysMLv2Parser.RULE_guardExpressionMember);
+                addFlow(source, target, guard?.replace(/^if/, ''));
+                return;
+            }
+
+            for (let i = 0; i < node.getChildCount(); i++) {
+                const child = node.getChild(i);
+                if (child instanceof ParserRuleContext) visit(child);
+            }
+        };
+
+        visit(ctx, true);
+        return flows;
+    }
+
+    /** Collect cleaned text from every descendant matching a grammar rule. */
+    private collectRuleTexts(
+        ctx: ParserRuleContext,
+        ruleIndex: number,
+        result: string[],
+    ): void {
+        if (ctx.ruleIndex === ruleIndex) {
+            const text = this.cleanTransitionText(ctx.getText());
+            if (text) result.push(text);
+            return;
+        }
+        for (let i = 0; i < ctx.getChildCount(); i++) {
+            const child = ctx.getChild(i);
+            if (child instanceof ParserRuleContext) {
+                this.collectRuleTexts(child, ruleIndex, result);
+            }
+        }
+    }
+
     /**
      * Extract the declared name from a parse tree context.
      * Looks for an IDENT token or a name/identification sub-rule.
      */
     private extractName(ctx: ParserRuleContext): string | undefined {
+        // A connection usage may omit its declaration entirely:
+        // `connect source.port to target.port;`. In that form, the first
+        // identifier below the context belongs to the source endpoint, not to
+        // the connection. Only an explicit usage declaration can name it.
+        if (ctx.ruleIndex === SysMLv2Parser.RULE_connectionUsage) {
+            for (let i = 0; i < ctx.getChildCount(); i++) {
+                const child = ctx.getChild(i);
+                if (!(child instanceof ParserRuleContext) ||
+                    child.ruleIndex !== SysMLv2Parser.RULE_usageDeclaration) {
+                    continue;
+                }
+
+                for (let j = 0; j < child.getChildCount(); j++) {
+                    const declarationChild = child.getChild(j);
+                    if (declarationChild instanceof ParserRuleContext &&
+                        declarationChild.ruleIndex === SysMLv2Parser.RULE_identification) {
+                        return this.extractTextFromSubtree(declarationChild);
+                    }
+                }
+                return undefined;
+            }
+            return undefined;
+        }
+
         // Walk children looking for a name-producing rule or IDENT token
         for (let i = 0; i < ctx.getChildCount(); i++) {
             const child = ctx.getChild(i);
@@ -783,6 +962,40 @@ export class SymbolTable {
                 const name = this.extractName(child);
                 if (name) return name;
             }
+        }
+
+        return undefined;
+    }
+
+    /**
+     * Extract visibility from the nearest owning membership's MemberPrefix.
+     * Visibility is a property of the membership surrounding an element, not
+     * a word that may occur anywhere in the element body or documentation.
+     */
+    private extractVisibility(
+        ctx: ParserRuleContext,
+    ): 'public' | 'private' | 'protected' | undefined {
+        let current: ParserRuleContext | undefined = ctx;
+
+        while (current instanceof ParserRuleContext) {
+            for (let i = 0; i < current.getChildCount(); i++) {
+                const child = current.getChild(i);
+                if (!(child instanceof ParserRuleContext) ||
+                    child.ruleIndex !== SysMLv2Parser.RULE_memberPrefix) {
+                    continue;
+                }
+
+                const visibility = child.getText();
+                if (visibility === 'public' ||
+                    visibility === 'private' ||
+                    visibility === 'protected') {
+                    return visibility;
+                }
+                return undefined;
+            }
+            current = current.parent instanceof ParserRuleContext
+                ? current.parent
+                : undefined;
         }
 
         return undefined;
@@ -982,32 +1195,56 @@ export class SymbolTable {
     }
 
     /**
-     * Extract documentation from a comment or doc child.
+     * Extract documentation owned by this element.
+     *
+     * Descend through structural wrappers, but stop at nested SysML elements
+     * so their documentation cannot be attributed to an ancestor.
      */
     private extractDocumentation(ctx: ParserRuleContext): string | undefined {
         for (let i = 0; i < ctx.getChildCount(); i++) {
             const child = ctx.getChild(i);
             if (child instanceof ParserRuleContext) {
                 if (DOC_RULE_INDICES.has(child.ruleIndex)) {
-                    // Get the raw text and strip the comment delimiters
                     const raw = child.getText();
-                    if (raw) {
-                        // Remove leading 'doc' keyword, then strip /* */ or //
-                        let text = raw;
-                        if (text.startsWith('doc')) text = text.slice(3);
-                        if (text.startsWith('comment')) text = text.slice(7);
-                        text = text.replace(/^\/\*\s*/, '').replace(/\s*\*\/$/, '');
-                        text = text.replace(/^\/\/\s*/, '');
-                        return text.trim() || raw;
-                    }
-                    return raw ?? undefined;
+                    return raw ? this.cleanDocumentationText(raw) : undefined;
                 }
-                // Recurse into body/members to find nested doc
+
+                // A mapped child starts a contained element with independent
+                // documentation ownership. Do not cross that boundary.
+                if (RULE_INDEX_TO_KIND.has(child.ruleIndex)) continue;
+
                 const nested = this.extractDocumentation(child);
                 if (nested) return nested;
             }
         }
         return undefined;
+    }
+
+    /** Apply the REGULAR_COMMENT processing rules from KerML 8.2.3.3.2. */
+    private cleanDocumentationText(raw: string): string {
+        const commentStart = raw.indexOf('/*');
+        const commentEnd = raw.lastIndexOf('*/');
+        if (commentStart < 0 || commentEnd < commentStart + 2) {
+            return raw.replace(/^(?:doc|comment)\s*/, '').replace(/^\/\/\s?/, '').trim();
+        }
+
+        const body = raw.substring(commentStart + 2, commentEnd);
+        const lines = body.split(/\r?\n/);
+
+        // Strip whitespace immediately following the opening delimiter.
+        if (lines.length > 0) {
+            lines[0] = lines[0].replace(/^\s+/, '');
+        }
+
+        // On each subsequent line: strip indentation, then one optional '*',
+        // then one optional space, exactly as prescribed by the specification.
+        for (let i = 1; i < lines.length; i++) {
+            lines[i] = lines[i].replace(/^[^\S\r\n]*/, '');
+            if (lines[i].startsWith('*')) lines[i] = lines[i].slice(1);
+            if (lines[i].startsWith(' ')) lines[i] = lines[i].slice(1);
+        }
+
+        return lines.join('\n').trim();
     }
 
     /**

@@ -98,6 +98,148 @@ package ConnTest {
         expect(iface[0].typeName).toBe('BrakeCable');
     });
 
+    it('should not overwrite a part usage with an anonymous connection source', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    part def Source;
+    part def Sink;
+    part assembly {
+        part a : Source;
+        part b : Sink;
+        connect a.outP to b.inP;
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        const source = st.findByName('a');
+        expect(source).toHaveLength(1);
+        expect(source[0].kind).toBe('part');
+        expect(source[0].typeNames).toContain('Source');
+    });
+
+    it('should preserve names declared explicitly on connection usages', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    part a;
+    part b;
+    connection link connect a to b;
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        const connection = st.findByName('link');
+        expect(connection).toHaveLength(1);
+        expect(connection[0].kind).toBe('connection');
+    });
+
+    it('should extract transition endpoints without colliding with the source state', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    state def Machine {
+        state a;
+        state b;
+        transition first a then b;
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        const sourceState = st.getSymbol('Demo::Machine::a');
+        expect(sourceState?.kind).toBe('state');
+
+        const transition = st.getAllSymbols().find(s => s.kind === 'transition');
+        expect(transition).toMatchObject({
+            source: 'a',
+            target: 'b',
+            parentQualifiedName: 'Demo::Machine',
+        });
+        expect(transition?.name).not.toBe('a');
+        expect(transition?.qualifiedName).not.toBe(sourceState?.qualifiedName);
+    });
+
+    it('should preserve a named transition and extract its accepter', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    state def Machine {
+        state a;
+        state b;
+        transition aToB first a accept Tick then b;
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        expect(st.findByName('aToB')[0]).toMatchObject({
+            kind: 'transition',
+            source: 'a',
+            target: 'b',
+            transitionTrigger: 'Tick',
+        });
+    });
+
+    it('should extract explicit branching successions on their owning action', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    action def RoutePower {
+        action senseFlows;
+        action serveLoadDirect;
+        action routeSurplus;
+        action coverDeficit;
+        first start then senseFlows;
+        first senseFlows then serveLoadDirect;
+        first serveLoadDirect then routeSurplus;
+        first serveLoadDirect then coverDeficit;
+        first routeSurplus then done;
+        first coverDeficit then done;
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        expect(st.findByName('RoutePower')[0].controlFlows).toEqual([
+            { source: 'start', target: 'senseFlows' },
+            { source: 'senseFlows', target: 'serveLoadDirect' },
+            { source: 'serveLoadDirect', target: 'routeSurplus' },
+            { source: 'serveLoadDirect', target: 'coverDeficit' },
+            { source: 'routeSurplus', target: 'done' },
+            { source: 'coverDeficit', target: 'done' },
+        ]);
+    });
+
+    it('should extract visibility from the owning membership prefix', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    private part def Hidden;
+    protected port def Inherited;
+    public part visible;
+    part defaultVisible;
+    private alias HiddenAlias for Hidden;
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        expect(st.findByName('Hidden')[0].visibility).toBe('private');
+        expect(st.findByName('Inherited')[0].visibility).toBe('protected');
+        expect(st.findByName('visible')[0].visibility).toBe('public');
+        expect(st.findByName('defaultVisible')[0].visibility).toBeUndefined();
+        expect(st.findByName('HiddenAlias')[0].visibility).toBe('private');
+    });
+
+    it('should not infer visibility from documentation text', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    port def DCBus {
+        doc /* JEITA window; PCM-protected pack with private safeguards. */
+        attribute voltage;
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        expect(st.findByName('DCBus')[0].visibility).toBeUndefined();
+    });
+
     // ── Type extraction regression tests ──────────────────────────
 
     it('should extract typing via colon shorthand (: Type)', async () => {
@@ -179,6 +321,67 @@ package Test {
         expect(vehicle.length).toBeGreaterThanOrEqual(1);
         expect(vehicle[0].documentation).toBeDefined();
         expect(vehicle[0].documentation).toContain('motor vehicle');
+    });
+
+    it('should not leak a nested member document to its package', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    port def First {
+        doc /* First member doc. */
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        expect(st.findByName('Demo')[0].documentation).toBeUndefined();
+        expect(st.findByName('First')[0].documentation).toBe('First member doc.');
+    });
+
+    it('should keep package and nested member documentation separate', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    doc /* Package doc. */
+    port def First {
+        doc /* Member doc. */
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        expect(st.findByName('Demo')[0].documentation).toBe('Package doc.');
+        expect(st.findByName('First')[0].documentation).toBe('Member doc.');
+    });
+
+    it('should strip multiline documentation gutters per KerML rules', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    port def DCBus {
+        doc /* IF-05 Power-Electronics <-> Battery: 1S CC/CV 4.2 V, JEITA
+             * window; two independent safety layers.
+               Continuation without a gutter. */
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        expect(st.findByName('DCBus')[0].documentation).toBe(
+            'IF-05 Power-Electronics <-> Battery: 1S CC/CV 4.2 V, JEITA\n' +
+            'window; two independent safety layers.\n' +
+            'Continuation without a gutter.',
+        );
+    });
+
+    it('should extract the body of named documentation', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    part def Vehicle {
+        doc VehicleDoc /* Named documentation. */
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        expect(st.findByName('Vehicle')[0].documentation).toBe('Named documentation.');
     });
 
     it('should extract multiplicity bounds', async () => {

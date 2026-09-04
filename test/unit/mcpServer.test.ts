@@ -212,6 +212,21 @@ describe('MCP Server Core', () => {
                 expect((s.kind as string).endsWith(' def')).toBe(false);
             });
         });
+
+        it('should report transition endpoints without a source-name collision', () => {
+            const result = handleGetSymbols(ctx, {
+                code: `state def Machine {
+    state a;
+    state b;
+    transition first a then b;
+}`,
+                uri: 'transition.sysml',
+            });
+            const transition = result.symbols.find(s => s.kind === 'transition');
+
+            expect(transition).toMatchObject({ source: 'a', target: 'b' });
+            expect(transition?.name).not.toBe('a');
+        });
     });
 
     // -----------------------------------------------------------------------
@@ -733,6 +748,59 @@ describe('MCP Server Core', () => {
             const result = handlePreview(ctx, { code: stateModel });
             expect(result.diagramType).toBe('state');
             expect(result.diagram).toContain('stateDiagram');
+        });
+
+        it('should render nested states and parsed transition edges (issue #84)', () => {
+            const stateModel = `package Demo {
+    state def Machine {
+        entry; then a;
+        state a;
+        state b;
+        transition first a then b;
+    }
+}`;
+            const result = handlePreview(ctx, { code: stateModel, diagramType: 'state' });
+
+            expect(result.errors).toHaveLength(0);
+            expect(result.diagram).toContain('Demo__Machine__a : a');
+            expect(result.diagram).toContain('Demo__Machine__b : b');
+            expect(result.diagram).toContain('Demo__Machine__a --> Demo__Machine__b');
+        });
+
+        it('should render declared activity branches without declaration-order edges (issue #85)', () => {
+            const activityModel = `package Demo {
+    action def RoutePower {
+        action senseFlows;
+        action serveLoadDirect;
+        action routeSurplus;
+        action coverDeficit;
+
+        first start then senseFlows;
+        first senseFlows then serveLoadDirect;
+        first serveLoadDirect then routeSurplus;
+        first serveLoadDirect then coverDeficit;
+        first routeSurplus then done;
+        first coverDeficit then done;
+    }
+}`;
+            const result = handlePreview(ctx, { code: activityModel, diagramType: 'activity' });
+
+            expect(result.errors).toHaveLength(0);
+            expect(result.diagram).toContain(
+                'Demo__RoutePower__serveLoadDirect --> Demo__RoutePower__routeSurplus',
+            );
+            expect(result.diagram).toContain(
+                'Demo__RoutePower__serveLoadDirect --> Demo__RoutePower__coverDeficit',
+            );
+            expect(result.diagram).toContain(
+                'Demo__RoutePower__start --> Demo__RoutePower__senseFlows',
+            );
+            expect(result.diagram).toContain(
+                'Demo__RoutePower__coverDeficit --> Demo__RoutePower__done',
+            );
+            expect(result.diagram).not.toContain(
+                'Demo__RoutePower__routeSurplus --> Demo__RoutePower__coverDeficit',
+            );
         });
 
         it('should respect forced diagramType override', () => {

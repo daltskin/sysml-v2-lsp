@@ -159,6 +159,25 @@ package Test {
             expect(engine!.attributes['partType']).toBe('Engine');
         });
 
+        it('should derive visibility from membership syntax, not documentation prose', async () => {
+            const model = await getModelForText(`
+package Demo {
+    protected port def Explicit;
+    port def DCBus {
+        doc /* JEITA window; PCM-protected pack = second safety layer. */
+        attribute voltage;
+    }
+}
+`, ['elements']);
+
+            const pkg = model.elements!.find(e => e.name === 'Demo');
+            const explicit = pkg!.children.find(e => e.name === 'Explicit');
+            const dcBus = pkg!.children.find(e => e.name === 'DCBus');
+
+            expect(explicit!.attributes['visibility']).toBe('protected');
+            expect(dcBus!.attributes['visibility']).toBeUndefined();
+        });
+
         it('should classify port types with portType attribute', async () => {
             const model = await getModelForText(`
 package Test {
@@ -342,6 +361,56 @@ package Test {
                 expect(typeof rel.source).toBe('string');
                 expect(typeof rel.target).toBe('string');
             }
+        });
+
+        it('should expose transition source, target, and trigger relationships', async () => {
+            const model = await getModelForText(`
+package Demo {
+    state def Machine {
+        state a;
+        state b;
+        transition aToB first a accept Tick then b;
+    }
+}
+`, ['relationships']);
+
+            expect(model.relationships).toContainEqual({
+                type: 'transition',
+                source: 'a',
+                target: 'b',
+                name: 'Tick',
+            });
+        });
+
+        it('should preserve declared branching successions in activity diagrams', async () => {
+            const model = await getModelForText(`
+package Demo {
+    action def RoutePower {
+        action senseFlows;
+        action serveLoadDirect;
+        action routeSurplus;
+        action coverDeficit;
+
+        first start then senseFlows;
+        first senseFlows then serveLoadDirect;
+        first serveLoadDirect then routeSurplus;
+        first serveLoadDirect then coverDeficit;
+        first routeSurplus then done;
+        first coverDeficit then done;
+    }
+}
+`, ['activityDiagrams']);
+
+            const flows = model.activityDiagrams?.find(d => d.name === 'RoutePower')?.flows ?? [];
+            expect(flows.map(f => `${f.from}->${f.to}`)).toEqual(expect.arrayContaining([
+                'start->senseFlows',
+                'senseFlows->serveLoadDirect',
+                'serveLoadDirect->routeSurplus',
+                'serveLoadDirect->coverDeficit',
+                'routeSurplus->done',
+                'coverDeficit->done',
+            ]));
+            expect(flows.map(f => `${f.from}->${f.to}`)).not.toContain('routeSurplus->coverDeficit');
         });
     });
 
@@ -798,8 +867,40 @@ package Test {
                 const engine = resolved[engineKey];
                 const powerFeature = engine.features.find(f => f.name === 'power');
                 expect(powerFeature).toBeDefined();
-                expect(powerFeature!.kind).toBe('attribute');
+                expect(powerFeature!.kind).toBe('AttributeUsage');
             }
+        });
+
+        it('should expose canonical kinds and display metadata for feature groups', async () => {
+            const model = await getModelForText(`
+package Test {
+    state def Operating;
+    action def Control;
+    port def PowerPort;
+    part def Controller {
+        private in port powerIn : PowerPort[1];
+        out port powerOut : PowerPort;
+        exhibit state operating : Operating;
+        perform action control : Control;
+    }
+}
+`, ['resolvedTypes']);
+
+            const controller = model.resolvedTypes?.['Test::Controller'];
+            expect(controller).toBeDefined();
+            expect(controller?.features).toEqual(expect.arrayContaining([
+                expect.objectContaining({
+                    name: 'powerIn',
+                    kind: 'PortUsage',
+                    type: 'PowerPort',
+                    multiplicity: '1',
+                    direction: 'in',
+                    visibility: 'private',
+                }),
+                expect.objectContaining({ name: 'powerOut', kind: 'PortUsage', direction: 'out' }),
+                expect.objectContaining({ name: 'operating', kind: 'ExhibitStateUsage' }),
+                expect.objectContaining({ name: 'control', kind: 'PerformActionUsage' }),
+            ]));
         });
     });
 

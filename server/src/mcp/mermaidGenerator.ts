@@ -471,18 +471,37 @@ function generateActivityView(symbols: SysMLSymbol[], symbolTable: Map<string, S
         const childActions = (childrenOf.get(def.qualifiedName) ?? [])
             .filter(c => isActionLike(c.kind));
 
-        let prevId: string | undefined;
         for (const action of childActions) {
             const actionId = safeId(action.qualifiedName);
             const { line, styleKind } = actionNodeDecl(actionId, action, '        ');
             lines.push(line);
             nodeStyles.set(actionId, styleKind);
             elementCount++;
+        }
 
-            if (prevId) {
-                lines.push(`        ${prevId} --> ${actionId}`);
+        const childByName = new Map(childActions.map(action => [action.name, action]));
+        const declaredEndpoints = new Set(childActions.map(action => action.name));
+        for (const flow of def.controlFlows ?? []) {
+            for (const endpoint of [flow.source, flow.target]) {
+                if (declaredEndpoints.has(endpoint)) continue;
+                const endpointId = safeId(`${def.qualifiedName}::${endpoint}`);
+                const shape = endpoint === 'start'
+                    ? `((${escapeLabel(endpoint)}))`
+                    : endpoint === 'done'
+                        ? `(((${escapeLabel(endpoint)})))`
+                        : `["▶ ${escapeLabel(endpoint)}"]`;
+                lines.push(`        ${endpointId}${shape}`);
+                nodeStyles.set(endpointId, 'ActionUsage');
+                declaredEndpoints.add(endpoint);
+                elementCount++;
             }
-            prevId = actionId;
+
+            const source = childByName.get(flow.source);
+            const target = childByName.get(flow.target);
+            const sourceId = safeId(source?.qualifiedName ?? `${def.qualifiedName}::${flow.source}`);
+            const targetId = safeId(target?.qualifiedName ?? `${def.qualifiedName}::${flow.target}`);
+            const guard = flow.guard ? `|"${escapeLabel(flow.guard)}"|` : '';
+            lines.push(`        ${sourceId} -->${guard} ${targetId}`);
         }
 
         lines.push('    end');
@@ -511,7 +530,7 @@ function generateActivityView(symbols: SysMLSymbol[], symbolTable: Map<string, S
     return {
         diagram: lines.join('\n'),
         diagramType: 'activity',
-        description: `Activity View showing ${elementCount} actions and their sequential flow`,
+        description: `Activity View showing ${elementCount} actions and declared control flow`,
         elementCount,
     };
 }
@@ -571,12 +590,25 @@ function generateStateView(symbols: SysMLSymbol[], symbolTable: Map<string, SysM
 
     // Transitions
     for (const trans of transitions) {
-        // Transition children typically reference source/target via typeNames
-        if (trans.typeNames.length >= 2) {
-            const srcId = safeId(trans.typeNames[0]);
-            const tgtId = safeId(trans.typeNames[1]);
-            lines.push(`    ${srcId} --> ${tgtId}`);
-        }
+        if (!trans.source || !trans.target) continue;
+
+        const resolveEndpointId = (reference: string): string => {
+            const qualifiedReference = reference.replace(/\./g, '::');
+            const relativeName = trans.parentQualifiedName
+                ? `${trans.parentQualifiedName}::${qualifiedReference}`
+                : qualifiedReference;
+            const endpoint = symbolTable.get(relativeName)
+                ?? symbolTable.get(qualifiedReference)
+                ?? symbolTable.get(reference);
+            return safeId(endpoint?.qualifiedName ?? reference);
+        };
+
+        const srcId = resolveEndpointId(trans.source);
+        const tgtId = resolveEndpointId(trans.target);
+        const label = trans.transitionTrigger
+            ? ` : ${escapeLabel(trans.transitionTrigger)}`
+            : '';
+        lines.push(`    ${srcId} --> ${tgtId}${label}`);
     }
 
     if (elementCount === 0) {
@@ -1030,6 +1062,10 @@ export function diffSymbols(
             || orig.children.length !== sym.children.length
             || orig.multiplicity !== sym.multiplicity
             || orig.documentation !== sym.documentation
+            || orig.source !== sym.source
+            || orig.target !== sym.target
+            || orig.transitionTrigger !== sym.transitionTrigger
+            || JSON.stringify(orig.controlFlows) !== JSON.stringify(sym.controlFlows)
         ) {
             changed.push(sym);
         } else {

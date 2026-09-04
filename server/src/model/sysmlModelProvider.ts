@@ -12,7 +12,13 @@ import { analyseComplexity } from '../analysis/complexityAnalyzer.js';
 import { DocumentManager } from '../documentManager.js';
 import { ParseResult } from '../parser/parseDocument.js';
 import { SymbolTable } from '../symbols/symbolTable.js';
-import { SysMLElementKind, SysMLSymbol, isDefinition, isUsage } from '../symbols/sysmlElements.js';
+import {
+    SysMLElementKind,
+    SysMLSymbol,
+    isDefinition,
+    isUsage,
+    toMetaclassName,
+} from '../symbols/sysmlElements.js';
 
 import type {
     ActivityActionDTO,
@@ -422,10 +428,9 @@ export class SysMLModelProvider {
             attributes['modifier'] = modifier;
         }
 
-        // Extract visibility
-        const visibility = this.extractVisibility(symbol, lines);
-        if (visibility) {
-            attributes['visibility'] = visibility;
+        // Visibility is parsed from the owning membership's MemberPrefix.
+        if (symbol.visibility) {
+            attributes['visibility'] = symbol.visibility;
         }
 
         // Extract value
@@ -526,6 +531,18 @@ export class SysMLModelProvider {
                         name: symbol.name,
                     });
                 }
+            }
+
+            // Transition endpoints come directly from the grammar's `first`
+            // source and `then` target references.
+            if (symbol.kind === SysMLElementKind.TransitionUsage &&
+                symbol.source && symbol.target) {
+                relationships.push({
+                    type: 'transition',
+                    source: symbol.source,
+                    target: symbol.target,
+                    name: symbol.transitionTrigger,
+                });
             }
 
             // Allocation usages create allocation relationships
@@ -1002,9 +1019,21 @@ export class SysMLModelProvider {
                 }
             }
 
-            // D1: Extract flows from succession relationships in text
-            const successionFlows = this.extractSuccessions(symbol, lines);
-            flows.push(...successionFlows);
+            // Prefer grammar-derived explicit successions. Retain text
+            // extraction for shorthand forms that do not have a standalone
+            // succession parse node.
+            const parsedFlows: ControlFlowDTO[] = symbol.controlFlows?.map(flow => ({
+                from: flow.source,
+                to: flow.target,
+                range: this.rangeToDTO(symbol.range),
+                ...(flow.guard ? { guard: flow.guard } : {}),
+            })) ?? [];
+            const shorthandFlows = this.extractSuccessions(symbol, lines);
+            const parsedKeys = new Set(parsedFlows.map(flow => `${flow.from}->${flow.to}`));
+            flows.push(...parsedFlows);
+            flows.push(...shorthandFlows.filter(
+                flow => !parsedKeys.has(`${flow.from}->${flow.to}`),
+            ));
 
             // D1: Extract decide/if/merge patterns for decisions
             const fullText = this.getFullElementText(symbol, lines);
@@ -1127,13 +1156,20 @@ export class SysMLModelProvider {
             const children = this.getChildSymbols(symbol, symbolTable);
             const features: ResolvedFeatureDTO[] = children
                 .filter(c => isUsage(c.kind))
-                .map(c => ({
-                    name: c.name,
-                    kind: this.featureKindFromElementKind(c.kind),
-                    type: c.typeNames.join(', ') || undefined,
-                    isDerived: false,
-                    isReadonly: false,
-                }));
+                .map(c => {
+                    const modifier = this.extractModifier(c, lines);
+                    const direction = this.extractDirection(c, lines);
+                    return {
+                        name: c.name,
+                        kind: toMetaclassName(c.kind),
+                        type: c.typeNames.join(', ') || undefined,
+                        multiplicity: c.multiplicity ?? this.extractMultiplicity(c, lines),
+                        direction: direction as 'in' | 'out' | 'inout' | undefined,
+                        visibility: c.visibility,
+                        isDerived: modifier?.split(', ').includes('derived') ?? false,
+                        isReadonly: modifier?.split(', ').includes('readonly') ?? false,
+                    };
+                });
 
             result[symbol.qualifiedName] = {
                 qualifiedName: symbol.qualifiedName,
@@ -1277,15 +1313,6 @@ export class SysMLModelProvider {
         if (containsWord(elementText, 'variation')) modifiers.push('variation');
         if (containsWord(elementText, 'individual')) modifiers.push('individual');
         return modifiers.length > 0 ? modifiers.join(', ') : undefined;
-    }
-
-    /** Extract visibility (public | private | protected) from source text. */
-    private extractVisibility(symbol: SysMLSymbol, lines: string[]): string | undefined {
-        const elementText = this.getElementText(symbol, lines);
-        if (containsWord(elementText, 'private')) return 'private';
-        if (containsWord(elementText, 'protected')) return 'protected';
-        if (containsWord(elementText, 'public')) return 'public';
-        return undefined;
     }
 
     /** Extract default/assigned value from source text. */
@@ -1776,26 +1803,6 @@ export class SysMLModelProvider {
         }
 
         return flows;
-    }
-
-    /** Convert element kind to feature kind string. */
-    private featureKindFromElementKind(kind: SysMLElementKind): string {
-        switch (kind) {
-            case SysMLElementKind.AttributeUsage:
-            case SysMLElementKind.AttributeDef:
-                return 'attribute';
-            case SysMLElementKind.PortUsage:
-            case SysMLElementKind.PortDef:
-                return 'port';
-            case SysMLElementKind.ActionUsage:
-            case SysMLElementKind.ActionDef:
-                return 'action';
-            case SysMLElementKind.StateUsage:
-            case SysMLElementKind.StateDef:
-                return 'state';
-            default:
-                return 'reference';
-        }
     }
 
     /** Convert an action symbol to an ActivityActionDTO. */
