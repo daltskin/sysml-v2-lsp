@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.26.0]
+
 ### Fixed
 
 - **Anonymous binary connections no longer overwrite their source part usage** ([daltskin/VSCode_SysML_Extension#80](https://github.com/daltskin/VSCode_SysML_Extension/issues/80)) — shorthand connections such as `connect a.outP to b.inP;` now remain anonymous instead of being assigned the source endpoint name. This preserves the source usage's type reference and prevents false-positive `unused-definition` diagnostics, while explicitly named connection usages retain their declared names.
