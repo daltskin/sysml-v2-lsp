@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Removed the type-dependency cycle heuristic that reported false `circular-containment` errors for valid referential usages and recursive composite type structures (#101). Feature typing does not establish ownership or an instance-composition cycle (SysML v2.0 sections 7.6.3 and 8.3.6.4). Circular-specialization validation remains enabled.
+- Updated vulnerable dependencies to Vitest/mocker 4.1.11, Hono 4.13.7, and js-yaml 4.3.2, addressing reported Dependabot alerts and newly discovered npm advisories.
+
 ## [0.26.0]
 
 ### Fixed

@@ -199,7 +199,6 @@ export class SemanticValidator {
         diagnostics.push(...this.checkPortCompatibility(text, uri, indexes));
         diagnostics.push(...this.checkConstraintBodyReferences(text, uri, symbols, indexes));
         diagnostics.push(...this.checkCircularSpecialization(symbols, indexes));
-        diagnostics.push(...this.checkCircularContainment(symbols, indexes));
         diagnostics.push(...this.checkUnsatisfiedRequirements(symbols, indexes));
         diagnostics.push(...this.checkUnverifiedRequirements(symbols, indexes));
         diagnostics.push(...this.checkViewpointSatisfaction(symbols, indexes));
@@ -499,7 +498,6 @@ export class SemanticValidator {
         diagnostics.push(...instance.checkUnusedDefinitions(allSymbols));
         diagnostics.push(...instance.checkRedefinitionMultiplicity(symbolsInUri, indexes, opts?.text));
         diagnostics.push(...instance.checkCircularSpecialization(symbolsInUri, indexes));
-        diagnostics.push(...instance.checkCircularContainment(symbolsInUri, indexes));
         diagnostics.push(...instance.checkUnsatisfiedRequirements(
             allSymbols, indexes, opts?.text ? [opts.text] : [],
         ));
@@ -569,79 +567,6 @@ export class SemanticValidator {
             if (cycle) return cycle;
             visited.delete(tn);
         }
-        return undefined;
-    }
-
-    /**
-     * Rule: Circular containment.
-     *
-     * Detects cycles where definition A contains a feature typed by B and
-     * definition B contains a feature typed by A (or longer transitive chains).
-     */
-    private checkCircularContainment(symbolsInUri: SysMLSymbol[], indexes: SymbolIndexes): Diagnostic[] {
-        const diagnostics: Diagnostic[] = [];
-        const defsInFile = symbolsInUri.filter(s => isDefinition(s.kind));
-
-        for (const def of defsInFile) {
-            const children = indexes.byParent.get(def.qualifiedName) ?? [];
-            // Get all type names referenced by children (features of this definition)
-            const childTypeNames = children.flatMap(c => c.typeNames).filter(t => t.length > 0);
-            if (childTypeNames.length === 0) continue;
-
-            for (const childTypeName of childTypeNames) {
-                // Skip self-references: a definition containing a feature
-                // typed by itself (e.g. `action subfunctions[*] : Function`)
-                // is valid recursive decomposition, not circular containment.
-                if (childTypeName === def.name) continue;
-
-                const visited = new Set<string>();
-                visited.add(def.name);
-                const cycle = this.followContainmentChain(childTypeName, visited, indexes);
-                if (cycle) {
-                    // Find the child that references the type for better positioning
-                    const offendingChild = children.find(c => c.typeNames.includes(childTypeName));
-                    const range = offendingChild?.selectionRange ?? def.selectionRange;
-                    diagnostics.push({
-                        severity: DiagnosticSeverity.Error,
-                        range,
-                        message: `Circular containment: ${cycle.join(' -> ')} -> ${cycle[0]}`,
-                        source: 'sysml',
-                        code: 'circular-containment',
-                    });
-                    break; // One diagnostic per definition is enough
-                }
-            }
-        }
-        return diagnostics;
-    }
-
-    /**
-     * Walk the containment chain: for a type name, find its definition,
-     * check its children's types, and see if any loops back.
-     */
-    private followContainmentChain(
-        typeName: string,
-        visited: Set<string>,
-        indexes: SymbolIndexes,
-    ): string[] | undefined {
-        if (visited.has(typeName)) {
-            return [...visited];
-        }
-
-        const candidates = indexes.definitionsByName.get(typeName);
-        if (!candidates || candidates.length === 0) return undefined;
-
-        const target = candidates[0];
-        const children = indexes.byParent.get(target.qualifiedName) ?? [];
-        const childTypeNames = children.flatMap(c => c.typeNames).filter(t => t.length > 0);
-        if (childTypeNames.length === 0) return undefined;
-
-        visited.add(typeName);
-        for (const tn of childTypeNames) {
-            const cycle = this.followContainmentChain(tn, visited, indexes);
-            if (cycle) return cycle;
-        }
-        visited.delete(typeName);
         return undefined;
     }
 

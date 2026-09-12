@@ -442,6 +442,76 @@ package Demo {
     });
 
     describe('circular containment', () => {
+        it.each(['ref part', 'in part', 'ref', 'part'])(
+            'should accept recursive %s typing in both validation entry points',
+            async (keyword) => {
+                const { DocumentManager } = await import('../../server/src/documentManager.js');
+                const { SemanticValidator } = await import(
+                    '../../server/src/providers/semanticValidator.js'
+                );
+                const text = `
+package MVCE {
+    part def A { ${keyword} b : B[0..1]; }
+    part def B { ${keyword} a : A[0..*]; }
+}
+`;
+                const uri = 'file:///issue101.sysml';
+                const manager = new DocumentManager();
+                const parsed = manager.parse(await makeDoc(text, uri));
+                expect(parsed.errors).toHaveLength(0);
+                const symbols = manager.getWorkspaceSymbolTable().getAllSymbols();
+                const names = new Set(symbols.map(symbol => symbol.name));
+                const diagnostics = [
+                    ...new SemanticValidator(manager).validate(uri),
+                    ...SemanticValidator.validateSymbols(symbols, names, { text, uri }),
+                ];
+                expect(diagnostics.filter(diagnostic => diagnostic.severity === 1)).toHaveLength(0);
+            },
+        );
+
+        it('should accept cross-file reference cycles', async () => {
+            const entries = [
+                {
+                    uri: 'file:///a.sysml',
+                    text: 'part def A { ref part b : B[0..1]; }',
+                },
+                {
+                    uri: 'file:///b.sysml',
+                    text: 'part def B { part a : A[0..*]; }',
+                },
+            ];
+            for (const entry of entries) {
+                const diagnostics = await getSemanticDiagnosticsForUri(entries, entry.uri);
+                expect(diagnostics.filter(diagnostic => diagnostic.severity === 1)).toHaveLength(0);
+            }
+        });
+
+        it('should still reject circular specialization', async () => {
+            const diagnostics = await getSemanticDiagnostics(`
+package Invalid {
+    part def A :> B;
+    part def B :> A;
+}
+`);
+            expect(diagnostics.some(diagnostic => diagnostic.code === 'circular-specialization'))
+                .toBe(true);
+        });
+
+        it('should NOT treat referential part typing as containment (issue #101)', async () => {
+            const text = `
+package MVCE {
+    part def A {
+        ref part b : B[0..1];
+    }
+    part def B {
+        part a : A[0..*];
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            expect(diags.filter(d => d.code === 'circular-containment')).toHaveLength(0);
+        });
+
         it('should NOT flag valid recursive self-typed features', async () => {
             const text = `
 package Test {
@@ -468,20 +538,20 @@ package Test {
             expect(circular.length).toBe(0);
         });
 
-        it('should flag mutual containment cycle (A contains B, B contains A)', async () => {
+        it('should NOT flag mutually recursive optional composite features', async () => {
             const text = `
 package Test {
     part def A {
-        part b : B;
+        part b : B[0..1];
     }
     part def B {
-        part a : A;
+        part a : A[0..*];
     }
 }
 `;
             const diags = await getSemanticDiagnostics(text);
             const circular = diags.filter(d => d.code === 'circular-containment');
-            expect(circular.length).toBeGreaterThanOrEqual(1);
+            expect(circular).toHaveLength(0);
         });
     });
 
