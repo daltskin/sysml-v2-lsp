@@ -266,6 +266,16 @@ export class SymbolTable {
     }
 
     /**
+     * Get every registered symbol, one entry per declaration site — unlike
+     * `getAllSymbols()`, two symbols sharing a `qualifiedName` (e.g. the same
+     * name declared in two different files) both appear here. Backed by
+     * `symbolsByUri`, which is never collapsed by qualified name.
+     */
+    getAllSymbolsIncludingDuplicates(): SysMLSymbol[] {
+        return Array.from(this.symbolsByUri.values()).flat();
+    }
+
+    /**
      * Get the global scope for resolution.
      */
     getGlobalScope(): Scope {
