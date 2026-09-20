@@ -12,7 +12,7 @@ import { analyseComplexity } from '../analysis/complexityAnalyzer.js';
 import { DocumentManager } from '../documentManager.js';
 import { getLibraryPackageNames } from '../library/libraryIndex.js';
 import { ParseResult } from '../parser/parseDocument.js';
-import { NamespaceResolver, buildSymbolIndexes } from '../symbols/namespaceResolver.js';
+import { NamespaceResolver, buildSymbolIndexes, findConflictedQualifiedNames } from '../symbols/namespaceResolver.js';
 import { SymbolTable } from '../symbols/symbolTable.js';
 import {
     SysMLElementKind,
@@ -1219,7 +1219,30 @@ export class SysMLModelProvider {
         }
         const libraryNames = this.libraryNamesCache;
 
+        // Ambiguous namespace names (a `package A` and an unrelated `part def
+        // A` sharing a qualifiedName -- see `findConflictedQualifiedNames`'s
+        // doc comment) also need the workspace symbol table: the conflict, and
+        // the resulting unresolved references it causes, can span two files.
+        // Ported from `SemanticValidator.checkAmbiguousNamespaceName` so the
+        // `sysml/model` request's own diagnostics (Model Explorer, Dashboard,
+        // Feature Inspector) explain *why* a reference is unresolved the same
+        // way the editor's own diagnostics do, not just leave it unexplained.
+        const conflicts = findConflictedQualifiedNames(this.documentManager.getWorkspaceSymbolTable().getAllSymbols());
+
         for (const symbol of symbols) {
+            const conflicting = conflicts.get(symbol.qualifiedName);
+            if (conflicting) {
+                const others = conflicting.filter(s => s !== symbol);
+                const otherKinds = [...new Set(others.map(s => s.kind))].join(', ');
+                diagnostics.push({
+                    code: 'ambiguous-namespace-name',
+                    message: `Ambiguous name '${symbol.name}': also declared as ${otherKinds} elsewhere in the workspace. Only a package may be reopened under the same name; rename one of these declarations.`,
+                    severity: 'error',
+                    range: this.rangeToDTO(symbol.selectionRange),
+                    elementName: symbol.name,
+                });
+            }
+
             // Check for unresolved type references (check all typeNames)
             for (const tn of symbol.typeNames) {
                 const { resolved, strippedTypeName } =

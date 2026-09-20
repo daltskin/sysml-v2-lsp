@@ -32,6 +32,63 @@ export interface ResolvedMember {
 /** Permissiveness order for picking the effective visibility when the same element has more than one membership of a namespace (see `getResolvedMembers`'s `addMember`). */
 const VISIBILITY_RANK: Record<ResolvedMember['visibility'], number> = { public: 2, protected: 1, private: 0 };
 
+/**
+ * QualifiedNames claimed by more than one symbol *of the same kind* --
+ * excluding Package, since a package may legitimately be "reopened" under
+ * the same qualifiedName (across files, or at multiple positions in one
+ * file; merged by `SymbolTable.mergePackageFragments`), which is a
+ * different thing from a naming conflict.
+ *
+ * This mirrors KerML's own well-formedness rule rather than an assumption:
+ * `Membership.isDistinguishableFrom` (KerML v1.0 §8.3.2.4.4) states two
+ * memberships ARE distinguishable -- i.e. NOT a conflict -- "if... neither
+ * of the metaclasses of the memberElement of this Membership and the
+ * memberElement of the other Membership conform to the other", regardless
+ * of whether their names collide. So a `package A` and an unrelated
+ * `part def A` sharing a bare name is valid SysML (their metaclasses don't
+ * conform to each other) -- only two elements of the *same* (or a
+ * conforming) kind sharing a name are genuinely not distinguishable, per
+ * `Namespace.validateNamespaceDistinguishibility`'s "all memberships of a
+ * Namespace must be distinguishable from each other."
+ *
+ * This codebase has no full SysML/KerML metaclass hierarchy to test general
+ * conformance against, so "conforms" is approximated conservatively as
+ * "identical `SysMLElementKind`" -- the one case where conformance is
+ * unambiguous (a kind trivially conforms to itself) without guessing at
+ * relationships (e.g. PartUsage vs. PartDefinition) this codebase doesn't
+ * model. This may under-flag some real conflicts between genuinely related
+ * but differently-named kinds, but never over-flags a legitimately
+ * different-kind collision like the package/definition case above.
+ *
+ * Exported so `SemanticValidator` can flag each conflicting declaration
+ * with its own diagnostic, using the same conflict definition
+ * `buildSymbolIndexes` uses to keep such symbols' children from being
+ * silently pooled together.
+ */
+export function findConflictedQualifiedNames(allSymbols: SysMLSymbol[]): Map<string, SysMLSymbol[]> {
+    const byQualifiedNameAndKind = new Map<string, Map<SysMLElementKind, SysMLSymbol[]>>();
+    for (const s of allSymbols) {
+        let byKind = byQualifiedNameAndKind.get(s.qualifiedName);
+        if (!byKind) {
+            byKind = new Map();
+            byQualifiedNameAndKind.set(s.qualifiedName, byKind);
+        }
+        const list = byKind.get(s.kind) ?? [];
+        list.push(s);
+        byKind.set(s.kind, list);
+    }
+
+    const conflicts = new Map<string, SysMLSymbol[]>();
+    for (const [qualifiedName, byKind] of byQualifiedNameAndKind) {
+        for (const [kind, symbols] of byKind) {
+            if (kind === SysMLElementKind.Package || symbols.length <= 1) continue;
+            const existing = conflicts.get(qualifiedName) ?? [];
+            conflicts.set(qualifiedName, [...existing, ...symbols]);
+        }
+    }
+    return conflicts;
+}
+
 /** Build the byName/byParent/byQualifiedName/etc. indexes a `NamespaceResolver` (and other checks) need from a flat symbol array. */
 export function buildSymbolIndexes(allSymbols: SysMLSymbol[]): SymbolIndexes {
     const byName = new Map<string, SysMLSymbol[]>();
@@ -40,20 +97,39 @@ export function buildSymbolIndexes(allSymbols: SysMLSymbol[]): SymbolIndexes {
     const definitionsByName = new Map<string, SysMLSymbol[]>();
     const portsByName = new Map<string, SysMLSymbol[]>();
 
+    // A conflicted qualifiedName (see `findConflictedQualifiedNames` -- two
+    // same-kind symbols sharing a name, not e.g. a package and an unrelated
+    // definition, which is valid) is excluded from `byQualifiedName` and
+    // from ever owning pooled children in `byParent`: resolving straight
+    // through a genuinely ambiguous name, or treating two indistinguishable
+    // declarations' children as siblings in one namespace, would silently
+    // paper over a real modeling error instead of surfacing it. This
+    // intentionally also makes a reference *from inside* one of the
+    // conflicting declarations to its own child unresolved, not just
+    // external references through the ambiguous name -- the whole name is
+    // invalid while the conflict exists, and `checkAmbiguousNamespaceName`
+    // (semanticValidator.ts) flags the root cause on each conflicting
+    // declaration.
+    const conflictedQualifiedNames = new Set(findConflictedQualifiedNames(allSymbols).keys());
+
     for (const s of allSymbols) {
         const nameList = byName.get(s.name) ?? [];
         nameList.push(s);
         byName.set(s.name, nameList);
 
-        byQualifiedName.set(s.qualifiedName, s);
+        if (!conflictedQualifiedNames.has(s.qualifiedName)) {
+            byQualifiedName.set(s.qualifiedName, s);
+        }
 
         // Root-level symbols (no parentQualifiedName) are keyed under '', the
         // implicit root namespace -- mirrors the '' sentinel used for namespace
         // ancestor chains, so byParent.get('') gives the root's own members.
         const parentKey = s.parentQualifiedName ?? '';
-        const children = byParent.get(parentKey) ?? [];
-        children.push(s);
-        byParent.set(parentKey, children);
+        if (!conflictedQualifiedNames.has(parentKey)) {
+            const children = byParent.get(parentKey) ?? [];
+            children.push(s);
+            byParent.set(parentKey, children);
+        }
 
         if (isDefinition(s.kind)) {
             const defs = definitionsByName.get(s.name) ?? [];

@@ -207,6 +207,8 @@ export class SymbolTable {
     private typeNameRefs = new Map<string, SysMLSymbol[]>();
     /** Packages indexed by qualified name */
     private packageFragmentsByQualifiedName = new Map<string, Map<string, SysMLSymbol>>();
+    /** Symbols sharing a qualifiedName with a non-package sibling of a different kind (e.g. `package A` vs. `part def A`) -- tracked so `getAllSymbols()` doesn't lose one to `symbols`' one-entry-per-qualifiedName limit, regardless of whether the collision is a real naming conflict (see `findConflictedQualifiedNames` in namespaceResolver.ts for that narrower, spec-driven question). */
+    private conflictedSymbolsByQualifiedName = new Map<string, Set<SysMLSymbol>>();
     /** Cached array from getAllSymbols(), invalidated on any mutation */
     private allSymbolsCache: SysMLSymbol[] | undefined;
     /** The global scope */
@@ -262,7 +264,23 @@ export class SymbolTable {
      */
     getAllSymbols(): SysMLSymbol[] {
         if (!this.allSymbolsCache) {
-            this.allSymbolsCache = Array.from(this.symbols.values());
+            const all = Array.from(this.symbols.values());
+            // `symbols` holds only one entry per qualifiedName; a genuine
+            // naming conflict (see `conflictedSymbolsByQualifiedName`'s doc
+            // comment) needs every conflicting declaration surfaced here, not
+            // just whichever currently occupies that one entry.
+            if (this.conflictedSymbolsByQualifiedName.size > 0) {
+                const included = new Set(all);
+                for (const conflictSet of this.conflictedSymbolsByQualifiedName.values()) {
+                    for (const sym of conflictSet) {
+                        if (!included.has(sym)) {
+                            all.push(sym);
+                            included.add(sym);
+                        }
+                    }
+                }
+            }
+            this.allSymbolsCache = all;
         }
         return this.allSymbolsCache;
     }
@@ -384,11 +402,17 @@ export class SymbolTable {
             const affectedNames = new Set<string>();
             const affectedTypeNames = new Set<string>();
             for (const sym of existing) {
+                // Order matters: re-point `symbols`' entry (which may fall
+                // back to a remaining conflicting symbol) *before* pruning
+                // `sym` out of conflict tracking, so that fallback still sees
+                // the full picture, `sym` included -- see
+                // `unregisterPlainSymbol`'s own doc comment.
                 if (sym.kind === SysMLElementKind.Package) {
                     this.unregisterPackageFragment(sym.qualifiedName, uri);
                 } else {
-                    this.symbols.delete(sym.qualifiedName);
+                    this.unregisterPlainSymbol(sym);
                 }
+                this.removeFromConflictTracking(sym);
                 affectedNames.add(sym.name);
                 for (const tn of sym.typeNames) {
                     affectedTypeNames.add(tn);
@@ -574,34 +598,130 @@ export class SymbolTable {
         // registered fragment is canonical" behavior; re-registering an already-known
         // uri does not change its position, so an edit doesn't shuffle this.
         const template = [...fragments.values()].at(-1)!;
-        this.symbols.set(qualifiedName, {
+        const merged: SysMLSymbol = {
             ...template,
             importTargets: importTargets.length > 0 ? importTargets : undefined,
             filterConditions: filterConditions.length > 0 ? filterConditions : undefined,
             metadataAnnotations: metadataAnnotations.length > 0 ? metadataAnnotations : undefined,
             viewFilters: viewFilters.length > 0 ? viewFilters : undefined,
             documentation,
-        });
+        };
+        this.symbols.set(qualifiedName, merged);
+
+        // If this qualifiedName is also in conflict with an incompatible-kind
+        // sibling, any package-kind entry already in that conflict set is a
+        // stale pre-merge snapshot (registerSymbol records `existing`/`symbol`
+        // as they were *before* this merge runs) -- replace it with `merged`,
+        // or getAllSymbols() would surface both as if they were two separate
+        // declarations of the same package.
+        const conflictSet = this.conflictedSymbolsByQualifiedName.get(qualifiedName);
+        if (conflictSet) {
+            for (const sym of [...conflictSet]) {
+                if (sym.kind === SysMLElementKind.Package) conflictSet.delete(sym);
+            }
+            conflictSet.add(merged);
+        }
     }
 
     /**
      * Drop `uri`'s own fragment of package `qualifiedName` (on document edit/close)
      * and recompute the merged `symbols` entry from whatever fragments remain;
-     * if none remain, drop the package entirely, matching the plain (non-package)
-     * symbol removal this replaces for package-kind symbols.
+     * if none remain, drop the package entirely -- unless a conflicting
+     * non-package symbol (see `conflictedSymbolsByQualifiedName`) is still
+     * registered under the same qualifiedName, in which case that symbol is
+     * the correct entry to leave behind, the mirror image of
+     * `unregisterPlainSymbol`'s own fallback to a remaining package.
+     * Call this *before* `removeFromConflictTracking` -- the fallback below
+     * reads `conflictedSymbolsByQualifiedName` and needs to see the full
+     * remaining set (the package fragment just removed here is excluded
+     * explicitly, since conflict-tracking hasn't pruned it out yet).
      */
     private unregisterPackageFragment(qualifiedName: string, uri: string): void {
         const fragments = this.packageFragmentsByQualifiedName.get(qualifiedName);
+        const removedFragment = fragments?.get(uri);
         fragments?.delete(uri);
         if (fragments && fragments.size > 0) {
             this.mergePackageFragments(qualifiedName);
         } else {
             this.packageFragmentsByQualifiedName.delete(qualifiedName);
-            this.symbols.delete(qualifiedName);
+            if (this.symbols.get(qualifiedName)?.kind === SysMLElementKind.Package) {
+                const remainingConflicts = [...(this.conflictedSymbolsByQualifiedName.get(qualifiedName) ?? [])]
+                    .filter(s => s !== removedFragment);
+                if (remainingConflicts.length > 0) {
+                    this.symbols.set(qualifiedName, remainingConflicts.at(-1)!);
+                } else {
+                    this.symbols.delete(qualifiedName);
+                }
+            }
         }
     }
 
+    /**
+     * Remove `sym` from `conflictedSymbolsByQualifiedName` (on document
+     * edit/close), and drop the whole conflict entry once fewer than two
+     * same-kind symbols remain under that qualifiedName -- an edit that
+     * resolves a naming conflict (e.g. renaming one of the clashing
+     * declarations) must stop being reported as one. Call this *after*
+     * `unregisterPlainSymbol`/`unregisterPackageFragment`, whose own
+     * `symbols`-re-pointing fallback needs `sym` still present in the set
+     * to correctly exclude just itself, not the whole bookkeeping entry.
+     */
+    private removeFromConflictTracking(sym: SysMLSymbol): void {
+        const conflictSet = this.conflictedSymbolsByQualifiedName.get(sym.qualifiedName);
+        if (!conflictSet) return;
+        conflictSet.delete(sym);
+        const remaining = [...conflictSet];
+        if (remaining.length <= 1 || remaining.every(s => s.kind === SysMLElementKind.Package)) {
+            this.conflictedSymbolsByQualifiedName.delete(sym.qualifiedName);
+        }
+    }
+
+    /**
+     * Remove a non-package symbol (on document edit/close). Only touches
+     * `symbols`' entry for its qualifiedName if `sym` is actually the symbol
+     * currently stored there -- during a naming conflict (see
+     * `conflictedSymbolsByQualifiedName`), `sym` may be the one that lost an
+     * earlier last-write-wins race, in which case `symbols` already holds a
+     * different, still-valid symbol that removing `sym` must not disturb.
+     *
+     * When `sym` *is* the current entry, don't just delete it: the conflict
+     * can resolve back down to "just a legitimately-reopened package" (this
+     * removal was the non-package side of it) or to one remaining same-kind
+     * symbol, either of which is the correct entry to leave behind, the same
+     * way it would be if the conflict had never existed. Call this *before*
+     * `removeFromConflictTracking(sym)` -- the fallback below reads
+     * `conflictedSymbolsByQualifiedName` and excludes `sym` itself
+     * explicitly, since conflict-tracking hasn't pruned it out yet.
+     */
+    private unregisterPlainSymbol(sym: SysMLSymbol): void {
+        if (this.symbols.get(sym.qualifiedName) !== sym) return;
+
+        const packageFragments = this.packageFragmentsByQualifiedName.get(sym.qualifiedName);
+        if (packageFragments && packageFragments.size > 0) {
+            this.mergePackageFragments(sym.qualifiedName);
+            return;
+        }
+        const remainingConflicts = [...(this.conflictedSymbolsByQualifiedName.get(sym.qualifiedName) ?? [])]
+            .filter(s => s !== sym);
+        if (remainingConflicts.length > 0) {
+            this.symbols.set(sym.qualifiedName, remainingConflicts.at(-1)!);
+            return;
+        }
+        this.symbols.delete(sym.qualifiedName);
+    }
+
     private registerSymbol(symbol: SysMLSymbol, uri: string, scope: Scope): void {
+        const existing = this.symbols.get(symbol.qualifiedName);
+        const bothPackages = symbol.kind === SysMLElementKind.Package && existing?.kind === SysMLElementKind.Package;
+        if (existing && existing !== symbol && !bothPackages) {
+            let conflictSet = this.conflictedSymbolsByQualifiedName.get(symbol.qualifiedName);
+            if (!conflictSet) {
+                conflictSet = new Set();
+                this.conflictedSymbolsByQualifiedName.set(symbol.qualifiedName, conflictSet);
+            }
+            conflictSet.add(existing);
+            conflictSet.add(symbol);
+        }
         this.symbols.set(symbol.qualifiedName, symbol);
         if (symbol.kind === SysMLElementKind.Package) {
             let fragments = this.packageFragmentsByQualifiedName.get(symbol.qualifiedName);

@@ -2,7 +2,7 @@ import { Diagnostic, DiagnosticSeverity } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
 import { getLibraryPackageNames, resolveLibraryType } from '../library/libraryIndex.js';
 import { SysMLModelProvider } from '../model/sysmlModelProvider.js';
-import { NamespaceResolver, SymbolIndexes, buildSymbolIndexes } from '../symbols/namespaceResolver.js';
+import { NamespaceResolver, SymbolIndexes, buildSymbolIndexes, findConflictedQualifiedNames } from '../symbols/namespaceResolver.js';
 import { SysMLElementKind, SysMLSymbol, isDefinition } from '../symbols/sysmlElements.js';
 import { resolveTypeName } from '../symbols/typeResolution.js';
 import { stripComments } from '../utils/identUtils.js';
@@ -125,6 +125,7 @@ export class SemanticValidator {
         }
 
         diagnostics.push(...this.checkDuplicateDefinitions(symbols));
+        diagnostics.push(...this.checkAmbiguousNamespaceName(symbols, allSymbols));
         diagnostics.push(...this.checkUnusedDefinitions(allSymbols, uri));
         diagnostics.push(...this.checkRedefinitionMultiplicity(symbols, indexes, text));
         diagnostics.push(...this.checkPortCompatibility(text, uri, indexes));
@@ -1312,6 +1313,51 @@ export class SemanticValidator {
                     }
                 }
             }
+        }
+
+        return diagnostics;
+    }
+
+    /**
+     * Rule: Ambiguous namespace name.
+     *
+     * A qualifiedName claimed by more than one symbol *of the same kind*
+     * (excluding Package, which may be legitimately reopened across files)
+     * is a genuine naming conflict per KerML's `Membership.isDistinguishableFrom`
+     * (v1.0 §8.3.2.4.4): two memberships are distinguishable -- not a
+     * conflict -- when their element kinds don't conform to each other,
+     * regardless of a name collision. A `package A` and an unrelated
+     * `part def A` sharing a name is therefore valid SysML and NOT flagged
+     * here; two `part def A` (or any other matching pair) sharing a name is
+     * (see `findConflictedQualifiedNames`'s own doc comment for the full
+     * rule and its "same kind" approximation of metaclass conformance).
+     * Workspace-wide (unlike `checkDuplicateDefinitions`, which only sees
+     * one document's own symbols), so a conflict spanning two files is
+     * still caught. The name resolver treats the whole conflicted
+     * qualifiedName as unresolvable while this holds (`buildSymbolIndexes`),
+     * so this is also the diagnostic explaining *why* references through
+     * that name -- including from inside one of the conflicting
+     * declarations to its own child -- are unexpectedly unresolved.
+     */
+    private checkAmbiguousNamespaceName(symbols: SysMLSymbol[], allSymbols: SysMLSymbol[]): Diagnostic[] {
+        const diagnostics: Diagnostic[] = [];
+        const conflicts = findConflictedQualifiedNames(allSymbols);
+        if (conflicts.size === 0) return diagnostics;
+
+        for (const symbol of symbols) {
+            const conflicting = conflicts.get(symbol.qualifiedName);
+            if (!conflicting) continue;
+
+            const others = conflicting.filter(s => s !== symbol);
+            const otherKinds = [...new Set(others.map(s => s.kind))].join(', ');
+            diagnostics.push({
+                severity: DiagnosticSeverity.Error,
+                range: symbol.selectionRange,
+                message: `Ambiguous name '${symbol.name}': also declared as ${otherKinds} elsewhere in the workspace. Only a package may be reopened under the same name; rename one of these declarations.`,
+                source: 'sysml',
+                code: 'ambiguous-namespace-name',
+                data: { name: symbol.name },
+            });
         }
 
         return diagnostics;

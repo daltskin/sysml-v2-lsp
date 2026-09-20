@@ -2209,7 +2209,276 @@ package User {
             });
         });
     });
+
+    describe('ambiguous namespace name conflicts (same-kind symbols sharing a qualifiedName)', () => {
+        // Per KerML's own well-formedness rule (`Membership.isDistinguishableFrom`,
+        // v1.0 §8.3.2.4.4): two memberships ARE distinguishable -- i.e. NOT a
+        // conflict -- when their element kinds don't conform to each other,
+        // regardless of a name collision. A `package A` and an unrelated
+        // `part def A` sharing a bare name is therefore VALID SysML (see the
+        // "different kinds" describe block below); a genuine conflict only
+        // exists between elements of the *same* (conforming) kind, e.g. two
+        // `part def A`. `buildSymbolIndexes` treats the whole qualifiedName as
+        // unresolvable while such a same-kind conflict exists, and
+        // `checkAmbiguousNamespaceName` flags each conflicting declaration
+        // with an `ambiguous-namespace-name` diagnostic explaining why.
+        it('does not silently merge two same-kind declarations sharing a name across files, and flags both', async () => {
+            const partDefA1Text = `
+part def A {
+    part def B;
+}
+`;
+            const partDefA2Text = `
+part def A {
+    part def B2;
+}
+`;
+            const externalText = `
+package External {
+    import A::B;
+    import A::B2;
+    part usesB : B;
+    part usesB2 : B2;
+}
+`;
+            const entries = [
+                { uri: 'file:///partdef-a-1.sysml', text: partDefA1Text },
+                { uri: 'file:///partdef-a-2.sysml', text: partDefA2Text },
+                { uri: 'file:///external.sysml', text: externalText },
+            ];
+
+            const externalDiags = await getSemanticDiagnosticsForUri(entries, 'file:///external.sysml');
+            const unresolvedInExternal = externalDiags.filter(d => d.code === 'unresolved-type');
+            // Neither B (owned by the first `part def A`) nor B2 (owned by the
+            // second) should resolve through the ambiguous "A" -- both must be
+            // flagged, not one silently picked and the other correctly rejected.
+            expect(unresolvedInExternal.some(d => d.message.includes("'B'"))).toBe(true);
+            expect(unresolvedInExternal.some(d => d.message.includes("'B2'"))).toBe(true);
+
+            const partDefA1Diags = await getSemanticDiagnosticsForUri(entries, 'file:///partdef-a-1.sysml');
+            const partDefA2Diags = await getSemanticDiagnosticsForUri(entries, 'file:///partdef-a-2.sysml');
+            const ambiguousInA1 = partDefA1Diags.filter(d => d.code === 'ambiguous-namespace-name');
+            const ambiguousInA2 = partDefA2Diags.filter(d => d.code === 'ambiguous-namespace-name');
+            // The conflict spans two different files -- each file's own
+            // declaration of "A" must be flagged when that file is validated,
+            // not just whichever file happens to be validated together with
+            // the other (workspace-wide, unlike the per-file duplicate check).
+            expect(ambiguousInA1.some(d => d.message.includes("'A'"))).toBe(true);
+            expect(ambiguousInA2.some(d => d.message.includes("'A'"))).toBe(true);
+        });
+
+        it('flags the conflict when both same-kind conflicting declarations are in the same file', async () => {
+            const text = `
+part def A {
+    part def B;
+}
+part def A {
+    part def B2;
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const ambiguous = diags.filter(d => d.code === 'ambiguous-namespace-name');
+            expect(ambiguous.length).toBe(2);
+        });
+
+        it('does not flag a legitimate package reopened across files as a conflict', async () => {
+            const pkgFile1 = `
+package Shared {
+    part def PartA;
+}
+`;
+            const pkgFile2 = `
+package Shared {
+    part def PartB;
+}
+`;
+            const diags = await getSemanticDiagnosticsForUri(
+                [{ uri: 'file:///shared-1.sysml', text: pkgFile1 }, { uri: 'file:///shared-2.sysml', text: pkgFile2 }],
+                'file:///shared-1.sysml',
+            );
+            expect(diags.filter(d => d.code === 'ambiguous-namespace-name')).toHaveLength(0);
+            expect(diags.filter(d => d.code === 'unresolved-type')).toHaveLength(0);
+        });
+
+        it('starts flagging the conflict only once an edit introduces a same-kind collision, and stops once the edit is undone', async () => {
+            // Incremental-update test, mirroring the split-package-fragment
+            // regression test above: two files that don't conflict at first
+            // (part def A, package B -- different, non-conforming kinds, both
+            // fine per KerML's own rule), then B is edited to redeclare itself
+            // as `part def A` (now the SAME kind as the existing declaration,
+            // same name) -- the conflict, and the resulting unresolved
+            // reference, must appear only after that edit, and clear again
+            // once the edit is reverted.
+            const { DocumentManager } = await import('../../server/src/documentManager.js');
+            const { SemanticValidator } = await import('../../server/src/providers/semanticValidator.js');
+
+            const uriA = 'file:///a.sysml';
+            const uriB = 'file:///b.sysml';
+            const aText = `
+part def A {
+    part def X;
+}
+`;
+            const bTextNoConflict = `
+package B {
+    part def Y;
+}
+`;
+            const bTextConflicting = `
+part def A {
+    part def Y;
+}
+`;
+            const externalUri = 'file:///external.sysml';
+            const externalText = `
+package External {
+    import A::X;
+    part usesX : X;
+}
+`;
+
+            const docManager = new DocumentManager();
+            docManager.parse(await makeDoc(aText, uriA));
+            docManager.parse(await makeDoc(bTextNoConflict, uriB));
+            docManager.parse(await makeDoc(externalText, externalUri));
+            const validator = new SemanticValidator(docManager);
+
+            const beforeDiags = validator.validate(externalUri);
+            expect(beforeDiags.filter(d => d.code === 'unresolved-type')).toHaveLength(0);
+            const beforeAmbiguous = validator.validate(uriA).filter(d => d.code === 'ambiguous-namespace-name');
+            expect(beforeAmbiguous).toHaveLength(0);
+
+            const mod = await import('../../server/node_modules/vscode-languageserver-textdocument/lib/esm/main.js');
+            docManager.parse(mod.TextDocument.create(uriB, 'sysml', 2, bTextConflicting));
+
+            const afterEditDiags = validator.validate(externalUri);
+            expect(afterEditDiags.some(d => d.code === 'unresolved-type' && d.message.includes("'X'"))).toBe(true);
+            const afterEditAmbiguous = validator.validate(uriA).filter(d => d.code === 'ambiguous-namespace-name');
+            expect(afterEditAmbiguous.some(d => d.message.includes("'A'"))).toBe(true);
+
+            docManager.parse(mod.TextDocument.create(uriB, 'sysml', 3, bTextNoConflict));
+
+            const afterRevertDiags = validator.validate(externalUri);
+            expect(afterRevertDiags.filter(d => d.code === 'unresolved-type')).toHaveLength(0);
+            const afterRevertAmbiguous = validator.validate(uriA).filter(d => d.code === 'ambiguous-namespace-name');
+            expect(afterRevertAmbiguous).toHaveLength(0);
+        });
+    });
+
+    describe('non-conflicting different-kind symbols sharing a qualifiedName (valid per KerML)', () => {
+        // The counterpart to the describe block above: since `package A` and
+        // an unrelated `part def A` don't conform to each other per KerML's
+        // Membership.isDistinguishableFrom, they're valid siblings under the
+        // same bare name, NOT a conflict -- both must remain independently
+        // resolvable, and neither should be flagged.
+        it('resolves through both declarations, and flags neither, when a package and an unrelated definition share a name', async () => {
+            const pkgAText = `
+package A {
+    part def B;
+}
+`;
+            const partDefAText = `
+part def A {
+    part def B2;
+}
+`;
+            const externalText = `
+package External {
+    import A::B;
+    import A::B2;
+    part usesB : B;
+    part usesB2 : B2;
+}
+`;
+            const entries = [
+                { uri: 'file:///pkg-a.sysml', text: pkgAText },
+                { uri: 'file:///partdef-a.sysml', text: partDefAText },
+                { uri: 'file:///external.sysml', text: externalText },
+            ];
+
+            const externalDiags = await getSemanticDiagnosticsForUri(entries, 'file:///external.sysml');
+            expect(externalDiags.filter(d => d.code === 'unresolved-type')).toHaveLength(0);
+            expect(externalDiags.filter(d => d.code === 'ambiguous-namespace-name')).toHaveLength(0);
+
+            const pkgADiags = await getSemanticDiagnosticsForUri(entries, 'file:///pkg-a.sysml');
+            const partDefADiags = await getSemanticDiagnosticsForUri(entries, 'file:///partdef-a.sysml');
+            expect(pkgADiags.filter(d => d.code === 'ambiguous-namespace-name')).toHaveLength(0);
+            expect(partDefADiags.filter(d => d.code === 'ambiguous-namespace-name')).toHaveLength(0);
+        });
+
+        it('brings in members from both declarations via a wildcard import (import A::*;)', async () => {
+            // Unlike the exact-membership imports above, a wildcard import
+            // doesn't name which declaration's member it wants -- it must
+            // still pick up both B (owned by the package) and B2 (owned by
+            // the part def), since `getResolvedMembers("A")` pools every
+            // owned child under that qualifiedName regardless of which of
+            // the two (valid, distinguishable) "A" declarations it came from.
+            const pkgAText = `
+package A {
+    part def B;
+}
+`;
+            const partDefAText = `
+part def A {
+    part def B2;
+}
+`;
+            const externalText = `
+package External {
+    import A::*;
+    part usesB : B;
+    part usesB2 : B2;
+}
+`;
+            const diags = await getSemanticDiagnosticsForUri(
+                [
+                    { uri: 'file:///pkg-a.sysml', text: pkgAText },
+                    { uri: 'file:///partdef-a.sysml', text: partDefAText },
+                    { uri: 'file:///external.sysml', text: externalText },
+                ],
+                'file:///external.sysml',
+            );
+            expect(diags.filter(d => d.code === 'unresolved-type')).toHaveLength(0);
+        });
+
+        it('does not flag an unresolved reference when a wildcard import pools a same-named member from both declarations', async () => {
+            // Sharper edge case: package A and part def A each separately own
+            // a member also named "C" (a part def and an attribute def,
+            // respectively). `import A::*;` pools both under the same name --
+            // which one an external reference to "C" actually ends up typed
+            // as is not asserted here (that's a real, separate latent
+            // ambiguity this test doesn't attempt to pin down), only that
+            // resolution doesn't fail outright.
+            const pkgAText = `
+package A {
+    part def C;
+}
+`;
+            const partDefAText = `
+part def A {
+    attribute def C;
+}
+`;
+            const externalText = `
+package External {
+    import A::*;
+    part usesC : C;
+}
+`;
+            const diags = await getSemanticDiagnosticsForUri(
+                [
+                    { uri: 'file:///pkg-a.sysml', text: pkgAText },
+                    { uri: 'file:///partdef-a.sysml', text: partDefAText },
+                    { uri: 'file:///external.sysml', text: externalText },
+                ],
+                'file:///external.sysml',
+            );
+            expect(diags.filter(d => d.code === 'unresolved-type')).toHaveLength(0);
+        });
+    });
 });
+
+
 
 
 

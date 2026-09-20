@@ -992,6 +992,137 @@ package Test {
             expect(unresolvedDiag).toBeUndefined();
         });
 
+        it('should combine imports from every fragment of a package split across files (parity with SemanticValidator)', async () => {
+            // extractSemanticDiagnostics shares buildSymbolIndexes/resolveTypeName
+            // with SemanticValidator, so this fix should already apply here --
+            // this test exists to actually confirm that through the sysml/model
+            // path, not just assume it from shared code.
+            const pkgBFile1 = `
+package PkgB {
+    import PkgA::Part3;
+    part def Part1;
+}
+`;
+            const pkgBFile2 = `
+package PkgB {
+    part usesPart3 : Part3;
+}
+`;
+            const pkgAText = `
+package PkgA {
+    part def Part3;
+}
+`;
+            const model = await getModelForDocuments(
+                [
+                    { uri: 'file:///pkg-a.sysml', text: pkgAText },
+                    { uri: 'file:///pkg-b-1.sysml', text: pkgBFile1 },
+                    { uri: 'file:///pkg-b-2.sysml', text: pkgBFile2 },
+                ],
+                'file:///pkg-b-2.sysml',
+                ['diagnostics'],
+            );
+            const unresolvedDiag = model.diagnostics!.find(d => d.code === 'unresolved-type');
+            expect(unresolvedDiag).toBeUndefined();
+        });
+
+        it('should flag an ambiguous namespace name (two same-kind definitions sharing a qualifiedName)', async () => {
+            // Per KerML's Membership.isDistinguishableFrom (v1.0 §8.3.2.4.4):
+            // two memberships are distinguishable -- NOT a conflict -- when
+            // their element kinds don't conform to each other, regardless of
+            // a name collision. A genuine conflict needs the SAME (conforming)
+            // kind on both sides, e.g. two `part def A` -- see the "package vs.
+            // unrelated definition" test below for the valid, non-conflicting
+            // counterpart.
+            const partDefA1Text = `
+part def A {
+    part def B;
+}
+`;
+            const partDefA2Text = `
+part def A {
+    part def B2;
+}
+`;
+            const externalText = `
+package External {
+    import A::B;
+    part usesB : B;
+}
+`;
+            const entries = [
+                { uri: 'file:///partdef-a-1.sysml', text: partDefA1Text },
+                { uri: 'file:///partdef-a-2.sysml', text: partDefA2Text },
+                { uri: 'file:///external.sysml', text: externalText },
+            ];
+
+            // The unresolved-type consequence propagates here too (shared
+            // resolution), but the *explanation* -- the diagnostic pointing at
+            // the conflicting declarations themselves -- needed its own port
+            // from SemanticValidator, since extractSemanticDiagnostics only
+            // ever emitted 'unresolved-type'/'empty-enum' before.
+            const externalModel = await getModelForDocuments(entries, 'file:///external.sysml', ['diagnostics']);
+            const unresolvedDiag = externalModel.diagnostics!.find(d => d.code === 'unresolved-type');
+            expect(unresolvedDiag).toBeDefined();
+            expect(unresolvedDiag!.message).toContain('B');
+
+            const partDefA1Model = await getModelForDocuments(entries, 'file:///partdef-a-1.sysml', ['diagnostics']);
+            const ambiguousDiag = partDefA1Model.diagnostics!.find(d => d.code === 'ambiguous-namespace-name');
+            expect(ambiguousDiag).toBeDefined();
+            expect(ambiguousDiag!.message).toContain("'A'");
+        });
+
+        it('should NOT flag a package and an unrelated definition sharing a qualifiedName (valid per KerML)', async () => {
+            const pkgAText = `
+package A {
+    part def B;
+}
+`;
+            const partDefAText = `
+part def A {
+    part def B2;
+}
+`;
+            const externalText = `
+package External {
+    import A::B;
+    import A::B2;
+    part usesB : B;
+    part usesB2 : B2;
+}
+`;
+            const model = await getModelForDocuments(
+                [
+                    { uri: 'file:///pkg-a.sysml', text: pkgAText },
+                    { uri: 'file:///partdef-a.sysml', text: partDefAText },
+                    { uri: 'file:///external.sysml', text: externalText },
+                ],
+                'file:///external.sysml',
+                ['diagnostics'],
+            );
+            expect(model.diagnostics!.filter(d => d.code === 'unresolved-type')).toHaveLength(0);
+            expect(model.diagnostics!.filter(d => d.code === 'ambiguous-namespace-name')).toHaveLength(0);
+        });
+
+        it('should NOT flag a legitimate package reopened across files as ambiguous', async () => {
+            const pkgFile1 = `
+package Shared {
+    part def PartA;
+}
+`;
+            const pkgFile2 = `
+package Shared {
+    part def PartB;
+}
+`;
+            const model = await getModelForDocuments(
+                [{ uri: 'file:///shared-1.sysml', text: pkgFile1 }, { uri: 'file:///shared-2.sysml', text: pkgFile2 }],
+                'file:///shared-1.sysml',
+                ['diagnostics'],
+            );
+            expect(model.diagnostics!.filter(d => d.code === 'ambiguous-namespace-name')).toHaveLength(0);
+        });
+
         it('should include diagnostic range', async () => {
             const model = await getModelForText(`
 package Test {
