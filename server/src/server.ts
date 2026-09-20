@@ -412,10 +412,12 @@ connection.onInitialized(() => {
     spawnParseWorker();
 
     if (isWorkspaceFile && workspaceRoots.length > 0) {
+        documentManager.setWorkspaceScanComplete(false);
         scanWorkspaceFoldersAsync(workspaceRoots).then(({ fileCount, scanMs }) => {
             connection.console.log(
                 `Workspace scan: pre-parsed ${fileCount} .sysml files in ${scanMs} ms`
             );
+            documentManager.setWorkspaceScanComplete(true);
             // Re-validate open documents now that cross-file symbols are available
             revalidateOpenDocuments();
         });

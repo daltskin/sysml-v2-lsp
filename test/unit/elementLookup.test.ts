@@ -6,52 +6,54 @@
  */
 import { describe, expect, it } from 'vitest';
 
-/** Create a TextDocument from raw SysML text */
-async function makeDoc(text: string, uri = 'test://test.sysml') {
-    const { TextDocument } = await import('vscode-languageserver-textdocument');
-    return TextDocument.create(uri, 'sysml', 1, text);
-}
-
-/** Parse multiple texts into the same DocumentManager, mirroring a multi-file workspace */
-async function setupMulti(entries: { text: string; uri: string }[]) {
-    const { DocumentManager } = await import('../../server/src/documentManager.js');
-    const dm = new DocumentManager();
-    for (const { text, uri } of entries) {
-        const doc = await makeDoc(text, uri);
-        dm.parse(doc);
-    }
-    return dm;
-}
-
 describe('ElementLookupProvider', () => {
+
+    /** Helper: Create a TextDocument from raw SysML text */
+    async function makeDoc(text: string, uri = 'test://test.sysml', version = 1) {
+        const { TextDocument } = await import('vscode-languageserver-textdocument');
+        return TextDocument.create(uri, 'sysml', version, text);
+    }
+
+    /** Helper: Parse multiple texts into the same DocumentManager, mirroring a multi-file workspace */
+    async function setupMulti(entries: { text: string; uri: string }[]) {
+        const { DocumentManager } = await import('../../server/src/documentManager.js');
+        const dm = new DocumentManager();
+        for (const { text, uri } of entries) {
+            const doc = await makeDoc(text, uri);
+            dm.parse(doc);
+        }
+        return dm;
+    }
+
     it('returns an empty array for a name that does not exist', async () => {
         const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
 
-        const text = `part def Wheel;`;
+        const text = `
+part def Wheel;`;
 
         const dm = await setupMulti([{ uri: 'test://a.sysml', text }]);
         const provider = new ElementLookupProvider(dm);
 
         const { results } = provider.elementLookup({ queries: [{ name: 'Engine' }] });
 
-        expect(results).toEqual([[]]);
+        expect(results).toEqual({ Engine: [] });
     });
 
     it('finds exactly one match for a bare name that exists once', async () => {
         const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
 
-        const text = `part def Wheel;`;
+        const text = `
+part def Wheel;`;
 
         const dm = await setupMulti([{ uri: 'test://a.sysml', text }]);
         const provider = new ElementLookupProvider(dm);
 
         const { results } = provider.elementLookup({ queries: [{ name: 'Wheel' }] });
 
-        expect(results).toHaveLength(1);
-        expect(results[0]).toHaveLength(1);
-        expect(results[0][0].qualifiedName).toBe('Wheel');
-        expect(results[0][0].type).toBe('part def');
-        expect(results[0][0].uri).toBe('test://a.sysml');
+        expect(results.Wheel).toHaveLength(1);
+        expect(results.Wheel[0].qualifiedName).toBe('Wheel');
+        expect(results.Wheel[0].type).toBe('part def');
+        expect(results.Wheel[0].uri).toBe('test://a.sysml');
     });
 
     it('finds a match at any nesting depth, not just top-level', async () => {
@@ -67,8 +69,8 @@ package A {
 
         const { results } = provider.elementLookup({ queries: [{ name: 'Wheel' }] });
 
-        expect(results[0]).toHaveLength(1);
-        expect(results[0][0].qualifiedName).toBe('A::Wheel');
+        expect(results.Wheel).toHaveLength(1);
+        expect(results.Wheel[0].qualifiedName).toBe('A::Wheel');
     });
 
     it('finds every match for a bare name declared both globally and nested in a package', async () => {
@@ -85,17 +87,19 @@ package A {
 
         const { results } = provider.elementLookup({ queries: [{ name: 'Wheel' }] });
 
-        expect(results[0]).toHaveLength(2);
-        expect(new Set(results[0].map(m => m.qualifiedName))).toEqual(new Set(['Wheel', 'A::Wheel']));
+        expect(results.Wheel).toHaveLength(2);
+        expect(new Set(results.Wheel.map(m => m.qualifiedName))).toEqual(new Set(['Wheel', 'A::Wheel']));
     });
 
     it('finds an exact match by full qualified name, distinguishing same-named elements in different packages', async () => {
         const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
 
-        const textA = `package PkgA {
+        const textA = `
+package PkgA {
     part def Wheel;
 }`;
-        const textB = `package PkgB {
+        const textB = `
+package PkgB {
     part def Wheel;
 }`;
 
@@ -107,9 +111,9 @@ package A {
 
         const { results } = provider.elementLookup({ queries: [{ name: 'PkgA::Wheel' }] });
 
-        expect(results[0]).toHaveLength(1);
-        expect(results[0][0].qualifiedName).toBe('PkgA::Wheel');
-        expect(results[0][0].uri).toBe('test://a.sysml');
+        expect(results['PkgA::Wheel']).toHaveLength(1);
+        expect(results['PkgA::Wheel'][0].qualifiedName).toBe('PkgA::Wheel');
+        expect(results['PkgA::Wheel'][0].uri).toBe('test://a.sysml');
     });
 
     it('returns no results for a qualified-name query when the declaration is actually global, not in that package', async () => {
@@ -122,13 +126,15 @@ package A {
 
         const { results } = provider.elementLookup({ queries: [{ name: 'A::Wheel' }] });
 
-        expect(results).toEqual([[]]);
+        expect(results).toEqual({ 'A::Wheel': [] });
     });
 
-    it('finds a duplicate top-level name declared in two different files', async () => {
+    it('returns two separate matches for a genuine same-name collision, not a "duplicate" label', async () => {
         const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
 
-        const text = `part def Wheel;`;
+        const text = `
+part def Wheel;`;
+
         const dm = await setupMulti([
             { uri: 'test://a.sysml', text },
             { uri: 'test://b.sysml', text },
@@ -137,8 +143,8 @@ package A {
 
         const { results } = provider.elementLookup({ queries: [{ name: 'Wheel' }] });
 
-        expect(results[0]).toHaveLength(2);
-        expect(new Set(results[0].map(m => m.uri))).toEqual(new Set(['test://a.sysml', 'test://b.sysml']));
+        expect(results.Wheel).toHaveLength(2);
+        expect(new Set(results.Wheel.map(m => m.uri))).toEqual(new Set(['test://a.sysml', 'test://b.sysml']));
     });
 
     // SysML v2 identifiers are case-sensitive -- a definition and a same-named-but-case usage
@@ -155,11 +161,11 @@ part wheel : Wheel;`;
 
         const { results } = provider.elementLookup({ queries: [{ name: 'Wheel' }, { name: 'wheel' }] });
 
-        expect(results[0].map(m => m.qualifiedName)).toEqual(['Wheel']);
-        expect(results[1].map(m => m.qualifiedName)).toEqual(['wheel']);
+        expect(results.Wheel.map(m => m.qualifiedName)).toEqual(['Wheel']);
+        expect(results.wheel.map(m => m.qualifiedName)).toEqual(['wheel']);
     });
 
-    it('batches multiple queries in one request, in order', async () => {
+    it('batches multiple queries in one request, keyed by each query\'s name', async () => {
         const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
 
         const text = `
@@ -173,9 +179,248 @@ part def Engine;`;
             queries: [{ name: 'Wheel' }, { name: 'DoesNotExist' }, { name: 'Engine' }],
         });
 
-        expect(results).toHaveLength(3);
-        expect(results[0].map(m => m.qualifiedName)).toEqual(['Wheel']);
-        expect(results[1]).toEqual([]);
-        expect(results[2].map(m => m.qualifiedName)).toEqual(['Engine']);
+        expect(Object.keys(results)).toEqual(['Wheel', 'DoesNotExist', 'Engine']);
+        expect(results.Wheel.map(m => m.qualifiedName)).toEqual(['Wheel']);
+        expect(results.DoesNotExist).toEqual([]);
+        expect(results.Engine.map(m => m.qualifiedName)).toEqual(['Engine']);
+    });
+
+    it('restricts a bare-name match to the given scope, excluding same-named elements outside it', async () => {
+        const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+
+        const text = `
+part def Wheel;
+package A {
+    part def Wheel;
+}
+package B {
+    part def Wheel;
+}`;
+
+        const dm = await setupMulti([{ uri: 'test://a.sysml', text }]);
+        const provider = new ElementLookupProvider(dm);
+
+        const { results } = provider.elementLookup({ queries: [{ name: 'Wheel', scope: 'A' }] });
+
+        expect(results.Wheel).toHaveLength(1);
+        expect(results.Wheel[0].qualifiedName).toBe('A::Wheel');
+    });
+
+    it('treats an empty scope the same as no scope -- searches the whole workspace', async () => {
+        const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+
+        const text = `
+part def Wheel;
+package A {
+    part def Wheel;
+}`;
+
+        const dm = await setupMulti([{ uri: 'test://a.sysml', text }]);
+        const provider = new ElementLookupProvider(dm);
+
+        const { results } = provider.elementLookup({ queries: [{ name: 'Wheel', scope: '' }] });
+
+        expect(results.Wheel).toHaveLength(2);
+    });
+
+    it('finds a match nested arbitrarily deep under scope, not just direct children', async () => {
+        const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+
+        const text = `
+package A {
+    package Inner {
+        part def Wheel;
+    }
+}`;
+
+        const dm = await setupMulti([{ uri: 'test://a.sysml', text }]);
+        const provider = new ElementLookupProvider(dm);
+
+        const { results } = provider.elementLookup({ queries: [{ name: 'Wheel', scope: 'A' }] });
+
+        expect(results.Wheel).toHaveLength(1);
+        expect(results.Wheel[0].qualifiedName).toBe('A::Inner::Wheel');
+    });
+
+    it('find match if name is a part of the qualified name, but for a specific scope', async () => {
+        const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+
+        const text = `
+package A {
+    part def Wheel;
+}
+package X {
+    package A {
+        part def Wheel;
+    }
+}`;
+
+        const dm = await setupMulti([{ uri: 'test://a.sysml', text }]);
+        const provider = new ElementLookupProvider(dm);
+
+        const { results } = provider.elementLookup({ queries: [{ name: 'A::Wheel', scope: 'X' }] });
+
+        expect(results['A::Wheel']).toHaveLength(1);
+        expect(results['A::Wheel'][0].qualifiedName).toBe('X::A::Wheel');
+    });
+
+    it('find match if name is a part of the qualified name, without scope', async () => {
+        const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+
+        const text = `
+package A {
+    part def Wheel;
+}
+package X {
+    package A {
+        part def Wheel;
+    }
+}`;
+
+        const dm = await setupMulti([{ uri: 'test://a.sysml', text }]);
+        const provider = new ElementLookupProvider(dm);
+
+        const { results } = provider.elementLookup({ queries: [{ name: 'A::Wheel' }] });
+
+        expect(results['A::Wheel']).toHaveLength(2);
+        expect(results['A::Wheel'][0].qualifiedName).toBe('A::Wheel');
+        expect(results['A::Wheel'][1].qualifiedName).toBe('X::A::Wheel');
+    });
+
+    it('ignores a scope that is already the leading segment of a qualified name, instead of doubling it up', async () => {
+        const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+
+        const text = `
+package A {
+    part def Wheel;
+}
+package X {
+    package A {
+        part def Wheel;
+    }
+}`;
+
+        const dm = await setupMulti([{ uri: 'test://a.sysml', text }]);
+        const provider = new ElementLookupProvider(dm);
+
+        // scope "A" is already the leading segment of name "A::Wheel" -- prepending it would
+        // build the nonsensical target "A::A::Wheel", which must not happen. Instead this must
+        // behave exactly like the no-scope case: match "A::Wheel" itself and, as a trailing
+        // segment, "X::A::Wheel" too.
+        const { results } = provider.elementLookup({ queries: [{ name: 'A::Wheel', scope: 'A' }] });
+
+        expect(results['A::Wheel']).toHaveLength(2);
+        expect(results['A::Wheel'][0].qualifiedName).toBe('A::Wheel');
+        expect(results['A::Wheel'][1].qualifiedName).toBe('X::A::Wheel');
+    });
+
+    it('matches a declared <shortName> alias only when the query is itself bracketed', async () => {
+        const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+
+        const text = `
+part def <whl> Wheel;`;
+
+        const dm = await setupMulti([{ uri: 'test://a.sysml', text }]);
+        const provider = new ElementLookupProvider(dm);
+
+        const { results } = provider.elementLookup({
+            queries: [{ name: '<whl>' }, { name: 'Wheel' }, { name: 'whl' }],
+        });
+
+        expect(results['<whl>']).toHaveLength(1);
+        expect(results['<whl>'][0].qualifiedName).toBe('Wheel');
+        expect(results.Wheel).toHaveLength(1);
+        expect(results.Wheel[0].qualifiedName).toBe('Wheel');
+        // An unbracketed 'whl' is a *long*-name query -- it must not fall back to the short name.
+        expect(results.whl).toEqual([]);
+    });
+
+    it('does not double-count a declaration reachable through an import in another file', async () => {
+        const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+
+        const textA = `
+package PkgA {
+    part def Wheel;
+}`;
+        const textB = `
+package PkgB {
+    import PkgA::*;
+}`;
+
+        const dm = await setupMulti([
+            { uri: 'test://a.sysml', text: textA },
+            { uri: 'test://b.sysml', text: textB },
+        ]);
+        const provider = new ElementLookupProvider(dm);
+
+        const { results } = provider.elementLookup({ queries: [{ name: 'PkgA::Wheel' }] });
+
+        expect(results['PkgA::Wheel']).toHaveLength(1);
+    });
+
+    it('reflects an element added via an unsaved edit (no save required)', async () => {
+        const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+        const { TextDocument } = await import('vscode-languageserver-textdocument');
+
+        const text = `
+part def Wheel;`;
+
+        const dm = await setupMulti([{ uri: 'test://a.sysml', text }]);
+        const provider = new ElementLookupProvider(dm);
+
+        expect(provider.elementLookup({ queries: [{ name: 'Engine' }] }).results.Engine).toEqual([]);
+
+        // Simulate a didChange: same URI, bumped version, new content, never saved to disk.
+        const edited = TextDocument.create('test://a.sysml', 'sysml', 2, `part def Wheel;\npart def Engine;`);
+        dm.parse(edited);
+
+        const { results } = provider.elementLookup({ queries: [{ name: 'Engine' }] });
+        expect(results.Engine).toHaveLength(1);
+    });
+
+    it('reflects an element removed via an unsaved edit', async () => {
+        const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+        const { TextDocument } = await import('vscode-languageserver-textdocument');
+
+        const text = `
+part def Wheel;
+part def Engine;`;
+
+        const dm = await setupMulti([{ uri: 'test://a.sysml', text }]);
+        const provider = new ElementLookupProvider(dm);
+
+        expect(provider.elementLookup({ queries: [{ name: 'Engine' }] }).results.Engine).toHaveLength(1);
+
+        const edited = TextDocument.create('test://a.sysml', 'sysml', 2, `part def Wheel;`);
+        dm.parse(edited);
+
+        const { results } = provider.elementLookup({ queries: [{ name: 'Engine' }] });
+        expect(results.Engine).toEqual([]);
+    });
+
+    it('reports indexingComplete: true once the (single-document, non-workspace) scan has nothing pending', async () => {
+        const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+
+        const text = `
+part def Wheel;`;
+
+        const dm = await setupMulti([{ uri: 'test://a.sysml', text }]);
+        const provider = new ElementLookupProvider(dm);
+
+        const { indexingComplete } = provider.elementLookup({ queries: [{ name: 'Wheel' }] });
+        expect(indexingComplete).toBe(true);
+    });
+
+    it('reports indexingComplete: false while a workspace scan is in flight, so an empty result is not mistaken for "doesn\'t exist"', async () => {
+        const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+        const { DocumentManager } = await import('../../server/src/documentManager.js');
+
+        const dm = new DocumentManager();
+        dm.setWorkspaceScanComplete(false);
+        const provider = new ElementLookupProvider(dm);
+
+        const { results, indexingComplete } = provider.elementLookup({ queries: [{ name: 'Wheel' }] });
+        expect(indexingComplete).toBe(false);
+        expect(results.Wheel).toEqual([]);
     });
 });
