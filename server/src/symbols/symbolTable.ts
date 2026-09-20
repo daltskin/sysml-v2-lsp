@@ -819,7 +819,7 @@ export class SymbolTable {
         // `filter` (§7.5.4), by contrast, is grammar-restricted to package
         // bodies only (`elementFilterMember` is a `packageBodyElement`
         // alternative, with no equivalent in `definitionBodyItem`).
-        const importTargets = (isPackage || isDefinition(kind) || isUsageKind(kind)) ? this.extractImportTargets(ctx) : undefined;
+        const importTargets = (isPackage || isDefinition(kind) || isUsageKind(kind)) ? this.extractImportTargets(ctx, kind) : undefined;
         const filterConditions = isPackage ? this.extractPackageFilterConditions(ctx) : undefined;
 
         return {
@@ -1518,21 +1518,49 @@ export class SymbolTable {
      * apply generically to packages, definitions and usages" -- an
      * `import` inside e.g. `part def Vehicle { import Lib::Engine; ... }`
      * is a real import of that definition's own namespace, not a no-op.
-     * Only the direct body of `ctx` itself is scanned (imports are not
-     * nested arbitrarily, unlike expose in view bodies), never a nested
-     * feature's own body -- `packageBody`/`definitionBody` are reached
-     * from `ctx` via a fixed, shallow chain (`definition`/`usage` wrapper
-     * rules only), so the first body-rule match found is always `ctx`'s
-     * own, never a descendant feature's.
+     *
+     * Only searches the ONE body rule that matches `ownKind` (never tries
+     * `packageBody` for a definition/usage or vice versa), and the search
+     * itself never crosses into a nested named declaration's own body
+     * (`findOwnBodyRule`, not the unbounded `findRule`) -- without both of
+     * those, a definition containing a nested `package Sub { import ...; }`
+     * would have that nested package's *own* `packageBody` found first by
+     * an unbounded search (reachable via `definitionBody` →
+     * `definitionBodyItem` → ... → `package` → `packageBody`), wrongly
+     * attributing `Sub`'s own imports to the outer definition in place of
+     * the definition's own (the search stops at the first match).
      */
-    private extractImportTargets(ctx: ParserRuleContext): ImportTarget[] {
-        const packageBody = this.findRule(ctx, SysMLv2Parser.RULE_packageBody);
-        if (packageBody) return this.extractImportsFromBody(packageBody, SysMLv2Parser.RULE_packageBodyElement);
+    private extractImportTargets(ctx: ParserRuleContext, ownKind: SysMLElementKind): ImportTarget[] {
+        if (ownKind === SysMLElementKind.Package) {
+            const packageBody = this.findOwnBodyRule(ctx, SysMLv2Parser.RULE_packageBody);
+            return packageBody ? this.extractImportsFromBody(packageBody, SysMLv2Parser.RULE_packageBodyElement) : [];
+        }
 
-        const definitionBody = this.findRule(ctx, SysMLv2Parser.RULE_definitionBody);
-        if (definitionBody) return this.extractImportsFromBody(definitionBody, SysMLv2Parser.RULE_definitionBodyItem);
+        const definitionBody = this.findOwnBodyRule(ctx, SysMLv2Parser.RULE_definitionBody);
+        return definitionBody ? this.extractImportsFromBody(definitionBody, SysMLv2Parser.RULE_definitionBodyItem) : [];
+    }
 
-        return [];
+    /**
+     * As `findRule`, but never descends into a child that starts its own
+     * named declaration (any rule mapped in `RULE_INDEX_TO_KIND`, e.g. a
+     * nested `package`/definition/usage) -- the same boundary
+     * `extractDocumentation` already enforces for the same reason ("a
+     * mapped child starts a contained element with independent [...]
+     * ownership"). Used to find a body rule that belongs to `ctx` itself,
+     * never one nested inside it.
+     */
+    private findOwnBodyRule(ctx: ParserRuleContext, ruleIndex: number, depth = 0): ParserRuleContext | undefined {
+        if (ctx.ruleIndex === ruleIndex) return ctx;
+        if (depth > 6) return undefined;
+        for (let i = 0; i < ctx.getChildCount(); i++) {
+            const child = ctx.getChild(i);
+            if (!(child instanceof ParserRuleContext)) continue;
+            if (child.ruleIndex === ruleIndex) return child;
+            if (RULE_INDEX_TO_KIND.has(child.ruleIndex)) continue;
+            const found = this.findOwnBodyRule(child, ruleIndex, depth + 1);
+            if (found) return found;
+        }
+        return undefined;
     }
 
     /** Scan a body rule's direct `bodyItem`-kind children for an `importRule`, per `extractImportTargets`. */

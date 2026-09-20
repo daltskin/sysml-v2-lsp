@@ -319,21 +319,32 @@ export class NamespaceResolver {
             addMember(owned.name, { symbol: owned, visibility: owned.visibility ?? 'public' });
         }
 
-        // Cycle guard: seed the cache with the owned members computed so far (a
-        // copy, since `members` keeps mutating below) before processing imports,
-        // rather than an empty table. An import target is itself resolved
-        // relative to *this* namespace (see `applyImport`'s `fromQualifiedName`),
+        // Cycle guard: seed the cache with `members` itself -- the *same live
+        // object*, not a snapshot copy -- before processing imports, rather
+        // than an empty table. An import target is itself resolved relative
+        // to *this* namespace (see `applyImport`'s `fromQualifiedName`),
         // which means resolving it can recurse back into this same
-        // `getResolvedMembers` call for a directly-owned sibling (e.g. `public
-        // import Inner::X;` where `Inner` is a package declared directly in this
-        // same namespace) -- that recursive call must see the already-known
-        // owned members, not nothing, or a same-namespace relative import would
-        // never resolve. An empty seed was only ever needed to stop a genuine
-        // import *cycle* (this namespace transitively importing itself) from
+        // `getResolvedMembers` call: for a directly-owned sibling (e.g.
+        // `public import Inner::X;` where `Inner` is a package declared
+        // directly in this same namespace), that recursive call must see the
+        // already-known owned members, not nothing, or a same-namespace
+        // relative import would never resolve. Caching the live object
+        // (rather than a frozen `new Map(members)` copy) additionally covers
+        // one import depending on another *earlier* import already
+        // processed in this same namespace (e.g. `import Lib::A; import
+        // A::B;` -- resolving the second import's "A" must see what the
+        // first one already added to `members`, not a pre-import-loop
+        // snapshot) -- a reentrant call only ever happens synchronously,
+        // nested within this same call stack (an unrelated, non-cyclic
+        // caller elsewhere always runs after this call has already returned
+        // its complete result, single-threaded JS having no interleaving),
+        // so there's no risk of an unrelated caller observing a partial
+        // table. An empty seed was only ever needed to stop a genuine import
+        // *cycle* (this namespace transitively importing itself) from
         // recursing forever; owned members are computed with no recursion at
-        // all, so exposing them here doesn't reopen that. The real (owned +
-        // imported) result overwrites this below once imports are processed.
-        perIndexesCache.set(qualifiedName, new Map(members));
+        // all, so exposing them (and each import's incremental contribution)
+        // here doesn't reopen that.
+        perIndexesCache.set(qualifiedName, members);
 
         const owner = indexes.byQualifiedName.get(qualifiedName);
         const importTargets = owner?.importTargets ?? [];
@@ -350,7 +361,6 @@ export class NamespaceResolver {
             this.applyImport(imp, qualifiedName, indexes, filteredAddMember);
         }
 
-        perIndexesCache.set(qualifiedName, members);
         return members;
     }
 
@@ -412,6 +422,21 @@ export class NamespaceResolver {
      * `recursive`, also recurse into any imported member that is itself a
      * namespace (owns members), per the `::**` "continues into namespaces
      * that are owned members of an imported namespace" rule.
+     *
+     * `visited` guards against a namespace reachable more than once within
+     * one top-level `::**` propagation chain, e.g. a namespace that ends up
+     * a member of itself (`membership-deep`'s `import Self::**;` adds
+     * `Self` as its own member before recursing into it) or a mutual cycle
+     * (`A` deep-imports `B`, `B` deep-imports `A`) -- without it, the *same*
+     * qualifiedName's propagation would restart from scratch every time it's
+     * reached again, recursing forever. This is a different concern from
+     * `getResolvedMembers`'s own cache-based cycle guard (which stops a
+     * given namespace's *table* from being recomputed while already in
+     * progress, letting one import see an earlier import's contribution in
+     * the same namespace) -- that cache is now the same live object across
+     * calls, so a self-referential membership it returns is genuinely
+     * visible here and must be tracked, not relied on to look "not yet
+     * there" the way a frozen snapshot used to accidentally mask it.
      */
     private importVisibleMembers(
         ownerQualifiedName: string,
@@ -419,13 +444,16 @@ export class NamespaceResolver {
         indexes: SymbolIndexes,
         addMember: (name: string, entry: ResolvedMember) => void,
         recursive: boolean,
+        visited: Set<string> = new Set(),
     ): void {
+        if (visited.has(ownerQualifiedName)) return;
+        visited.add(ownerQualifiedName);
         for (const [name, entries] of this.getResolvedMembers(ownerQualifiedName, indexes)) {
             for (const entry of entries) {
                 if (entry.visibility === 'private' || entry.visibility === 'protected') continue;
                 addMember(name, { symbol: entry.symbol, visibility: importVisibility });
                 if (recursive) {
-                    this.importVisibleMembers(entry.symbol.qualifiedName, importVisibility, indexes, addMember, true);
+                    this.importVisibleMembers(entry.symbol.qualifiedName, importVisibility, indexes, addMember, true, visited);
                 }
             }
         }

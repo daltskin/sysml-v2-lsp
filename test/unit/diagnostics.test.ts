@@ -185,6 +185,28 @@ package User {
             expect(unresolvedDiags.some(d => (d.data as { elementName?: string } | undefined)?.elementName === 'engine')).toBe(false);
             expect(unresolvedDiags.some(d => (d.data as { elementName?: string } | undefined)?.elementName === 'alsoEngine')).toBe(true);
         });
+
+        it('should not attribute a nested package\'s own imports to the enclosing definition, replacing the definition\'s own', async () => {
+            const text = `
+package Lib {
+    part def Engine;
+    part def Wheel;
+}
+
+package User {
+    part def Vehicle {
+        import Lib::Engine;
+        package Sub {
+            import Lib::Wheel;
+        }
+        part engine : Engine;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unresolvedDiags = diags.filter(d => d.code === 'unresolved-type');
+            expect(unresolvedDiags.some(d => d.message.includes("'Engine'"))).toBe(false);
+        });
     });
 
     describe('unresolved type references', () => {
@@ -1451,6 +1473,29 @@ package P2 {
             expect(unresolvedDiags.some(d => d.message.includes("'C'"))).toBe(false);
         });
 
+        it('should let a later import in the same namespace depend on an earlier import in that same namespace', async () => {
+            const libText = `
+package Lib {
+    part def A {
+        part def B;
+    }
+}
+`;
+            const pText = `
+package P {
+    import Lib::A;
+    import A::B;
+    part usesB : B;
+}
+`;
+            const diags = await getSemanticDiagnosticsForUri(
+                [{ uri: 'file:///lib.sysml', text: libText }, { uri: 'file:///p.sysml', text: pText }],
+                'file:///p.sysml',
+            );
+            const unresolvedDiags = diags.filter(d => d.code === 'unresolved-type');
+            expect(unresolvedDiags.some(d => d.message.includes("'B'"))).toBe(false);
+        });
+
         it('should resolve a bare re-import relative to its enclosing namespace so it can itself be re-exported further', async () => {
             const p1Text = `
 package P1 {
@@ -1688,6 +1733,71 @@ package P6 {
             const unresolvedDiags = diags.filter(d => d.code === 'unresolved-type');
             expect(unresolvedDiags.some(d => d.message.includes("'A'"))).toBe(false);
             expect(unresolvedDiags.some(d => d.message.includes("'C'"))).toBe(false);
+        });
+
+        describe('recursive/mutual import cycles should not stack overflow', () => {
+            it('resolves a mutual public ::** import cycle between two packages without hanging', async () => {
+                const text = `
+package A {
+    part def PartA;
+    public import B::**;
+}
+package B {
+    part def PartB;
+    public import A::**;
+}
+package User {
+    import A::*;
+    import B::*;
+    part usesA : PartA;
+    part usesB : PartB;
+}
+`;
+                const diags = await getSemanticDiagnostics(text);
+                const unresolvedDiags = diags.filter(d => d.code === 'unresolved-type');
+                expect(unresolvedDiags.some(d => d.message.includes("'PartA'"))).toBe(false);
+                expect(unresolvedDiags.some(d => d.message.includes("'PartB'"))).toBe(false);
+            });
+
+            it('resolves a package that recursively re-imports itself should not hang', async () => {
+                const text = `
+package Self {
+    part def X;
+    public import Self::**;
+}
+package User {
+    import Self::*;
+    part usesX : X;
+}
+`;
+                const diags = await getSemanticDiagnostics(text);
+                const unresolvedDiags = diags.filter(d => d.code === 'unresolved-type');
+                expect(unresolvedDiags.some(d => d.message.includes("'X'"))).toBe(false);
+            });
+
+            it('resolves a 3-node mutual ::** import cycle (A -> B -> C -> A) should not hang', async () => {
+                const text = `
+package A {
+    part def PartA;
+    public import B::**;
+}
+package B {
+    part def PartB;
+    public import C::**;
+}
+package C {
+    part def PartC;
+    public import A::**;
+}
+package User {
+    import A::*;
+    part usesC : PartC;
+}
+`;
+                const diags = await getSemanticDiagnostics(text);
+                const unresolvedDiags = diags.filter(d => d.code === 'unresolved-type');
+                expect(unresolvedDiags.some(d => d.message.includes("'PartC'"))).toBe(false);
+            });
         });
 
         it('should propagate a publicly-imported name to a further importer (transitive re-export)', async () => {
@@ -2100,4 +2210,7 @@ package User {
         });
     });
 });
+
+
+
 
