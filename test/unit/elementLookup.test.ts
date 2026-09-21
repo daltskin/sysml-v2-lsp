@@ -51,9 +51,16 @@ part def Wheel;`;
         const { results } = provider.elementLookup({ queries: [{ name: 'Wheel' }] });
 
         expect(results.Wheel).toHaveLength(1);
+        expect(results.Wheel[0].name).toBe('Wheel');
+        expect(results.Wheel[0].shortName).toBeUndefined();
         expect(results.Wheel[0].qualifiedName).toBe('Wheel');
         expect(results.Wheel[0].type).toBe('part def');
         expect(results.Wheel[0].uri).toBe('test://a.sysml');
+        // `part def Wheel;` is on line 1 (line 0 is the leading blank line in `text`).
+        expect(results.Wheel[0].range.start.line).toBe(1);
+        expect(typeof results.Wheel[0].range.start.character).toBe('number');
+        expect(typeof results.Wheel[0].range.end.line).toBe('number');
+        expect(typeof results.Wheel[0].range.end.character).toBe('number');
     });
 
     it('finds a match at any nesting depth, not just top-level', async () => {
@@ -223,6 +230,28 @@ package A {
         expect(results.Wheel).toHaveLength(2);
     });
 
+    it('treats an empty scope the same as no scope for a qualified-name query too', async () => {
+        const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+
+        const text = `
+package A {
+    part def Wheel;
+}
+package X {
+    package A {
+        part def Wheel;
+    }
+}`;
+
+        const dm = await setupMulti([{ uri: 'test://a.sysml', text }]);
+        const provider = new ElementLookupProvider(dm);
+
+        const { results } = provider.elementLookup({ queries: [{ name: 'A::Wheel', scope: '' }] });
+
+        expect(results['A::Wheel']).toHaveLength(2);
+        expect(new Set(results['A::Wheel'].map(m => m.qualifiedName))).toEqual(new Set(['A::Wheel', 'X::A::Wheel']));
+    });
+
     it('finds a match nested arbitrarily deep under scope, not just direct children', async () => {
         const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
 
@@ -283,8 +312,7 @@ package X {
         const { results } = provider.elementLookup({ queries: [{ name: 'A::Wheel' }] });
 
         expect(results['A::Wheel']).toHaveLength(2);
-        expect(results['A::Wheel'][0].qualifiedName).toBe('A::Wheel');
-        expect(results['A::Wheel'][1].qualifiedName).toBe('X::A::Wheel');
+        expect(new Set(results['A::Wheel'].map(m => m.qualifiedName))).toEqual(new Set(['A::Wheel', 'X::A::Wheel']));
     });
 
     it('ignores a scope that is already the leading segment of a qualified name, instead of doubling it up', async () => {
@@ -310,11 +338,10 @@ package X {
         const { results } = provider.elementLookup({ queries: [{ name: 'A::Wheel', scope: 'A' }] });
 
         expect(results['A::Wheel']).toHaveLength(2);
-        expect(results['A::Wheel'][0].qualifiedName).toBe('A::Wheel');
-        expect(results['A::Wheel'][1].qualifiedName).toBe('X::A::Wheel');
+        expect(new Set(results['A::Wheel'].map(m => m.qualifiedName))).toEqual(new Set(['A::Wheel', 'X::A::Wheel']));
     });
 
-    it('matches a declared <shortName> alias only when the query is itself bracketed', async () => {
+    it('matches a declared shortName alias only when kind is explicitly "shortName"', async () => {
         const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
 
         const text = `
@@ -324,15 +351,69 @@ part def <whl> Wheel;`;
         const provider = new ElementLookupProvider(dm);
 
         const { results } = provider.elementLookup({
-            queries: [{ name: '<whl>' }, { name: 'Wheel' }, { name: 'whl' }],
+            queries: [{ name: 'whl', kind: 'shortName' }, { name: 'Wheel' }],
         });
 
-        expect(results['<whl>']).toHaveLength(1);
-        expect(results['<whl>'][0].qualifiedName).toBe('Wheel');
+        expect(results.whl).toHaveLength(1);
+        expect(results.whl[0].name).toBe('Wheel');
+        expect(results.whl[0].shortName).toBe('whl');
+        expect(results.whl[0].qualifiedName).toBe('Wheel');
         expect(results.Wheel).toHaveLength(1);
+        expect(results.Wheel[0].shortName).toBe('whl');
         expect(results.Wheel[0].qualifiedName).toBe('Wheel');
-        // An unbracketed 'whl' is a *long*-name query -- it must not fall back to the short name.
+    });
+
+    it('never infers kind "shortName" -- a plain name query must not fall back to matching a short-name alias', async () => {
+        const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+
+        const text = `
+part def <whl> Wheel;`;
+
+        const dm = await setupMulti([{ uri: 'test://a.sysml', text }]);
+        const provider = new ElementLookupProvider(dm);
+
+        const { results } = provider.elementLookup({ queries: [{ name: 'whl' }] });
+
         expect(results.whl).toEqual([]);
+    });
+
+    it('treats a declared <shortName> with no long name as the element\'s only name', async () => {
+        const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+
+        const text = `
+part def <whl>;`;
+
+        const dm = await setupMulti([{ uri: 'test://a.sysml', text }]);
+        const provider = new ElementLookupProvider(dm);
+
+        const { results } = provider.elementLookup({ queries: [{ name: 'whl', kind: 'shortName' }] });
+
+        expect(results.whl).toHaveLength(1);
+        expect(results.whl[0].qualifiedName).toBe('whl');
+
+        // Same underlying element, reached the other way: its only name also serves as its
+        // plain declared `name`.
+        const { results: byPlainName } = provider.elementLookup({ queries: [{ name: 'whl' }] });
+        expect(byPlainName.whl).toHaveLength(1);
+        expect(byPlainName.whl[0].qualifiedName).toBe('whl');
+    });
+
+    it('restricts a shortName-kind match to the given scope too', async () => {
+        const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+
+        const text = `
+part def <whl> Wheel;
+package A {
+    part def <whl> Wheel;
+}`;
+
+        const dm = await setupMulti([{ uri: 'test://a.sysml', text }]);
+        const provider = new ElementLookupProvider(dm);
+
+        const { results } = provider.elementLookup({ queries: [{ name: 'whl', kind: 'shortName', scope: 'A' }] });
+
+        expect(results.whl).toHaveLength(1);
+        expect(results.whl[0].qualifiedName).toBe('A::Wheel');
     });
 
     it('does not double-count a declaration reachable through an import in another file', async () => {
