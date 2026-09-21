@@ -1,12 +1,12 @@
 import { ParserRuleContext, TerminalNode, Token } from 'antlr4ng';
 import { Range } from 'vscode-languageserver/node';
 import { SysMLv2Lexer } from '../generated/SysMLv2Lexer.js';
-import { MultiplicityBoundsContext, SysMLv2Parser } from '../generated/SysMLv2Parser.js';
+import { MultiplicityBoundsContext, OwnedExpressionContext, SysMLv2Parser } from '../generated/SysMLv2Parser.js';
 import { ParseResult } from '../parser/parseDocument.js';
 import { contextToRange, tokenToRange } from '../parser/positionUtils.js';
 import { SYSML_KEYWORDS } from '../utils/sysmlKeywords.js';
 import { Scope } from './scope.js';
-import { SysMLElementKind, SysMLSymbol, isUsage as isUsageKind } from './sysmlElements.js';
+import { FilterExpr, ImportTarget, SysMLElementKind, SysMLSymbol, isDefinition, isUsage as isUsageKind } from './sysmlElements.js';
 
 // ── ruleIndex-based lookup tables ───────────────────────────────────
 // These replace the toLowerCase() + string-comparison chains with O(1)
@@ -185,6 +185,14 @@ const RE_SPEC = /(?:specializes|:>|:>>)\s*('[^']+'|[A-Za-z_]\w*(?:::\w+)*)(?:\s*
 // by feature subsetting relationships.
 const RE_SPEC_WITH_SUBSETS = /(?:specializes|subsets|:>|:>>)\s*('[^']+'|[A-Za-z_]\w*(?:::\w+)*)(?:\s*,\s*(?:'[^']+'|[A-Za-z_]\w*(?:::\w+)*))*/;
 const RE_DEFINED_BY = /definedby\s*([A-Za-z_]\w*(?:::\w+)*(?:\s*,\s*[A-Za-z_]\w*(?:::\w+)*)*)/;
+
+/**
+ * Recursion-depth cap for `findOwnBodyRule`/`findRule`'s parse-tree search --
+ * a safety net against an unexpectedly deep parse tree, consistent with the
+ * same "don't go too deep" cap already used elsewhere in this file.
+ */
+const MAX_RULE_SEARCH_DEPTH = 6;
+
 const RE_TYPING = /:(?![:>])\s*('[^']+'|[A-Za-z_]\w*(?:::\w+)*)/;
 const RE_QUOTED_NAME = /'([^']+)'/;
 const RE_IDENT_START = /^([A-Za-z_]\w*(?:::\w+)*)/;
@@ -206,6 +214,10 @@ export class SymbolTable {
     private symbolsByPosition = new Map<string, SysMLSymbol[]>();
     /** Reverse index: type name → symbols that reference it in typeNames */
     private typeNameRefs = new Map<string, SysMLSymbol[]>();
+    /** Packages indexed by qualified name */
+    private packageFragmentsByQualifiedName = new Map<string, Map<string, SysMLSymbol>>();
+    /** Symbols sharing a qualifiedName with a non-package sibling of a different kind (e.g. `package A` vs. `part def A`) -- tracked so `getAllSymbols()` doesn't lose one to `symbols`' one-entry-per-qualifiedName limit, regardless of whether the collision is a real naming conflict (see `findConflictedQualifiedNames` in namespaceResolver.ts for that narrower, spec-driven question). */
+    private conflictedSymbolsByQualifiedName = new Map<string, Set<SysMLSymbol>>();
     /** Cached array from getAllSymbols(), invalidated on any mutation */
     private allSymbolsCache: SysMLSymbol[] | undefined;
     /** The global scope */
@@ -261,7 +273,23 @@ export class SymbolTable {
      */
     getAllSymbols(): SysMLSymbol[] {
         if (!this.allSymbolsCache) {
-            this.allSymbolsCache = Array.from(this.symbols.values());
+            const all = Array.from(this.symbols.values());
+            // `symbols` holds only one entry per qualifiedName; a genuine
+            // naming conflict (see `conflictedSymbolsByQualifiedName`'s doc
+            // comment) needs every conflicting declaration surfaced here, not
+            // just whichever currently occupies that one entry.
+            if (this.conflictedSymbolsByQualifiedName.size > 0) {
+                const included = new Set(all);
+                for (const conflictSet of this.conflictedSymbolsByQualifiedName.values()) {
+                    for (const sym of conflictSet) {
+                        if (!included.has(sym)) {
+                            all.push(sym);
+                            included.add(sym);
+                        }
+                    }
+                }
+            }
+            this.allSymbolsCache = all;
         }
         return this.allSymbolsCache;
     }
@@ -393,7 +421,17 @@ export class SymbolTable {
             const affectedNames = new Set<string>();
             const affectedTypeNames = new Set<string>();
             for (const sym of existing) {
-                this.symbols.delete(sym.qualifiedName);
+                // Order matters: re-point `symbols`' entry (which may fall
+                // back to a remaining conflicting symbol) *before* pruning
+                // `sym` out of conflict tracking, so that fallback still sees
+                // the full picture, `sym` included -- see
+                // `unregisterPlainSymbol`'s own doc comment.
+                if (sym.kind === SysMLElementKind.Package) {
+                    this.unregisterPackageFragment(sym.qualifiedName, uri);
+                } else {
+                    this.unregisterPlainSymbol(sym);
+                }
+                this.removeFromConflictTracking(sym);
                 affectedNames.add(sym.name);
                 for (const tn of sym.typeNames) {
                     affectedTypeNames.add(tn);
@@ -536,8 +574,201 @@ export class SymbolTable {
         }
     }
 
+    /**
+     * Recompute the `symbols` entry for `qualifiedName` from every known fragment's
+     * importTargets/filterConditions/metadataAnnotations/viewFilters/documentation,
+     * so anything declared in any one file of a multi-file package is visible
+     * regardless of which fragment happens to be canonical -- a reopened package is
+     * one semantic namespace, so a `doc`, `#annotation`, or view `filter` on one
+     * fragment's own `package P { ... }` declaration belongs to the same element as
+     * another fragment's, not to a competing one that only the "canonical" fragment
+     * gets credit for. Builds a fresh merged *copy* rather than writing the merge
+     * back into one fragment's own symbol object -- mutating a fragment in place
+     * would corrupt its own (otherwise pristine) data, so a later re-merge after
+     * another fragment is edited or removed would keep including data that no
+     * longer exists anywhere (it'd have leaked into whichever fragment got mutated
+     * last, and stayed there even after the fragment that actually declared it was
+     * gone).
+     */
+    private mergePackageFragments(qualifiedName: string): void {
+        const fragments = this.packageFragmentsByQualifiedName.get(qualifiedName);
+        if (!fragments || fragments.size === 0) return;
+
+        const importTargets: ImportTarget[] = [];
+        const filterConditions: FilterExpr[] = [];
+        const metadataAnnotations: string[] = [];
+        const viewFilters: string[] = [];
+        let documentation: string | undefined;
+        for (const fragment of fragments.values()) {
+            if (fragment.importTargets) importTargets.push(...fragment.importTargets);
+            if (fragment.filterConditions) filterConditions.push(...fragment.filterConditions);
+            if (fragment.metadataAnnotations) metadataAnnotations.push(...fragment.metadataAnnotations);
+            if (fragment.viewFilters) viewFilters.push(...fragment.viewFilters);
+            // A package's own `documentation` is a single string field (matching
+            // `extractDocumentation`'s existing "first doc block found" semantics
+            // within one file); across fragments, keep the first one found rather
+            // than concatenating, for the same reason -- just don't let a fragment
+            // with no doc of its own silently blank out one an earlier fragment did have.
+            if (!documentation && fragment.documentation) documentation = fragment.documentation;
+        }
+
+        // Identity/location fields (range, uri, ...) come from whichever fragment is
+        // last in the map's insertion order -- matches the previous "most recently
+        // registered fragment is canonical" behavior; re-registering an already-known
+        // uri does not change its position, so an edit doesn't shuffle this.
+        const template = [...fragments.values()].at(-1)!;
+        const merged: SysMLSymbol = {
+            ...template,
+            importTargets: importTargets.length > 0 ? importTargets : undefined,
+            filterConditions: filterConditions.length > 0 ? filterConditions : undefined,
+            metadataAnnotations: metadataAnnotations.length > 0 ? metadataAnnotations : undefined,
+            viewFilters: viewFilters.length > 0 ? viewFilters : undefined,
+            documentation,
+        };
+        this.symbols.set(qualifiedName, merged);
+
+        // If this qualifiedName is also in conflict with an incompatible-kind
+        // sibling, any package-kind entry already in that conflict set is a
+        // stale pre-merge snapshot (registerSymbol records `existing`/`symbol`
+        // as they were *before* this merge runs) -- replace it with `merged`,
+        // or getAllSymbols() would surface both as if they were two separate
+        // declarations of the same package.
+        const conflictSet = this.conflictedSymbolsByQualifiedName.get(qualifiedName);
+        if (conflictSet) {
+            for (const sym of [...conflictSet]) {
+                if (sym.kind === SysMLElementKind.Package) conflictSet.delete(sym);
+            }
+            conflictSet.add(merged);
+        }
+    }
+
+    /**
+     * Drop `uri`'s own fragment of package `qualifiedName` (on document edit/close)
+     * and recompute the merged `symbols` entry from whatever fragments remain;
+     * if none remain, drop the package entirely -- unless a conflicting
+     * non-package symbol (see `conflictedSymbolsByQualifiedName`) is still
+     * registered under the same qualifiedName, in which case that symbol is
+     * the correct entry to leave behind, the mirror image of
+     * `unregisterPlainSymbol`'s own fallback to a remaining package.
+     * Call this *before* `removeFromConflictTracking` -- the fallback below
+     * reads `conflictedSymbolsByQualifiedName` and needs to see the full
+     * remaining set (the package fragment just removed here is excluded
+     * explicitly, since conflict-tracking hasn't pruned it out yet).
+     */
+    private unregisterPackageFragment(qualifiedName: string, uri: string): void {
+        const fragments = this.packageFragmentsByQualifiedName.get(qualifiedName);
+        const removedFragment = fragments?.get(uri);
+        fragments?.delete(uri);
+        if (fragments && fragments.size > 0) {
+            this.mergePackageFragments(qualifiedName);
+        } else {
+            this.packageFragmentsByQualifiedName.delete(qualifiedName);
+            if (this.symbols.get(qualifiedName)?.kind === SysMLElementKind.Package) {
+                const remainingConflicts = [...(this.conflictedSymbolsByQualifiedName.get(qualifiedName) ?? [])]
+                    .filter(s => s !== removedFragment);
+                if (remainingConflicts.length > 0) {
+                    this.symbols.set(qualifiedName, remainingConflicts.at(-1)!);
+                } else {
+                    this.symbols.delete(qualifiedName);
+                }
+            }
+        }
+    }
+
+    /**
+     * Remove `sym` from `conflictedSymbolsByQualifiedName` (on document
+     * edit/close), and drop the whole conflict entry once fewer than two
+     * same-kind symbols remain under that qualifiedName -- an edit that
+     * resolves a naming conflict (e.g. renaming one of the clashing
+     * declarations) must stop being reported as one. Call this *after*
+     * `unregisterPlainSymbol`/`unregisterPackageFragment`, whose own
+     * `symbols`-re-pointing fallback needs `sym` still present in the set
+     * to correctly exclude just itself, not the whole bookkeeping entry.
+     */
+    private removeFromConflictTracking(sym: SysMLSymbol): void {
+        const conflictSet = this.conflictedSymbolsByQualifiedName.get(sym.qualifiedName);
+        if (!conflictSet) return;
+        if (sym.kind === SysMLElementKind.Package) {
+            // The conflict set tracks the package side by its *merged*
+            // representative object (see `mergePackageFragments`), never the
+            // same object identity as any raw per-uri fragment (`sym` here)
+            // -- `conflictSet.delete(sym)` would silently no-op, leaving a
+            // permanently stale merged object behind once the package's
+            // last fragment is gone. Only clean it up once no fragments
+            // remain at all: if some still do, `mergePackageFragments`
+            // (called by `unregisterPackageFragment` just before this) has
+            // already refreshed the conflict set with the current merged
+            // view, which removing by kind here would wrongly undo.
+            if (!this.packageFragmentsByQualifiedName.has(sym.qualifiedName)) {
+                for (const s of [...conflictSet]) {
+                    if (s.kind === SysMLElementKind.Package) conflictSet.delete(s);
+                }
+            }
+        } else {
+            conflictSet.delete(sym);
+        }
+        const remaining = [...conflictSet];
+        if (remaining.length <= 1 || remaining.every(s => s.kind === SysMLElementKind.Package)) {
+            this.conflictedSymbolsByQualifiedName.delete(sym.qualifiedName);
+        }
+    }
+
+    /**
+     * Remove a non-package symbol (on document edit/close). Only touches
+     * `symbols`' entry for its qualifiedName if `sym` is actually the symbol
+     * currently stored there -- during a naming conflict (see
+     * `conflictedSymbolsByQualifiedName`), `sym` may be the one that lost an
+     * earlier last-write-wins race, in which case `symbols` already holds a
+     * different, still-valid symbol that removing `sym` must not disturb.
+     *
+     * When `sym` *is* the current entry, don't just delete it: the conflict
+     * can resolve back down to "just a legitimately-reopened package" (this
+     * removal was the non-package side of it) or to one remaining same-kind
+     * symbol, either of which is the correct entry to leave behind, the same
+     * way it would be if the conflict had never existed. Call this *before*
+     * `removeFromConflictTracking(sym)` -- the fallback below reads
+     * `conflictedSymbolsByQualifiedName` and excludes `sym` itself
+     * explicitly, since conflict-tracking hasn't pruned it out yet.
+     */
+    private unregisterPlainSymbol(sym: SysMLSymbol): void {
+        if (this.symbols.get(sym.qualifiedName) !== sym) return;
+
+        const packageFragments = this.packageFragmentsByQualifiedName.get(sym.qualifiedName);
+        if (packageFragments && packageFragments.size > 0) {
+            this.mergePackageFragments(sym.qualifiedName);
+            return;
+        }
+        const remainingConflicts = [...(this.conflictedSymbolsByQualifiedName.get(sym.qualifiedName) ?? [])]
+            .filter(s => s !== sym);
+        if (remainingConflicts.length > 0) {
+            this.symbols.set(sym.qualifiedName, remainingConflicts.at(-1)!);
+            return;
+        }
+        this.symbols.delete(sym.qualifiedName);
+    }
+
     private registerSymbol(symbol: SysMLSymbol, uri: string, scope: Scope): void {
+        const existing = this.symbols.get(symbol.qualifiedName);
+        const bothPackages = symbol.kind === SysMLElementKind.Package && existing?.kind === SysMLElementKind.Package;
+        if (existing && existing !== symbol && !bothPackages) {
+            let conflictSet = this.conflictedSymbolsByQualifiedName.get(symbol.qualifiedName);
+            if (!conflictSet) {
+                conflictSet = new Set();
+                this.conflictedSymbolsByQualifiedName.set(symbol.qualifiedName, conflictSet);
+            }
+            conflictSet.add(existing);
+            conflictSet.add(symbol);
+        }
         this.symbols.set(symbol.qualifiedName, symbol);
+        if (symbol.kind === SysMLElementKind.Package) {
+            let fragments = this.packageFragmentsByQualifiedName.get(symbol.qualifiedName);
+            if (!fragments) {
+                fragments = new Map();
+                this.packageFragmentsByQualifiedName.set(symbol.qualifiedName, fragments);
+            }
+            fragments.set(uri, symbol);
+            this.mergePackageFragments(symbol.qualifiedName);
+        }
         // Invalidate cached array
         this.allSymbolsCache = undefined;
         const uriSymbols = this.symbolsByUri.get(uri) ?? [];
@@ -743,6 +974,13 @@ export class SymbolTable {
         const viewFilters = (isView || isPackage) ? this.extractViewFilters(ctx) : undefined;
         const viewRendering = isView ? this.extractViewRendering(ctx) : undefined;
         const controlFlows = isAction ? this.extractControlFlows(ctx) : undefined;
+        // §7.5.1: definitions and usages are namespaces too, so their own
+        // body can contain `import` statements, not just a package's --
+        // `filter` (§7.5.4), by contrast, is grammar-restricted to package
+        // bodies only (`elementFilterMember` is a `packageBodyElement`
+        // alternative, with no equivalent in `definitionBodyItem`).
+        const importTargets = (isPackage || isDefinition(kind) || isUsageKind(kind)) ? this.extractImportTargets(ctx, kind) : undefined;
+        const filterConditions = isPackage ? this.extractPackageFilterConditions(ctx) : undefined;
 
         return {
             name,
@@ -769,6 +1007,8 @@ export class SymbolTable {
             exposeTargets: exposeTargets && exposeTargets.length > 0 ? exposeTargets : undefined,
             viewFilters: viewFilters && viewFilters.length > 0 ? viewFilters : undefined,
             viewRendering: viewRendering || undefined,
+            importTargets: importTargets && importTargets.length > 0 ? importTargets : undefined,
+            filterConditions: filterConditions && filterConditions.length > 0 ? filterConditions : undefined,
         };
     }
 
@@ -1515,6 +1755,263 @@ export class SymbolTable {
      */
     private isKeyword(text: string): boolean {
         return SYSML_KEYWORDS.has(text);
+    }
+
+    /**
+     * Extract `import` statements owned directly by a namespace's body --
+     * a package's `packageBody`, or a definition/usage's `definitionBody`
+     * (usages reuse the same rule via `usageBody: definitionBody;`). Per
+     * §7.5.1, "all kinds of SysML definitions and usages are also
+     * namespaces... all rules discussed generically for namespaces...
+     * apply generically to packages, definitions and usages" -- an
+     * `import` inside e.g. `part def Vehicle { import Lib::Engine; ... }`
+     * is a real import of that definition's own namespace, not a no-op.
+     *
+     * Only searches the ONE body rule that matches `ownKind` (never tries
+     * `packageBody` for a definition/usage or vice versa), and the search
+     * itself never crosses into a nested named declaration's own body
+     * (`findOwnBodyRule`, not the unbounded `findRule`) -- without both of
+     * those, a definition containing a nested `package Sub { import ...; }`
+     * would have that nested package's *own* `packageBody` found first by
+     * an unbounded search (reachable via `definitionBody` →
+     * `definitionBodyItem` → ... → `package` → `packageBody`), wrongly
+     * attributing `Sub`'s own imports to the outer definition in place of
+     * the definition's own (the search stops at the first match).
+     */
+    private extractImportTargets(ctx: ParserRuleContext, ownKind: SysMLElementKind): ImportTarget[] {
+        if (ownKind === SysMLElementKind.Package) {
+            const packageBody = this.findOwnBodyRule(ctx, SysMLv2Parser.RULE_packageBody);
+            return packageBody ? this.extractImportsFromBody(packageBody, SysMLv2Parser.RULE_packageBodyElement) : [];
+        }
+
+        const definitionBody = this.findOwnBodyRule(ctx, SysMLv2Parser.RULE_definitionBody);
+        return definitionBody ? this.extractImportsFromBody(definitionBody, SysMLv2Parser.RULE_definitionBodyItem) : [];
+    }
+
+    /**
+     * As `findRule`, but never descends into a child that starts its own
+     * named declaration (any rule mapped in `RULE_INDEX_TO_KIND`, e.g. a
+     * nested `package`/definition/usage) -- the same boundary
+     * `extractDocumentation` already enforces for the same reason ("a
+     * mapped child starts a contained element with independent [...]
+     * ownership"). Used to find a body rule that belongs to `ctx` itself,
+     * never one nested inside it.
+     */
+    private findOwnBodyRule(ctx: ParserRuleContext, ruleIndex: number, depth = 0): ParserRuleContext | undefined {
+        if (ctx.ruleIndex === ruleIndex) return ctx;
+        if (depth > MAX_RULE_SEARCH_DEPTH) return undefined;
+        for (let i = 0; i < ctx.getChildCount(); i++) {
+            const child = ctx.getChild(i);
+            if (!(child instanceof ParserRuleContext)) continue;
+            if (child.ruleIndex === ruleIndex) return child;
+            if (RULE_INDEX_TO_KIND.has(child.ruleIndex)) continue;
+            const found = this.findOwnBodyRule(child, ruleIndex, depth + 1);
+            if (found) return found;
+        }
+        return undefined;
+    }
+
+    /** Scan a body rule's direct `bodyItem`-kind children for an `importRule`, per `extractImportTargets`. */
+    private extractImportsFromBody(body: ParserRuleContext, bodyItemRuleIndex: number): ImportTarget[] {
+        const results: ImportTarget[] = [];
+        for (let j = 0; j < body.getChildCount(); j++) {
+            const bodyItem = body.getChild(j);
+            if (!(bodyItem instanceof ParserRuleContext) || bodyItem.ruleIndex !== bodyItemRuleIndex) continue;
+            for (let k = 0; k < bodyItem.getChildCount(); k++) {
+                const maybeImportRule = bodyItem.getChild(k);
+                if (maybeImportRule instanceof ParserRuleContext && maybeImportRule.ruleIndex === SysMLv2Parser.RULE_importRule) {
+                    const parsed = this.parseImportRule(maybeImportRule);
+                    if (parsed) results.push(parsed);
+                }
+            }
+        }
+        return results;
+    }
+
+    /**
+     * Parse a single importRule context into an ImportTarget, distinguishing
+     * membership vs. namespace imports and shallow vs. `::**` deep imports.
+     */
+    private parseImportRule(importRuleCtx: ParserRuleContext): ImportTarget | undefined {
+        let declarationCtx: ParserRuleContext | undefined;
+        for (let i = 0; i < importRuleCtx.getChildCount(); i++) {
+            const child = importRuleCtx.getChild(i);
+            if (child instanceof ParserRuleContext && child.ruleIndex === SysMLv2Parser.RULE_importDeclaration) {
+                declarationCtx = child;
+                break;
+            }
+        }
+        if (!declarationCtx) return undefined;
+
+        const visibility = this.extractImportVisibility(importRuleCtx);
+
+        // Filtered import: `import Owner::Target[filterExpr];` (§7.5.4) -- namespaceImport's
+        // filterPackage alternative. Handled separately so its qualifiedName target and its
+        // [filterExpr] brackets aren't squashed together by generic text extraction below.
+        const filterPackageCtx = this.findRule(declarationCtx, SysMLv2Parser.RULE_filterPackage);
+        if (filterPackageCtx) return this.parseFilteredImport(filterPackageCtx, visibility);
+
+        const isNamespaceImport = this.containsRule(declarationCtx, SysMLv2Parser.RULE_namespaceImport);
+        let text = this.extractFullExposeText(declarationCtx);
+        if (!text) return undefined;
+
+        const deep = text.endsWith('::**');
+        if (deep) text = text.slice(0, -'::**'.length);
+
+        if (isNamespaceImport) {
+            // namespaceImport text is "Owner::*" (shallow) before the optional "::**" suffix.
+            const owner = text.endsWith('::*') ? text.slice(0, -'::*'.length) : text;
+            return { kind: deep ? 'namespace-deep' : 'namespace-shallow', target: owner, visibility };
+        }
+        return { kind: deep ? 'membership-deep' : 'membership', target: text, visibility };
+    }
+
+    /**
+     * Visibility keyword on an importRule (`public`/`private`/`protected import ...`).
+     * Defaults to 'private', the standard's default for imports (§7.5.3) -- unlike
+     * plain member declarations, which default to 'public'.
+     */
+    private extractImportVisibility(importRuleCtx: ParserRuleContext): 'public' | 'private' | 'protected' {
+        for (let i = 0; i < importRuleCtx.getChildCount(); i++) {
+            const child = importRuleCtx.getChild(i);
+            if (child instanceof ParserRuleContext && child.ruleIndex === SysMLv2Parser.RULE_visibilityIndicator) {
+                const text = child.getText();
+                if (text === 'public' || text === 'private' || text === 'protected') return text;
+            }
+        }
+        return 'private';
+    }
+
+    /**
+     * Whether `ctx` or any descendant (depth-limited) is of the given rule index.
+     */
+    private containsRule(ctx: ParserRuleContext, ruleIndex: number, depth = 0): boolean {
+        return this.findRule(ctx, ruleIndex, depth) !== undefined;
+    }
+
+    /**
+     * First descendant of `ctx` (or `ctx` itself) of the given rule index, depth-limited.
+     */
+    private findRule(ctx: ParserRuleContext, ruleIndex: number, depth = 0): ParserRuleContext | undefined {
+        if (ctx.ruleIndex === ruleIndex) return ctx;
+        if (depth > MAX_RULE_SEARCH_DEPTH) return undefined;
+        for (let i = 0; i < ctx.getChildCount(); i++) {
+            const child = ctx.getChild(i);
+            if (child instanceof ParserRuleContext) {
+                const found = this.findRule(child, ruleIndex, depth + 1);
+                if (found) return found;
+            }
+        }
+        return undefined;
+    }
+
+    /**
+     * Parse a filtered import (§7.5.4: `import Owner::Target[filterExpr];`),
+     * the grammar's `filterPackage` alternative of `namespaceImport`. Its
+     * target/kind come from the same membership/namespace-shallow logic as a
+     * plain import; one or more `[filterExpr]` brackets are AND'd together
+     * into a single `ImportTarget.filter`.
+     */
+    private parseFilteredImport(
+        filterPackageCtx: ParserRuleContext,
+        visibility: 'public' | 'private' | 'protected',
+    ): ImportTarget | undefined {
+        let importDeclCtx: ParserRuleContext | undefined;
+        const filterExprs: FilterExpr[] = [];
+        for (let i = 0; i < filterPackageCtx.getChildCount(); i++) {
+            const child = filterPackageCtx.getChild(i);
+            if (!(child instanceof ParserRuleContext)) continue;
+            if (child.ruleIndex === SysMLv2Parser.RULE_filterPackageImportDeclaration) {
+                importDeclCtx = child;
+            } else if (child.ruleIndex === SysMLv2Parser.RULE_filterPackageMember) {
+                const exprCtx = this.findRule(child, SysMLv2Parser.RULE_ownedExpression);
+                if (exprCtx) filterExprs.push(this.parseFilterExpression(exprCtx));
+            }
+        }
+        if (!importDeclCtx) return undefined;
+
+        const isNamespaceImport = this.containsRule(importDeclCtx, SysMLv2Parser.RULE_namespaceImportDirect);
+        let text = this.extractFullExposeText(importDeclCtx);
+        if (!text) return undefined;
+
+        const deep = text.endsWith('::**');
+        if (deep) text = text.slice(0, -'::**'.length);
+
+        const filter = filterExprs.length === 0
+            ? undefined
+            : filterExprs.reduce((left, right) => ({ kind: 'and', left, right }));
+
+        if (isNamespaceImport) {
+            const owner = text.endsWith('::*') ? text.slice(0, -'::*'.length) : text;
+            return { kind: deep ? 'namespace-deep' : 'namespace-shallow', target: owner, visibility, filter };
+        }
+        return { kind: deep ? 'membership-deep' : 'membership', target: text, visibility, filter };
+    }
+
+    /**
+     * Parse a `filter`/filtered-import boolean expression (§7.5.4) into a
+     * FilterExpr, from an `ownedExpression` parse tree. Only the metadata
+     * classification-test subset (`@Name`, `and`/`or`/`not`, simple
+     * parenthesization) is modeled -- anything else (attribute-value
+     * comparisons, etc.) parses to 'unsupported', which evaluates as passing.
+     */
+    private parseFilterExpression(ctx: ParserRuleContext): FilterExpr {
+        if (ctx.ruleIndex !== SysMLv2Parser.RULE_ownedExpression) return { kind: 'unsupported' };
+        const expr = ctx as OwnedExpressionContext;
+        const children = expr.ownedExpression();
+
+        if (expr.AND() && children.length === 2) {
+            return { kind: 'and', left: this.parseFilterExpression(children[0]), right: this.parseFilterExpression(children[1]) };
+        }
+        if (expr.OR() && children.length === 2) {
+            return { kind: 'or', left: this.parseFilterExpression(children[0]), right: this.parseFilterExpression(children[1]) };
+        }
+        if (expr.NOT() && children.length === 1) {
+            return { kind: 'not', expr: this.parseFilterExpression(children[0]) };
+        }
+        if ((expr.AT_SIGN() || expr.AT_AT()) && expr.typeReference() && children.length === 0) {
+            const qualifiedName = this.extractFullExposeText(expr.typeReference()!);
+            if (qualifiedName) {
+                const simpleName = qualifiedName.includes('::') ? qualifiedName.split('::').pop()! : qualifiedName;
+                return { kind: 'metadata', name: simpleName };
+            }
+        }
+        // Parenthesized grouping: baseExpression -> LPAREN sequenceExpressionList RPAREN
+        // with exactly one element, e.g. "(@Approval and @Deprecated)".
+        const base = expr.baseExpression();
+        if (base) {
+            const seqList = this.findRule(base, SysMLv2Parser.RULE_sequenceExpressionList, 1);
+            if (seqList && seqList.getChildCount() === 1) {
+                const inner = seqList.getChild(0);
+                if (inner instanceof ParserRuleContext) return this.parseFilterExpression(inner);
+            }
+        }
+        return { kind: 'unsupported' };
+    }
+
+    /**
+     * Package-level `filter <expr>;` conditions (§7.5.4), applying to every
+     * import of the package. Like imports, these are direct children of
+     * packageBody, not nested arbitrarily.
+     */
+    private extractPackageFilterConditions(ctx: ParserRuleContext): FilterExpr[] {
+        const results: FilterExpr[] = [];
+        for (let i = 0; i < ctx.getChildCount(); i++) {
+            const child = ctx.getChild(i);
+            if (!(child instanceof ParserRuleContext) || child.ruleIndex !== SysMLv2Parser.RULE_packageBody) continue;
+            for (let j = 0; j < child.getChildCount(); j++) {
+                const bodyItem = child.getChild(j);
+                if (!(bodyItem instanceof ParserRuleContext) || bodyItem.ruleIndex !== SysMLv2Parser.RULE_packageBodyElement) continue;
+                for (let k = 0; k < bodyItem.getChildCount(); k++) {
+                    const maybeFilterMember = bodyItem.getChild(k);
+                    if (maybeFilterMember instanceof ParserRuleContext && maybeFilterMember.ruleIndex === SysMLv2Parser.RULE_elementFilterMember) {
+                        const exprCtx = this.findRule(maybeFilterMember, SysMLv2Parser.RULE_ownedExpression);
+                        if (exprCtx) results.push(this.parseFilterExpression(exprCtx));
+                    }
+                }
+            }
+        }
+        return results;
     }
 
     /**

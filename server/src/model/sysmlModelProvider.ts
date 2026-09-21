@@ -10,7 +10,9 @@
 import { Range } from 'vscode-languageserver/node';
 import { analyseComplexity } from '../analysis/complexityAnalyzer.js';
 import { DocumentManager } from '../documentManager.js';
+import { getLibraryPackageNames } from '../library/libraryIndex.js';
 import { ParseResult } from '../parser/parseDocument.js';
+import { NamespaceResolver, buildSymbolIndexes, findConflictedQualifiedNames } from '../symbols/namespaceResolver.js';
 import { SymbolTable } from '../symbols/symbolTable.js';
 import {
     SysMLElementKind,
@@ -19,6 +21,7 @@ import {
     isUsage,
     toMetaclassName,
 } from '../symbols/sysmlElements.js';
+import { resolveTypeName } from '../symbols/typeResolution.js';
 
 import type {
     ActivityActionDTO,
@@ -192,6 +195,12 @@ function readCommaSeparatedIdents(text: string, pos: number): string[] {
 export class SysMLModelProvider {
     /** Cached symbol tables keyed by URI. */
     private _stCache = new Map<string, { version: number; table: SymbolTable }>();
+
+    /** Namespace/import-aware name resolution (§7.5), shared with SemanticValidator. */
+    private readonly namespaceResolver = new NamespaceResolver();
+
+    /** Cached library package names — never changes after init. */
+    private libraryNamesCache?: Set<string>;
 
     constructor(private readonly documentManager: DocumentManager) { }
 
@@ -1199,15 +1208,51 @@ export class SysMLModelProvider {
     ): SemanticDiagnosticDTO[] {
         const symbols = symbolTable.getSymbolsForUri(uri);
         const diagnostics: SemanticDiagnosticDTO[] = [];
-        const allSymbolNames = new Set(symbolTable.getAllSymbols().map(s => s.name));
+
+        // Unresolved-type resolution needs the *workspace* symbol table, not just
+        // this document's own -- a type can be legitimately declared in, or
+        // imported from, another file (see NamespaceResolver's own doc comment
+        // for why this is shared with SemanticValidator rather than duplicated).
+        const workspaceIndexes = buildSymbolIndexes(this.documentManager.getWorkspaceSymbolTable().getAllSymbols());
+        if (!this.libraryNamesCache) {
+            this.libraryNamesCache = new Set(getLibraryPackageNames());
+        }
+        const libraryNames = this.libraryNamesCache;
+
+        // Ambiguous namespace names (two symbols of the *same* kind sharing a
+        // qualifiedName, e.g. two `part def A` -- see
+        // `findConflictedQualifiedNames`'s doc comment for why a package and
+        // an unrelated definition sharing a name is NOT one of these) also
+        // need the workspace symbol table: the conflict, and the resulting
+        // unresolved references it causes, can span two files. Ported from
+        // `SemanticValidator.checkAmbiguousNamespaceName` so the `sysml/model`
+        // request's own diagnostics (Model Explorer, Dashboard, Feature
+        // Inspector) explain *why* a reference is unresolved the same way the
+        // editor's own diagnostics do, not just leave it unexplained.
+        const conflicts = findConflictedQualifiedNames(this.documentManager.getWorkspaceSymbolTable().getAllSymbols());
 
         for (const symbol of symbols) {
+            const conflicting = conflicts.get(symbol.qualifiedName);
+            if (conflicting) {
+                const others = conflicting.filter(s => s !== symbol);
+                const otherKinds = [...new Set(others.map(s => s.kind))].join(', ');
+                diagnostics.push({
+                    code: 'ambiguous-namespace-name',
+                    message: `Ambiguous name '${symbol.name}': also declared as ${otherKinds} elsewhere in the workspace. Only a package may be reopened under the same name; rename one of these declarations.`,
+                    severity: 'error',
+                    range: this.rangeToDTO(symbol.selectionRange),
+                    elementName: symbol.name,
+                });
+            }
+
             // Check for unresolved type references (check all typeNames)
             for (const tn of symbol.typeNames) {
-                if (!allSymbolNames.has(tn)) {
+                const { resolved, strippedTypeName } =
+                    resolveTypeName(tn, symbol, this.namespaceResolver, workspaceIndexes, libraryNames);
+                if (!resolved) {
                     diagnostics.push({
                         code: 'unresolved-type',
-                        message: `Type '${tn}' could not be resolved in the current scope`,
+                        message: `Type '${strippedTypeName}' could not be resolved in the current scope`,
                         severity: 'warning',
                         range: this.rangeToDTO(symbol.selectionRange),
                         elementName: symbol.name,

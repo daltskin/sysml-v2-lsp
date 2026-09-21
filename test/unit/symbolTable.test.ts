@@ -10,6 +10,17 @@ async function buildST(text: string, uri = 'test://test.sysml') {
     return { st, result };
 }
 
+/** Helper: build one symbol table from several documents, each at its own uri. */
+async function buildMultiFileST(fragments: Array<{ text: string; uri: string }>) {
+    const { parseDocument } = await import('../../server/src/parser/parseDocument.js');
+    const { SymbolTable } = await import('../../server/src/symbols/symbolTable.js');
+    const st = new SymbolTable();
+    for (const fragment of fragments) {
+        st.build(fragment.uri, parseDocument(fragment.text));
+    }
+    return st;
+}
+
 describe('Symbol Table', () => {
     it('should build a symbol table from a parsed document', async () => {
         const { parseDocument } = await import('../../server/src/parser/parseDocument.js');
@@ -580,6 +591,176 @@ package InheritTest {
     });
 });
 
+describe('Package split across files: fields beyond imports/filters also merge', () => {
+    // A reopened package (`package P { ... }` in more than one file) is one
+    // semantic namespace, not several -- a `doc`, prefix `#annotation`, or
+    // view `filter` on one fragment's own package declaration belongs to
+    // that same element, the same way its imports do (see the
+    // "package/namespace visibility" describe block in diagnostics.test.ts).
+    // `getSymbol`/`getAllSymbols` only expose one canonical entry per
+    // qualifiedName, built by `SymbolTable.mergePackageFragments`, so these
+    // fields must be combined there too -- not just come from whichever
+    // fragment happens to be canonical.
+    describe('documentation (order-independence)', () => {
+        const pkgWithoutDocText = `
+package Shared {
+    part def PartA;
+}
+`;
+
+        it('keeps a fragment\'s own documentation when it is registered first', async () => {
+            const pkgWithDocText = `
+package Shared {
+    doc /* Fragment 1's own documentation. */
+    part def PartA;
+}
+`;
+            const st = await buildMultiFileST([
+                { uri: 'test://pkg-1.sysml', text: pkgWithDocText },
+                { uri: 'test://pkg-2.sysml', text: pkgWithoutDocText },
+            ]);
+            const pkg = st.getSymbol('Shared');
+            expect(pkg?.documentation).toContain("Fragment 1's own documentation.");
+        });
+
+        it('keeps a fragment\'s own documentation when it is registered second', async () => {
+            const pkgWithDocText = `
+package Shared {
+    doc /* Fragment 2's own documentation. */
+    part def PartB;
+}
+`;
+            const st = await buildMultiFileST([
+                { uri: 'test://pkg-1.sysml', text: pkgWithoutDocText },
+                { uri: 'test://pkg-2.sysml', text: pkgWithDocText },
+            ]);
+            const pkg = st.getSymbol('Shared');
+            expect(pkg?.documentation).toContain("Fragment 2's own documentation.");
+        });
+    });
+
+    it('combines prefix metadata annotations and view filters declared on different fragments', async () => {
+        const pkg1Text = `
+#Approved
+package Shared {
+    filter @SysML::PartUsage;
+    part def PartA;
+}
+`;
+        const pkg2Text = `
+#Reviewed
+package Shared {
+    part def PartB;
+}
+`;
+        const st = await buildMultiFileST([
+            { uri: 'test://pkg-1.sysml', text: pkg1Text },
+            { uri: 'test://pkg-2.sysml', text: pkg2Text },
+        ]);
+        const pkg = st.getSymbol('Shared');
+        expect(pkg?.metadataAnnotations).toEqual(expect.arrayContaining(['Approved', 'Reviewed']));
+        expect(pkg?.viewFilters && pkg.viewFilters.length > 0).toBe(true);
+    });
+});
+
+describe('getAllSymbols() completeness for colliding qualifiedNames (any kind, not just same-kind conflicts)', () => {
+    // `symbols` holds only one entry per qualifiedName, so without
+    // `conflictedSymbolsByQualifiedName` tracking every symbol that ever
+    // shares one, whichever declaration registers last would silently and
+    // permanently erase the other(s) from `getAllSymbols()` -- data loss
+    // that would happen regardless of whether the collision is a genuine
+    // naming *conflict* per KerML's `isDistinguishableFrom` rule (see
+    // `findConflictedQualifiedNames`'s doc comment in namespaceResolver.ts)
+    // or a perfectly valid collision between different, non-conforming
+    // kinds (e.g. `package A` and an unrelated `part def A`, used below
+    // precisely because it's *not* flagged as a conflict -- both must still
+    // be visible here regardless). These tests exercise that tracking
+    // directly at the SymbolTable level, below the diagnostics layer
+    // covered in diagnostics.test.ts.
+    const pkgAText = `
+package A {
+    part def B;
+}
+`;
+    const partDefAText = `
+part def A {
+    part def B2;
+}
+`;
+
+    it('keeps both conflicting declarations in getAllSymbols() instead of the last one silently winning', async () => {
+        const st = await buildMultiFileST([
+            { uri: 'test://pkg-a.sysml', text: pkgAText },
+            { uri: 'test://partdef-a.sysml', text: partDefAText },
+        ]);
+        const topLevelAs = st.getAllSymbols().filter(s => s.name === 'A' && s.parentQualifiedName === undefined);
+        expect(topLevelAs).toHaveLength(2);
+        expect(topLevelAs.map(s => s.kind).sort()).toEqual(['package', 'part def']);
+        // Each declaration's own child is still present too -- neither was
+        // dropped along with its parent.
+        expect(st.getAllSymbols().some(s => s.qualifiedName === 'A::B')).toBe(true);
+        expect(st.getAllSymbols().some(s => s.qualifiedName === 'A::B2')).toBe(true);
+    });
+
+    it('keeps both conflicting declarations regardless of which file registers first', async () => {
+        const st = await buildMultiFileST([
+            { uri: 'test://partdef-a.sysml', text: partDefAText },
+            { uri: 'test://pkg-a.sysml', text: pkgAText },
+        ]);
+        const topLevelAs = st.getAllSymbols().filter(s => s.name === 'A' && s.parentQualifiedName === undefined);
+        expect(topLevelAs).toHaveLength(2);
+    });
+
+    it('goes back to a single "A" once the conflict is resolved by an edit', async () => {
+        const { parseDocument } = await import('../../server/src/parser/parseDocument.js');
+        const { SymbolTable } = await import('../../server/src/symbols/symbolTable.js');
+        const st = new SymbolTable();
+        st.build('test://pkg-a.sysml', parseDocument(pkgAText));
+        st.build('test://partdef-a.sysml', parseDocument(partDefAText));
+        expect(st.getAllSymbols().filter(s => s.name === 'A' && s.parentQualifiedName === undefined)).toHaveLength(2);
+
+        // Re-parse the second file, renaming its own "A" away -- the
+        // conflict resolves, and getAllSymbols() must go back to showing
+        // just the package, the same as if the part def had never existed.
+        const renamedText = `
+part def NotA {
+    part def B2;
+}
+`;
+        st.build('test://partdef-a.sysml', parseDocument(renamedText));
+
+        const topLevelAs = st.getAllSymbols().filter(s => s.name === 'A' && s.parentQualifiedName === undefined);
+        expect(topLevelAs).toHaveLength(1);
+        expect(topLevelAs[0].kind).toBe('package');
+        expect(st.getSymbol('A')?.kind).toBe('package');
+    });
+
+    it('goes back to a single "A" when the *package* side is removed instead, leaving the non-package sibling', async () => {
+        // Mirror image of the test above: `unregisterPackageFragment`'s own
+        // fallback to a remaining non-package conflicting symbol, exercised
+        // separately from `unregisterPlainSymbol`'s fallback to a remaining
+        // package.
+        const { parseDocument } = await import('../../server/src/parser/parseDocument.js');
+        const { SymbolTable } = await import('../../server/src/symbols/symbolTable.js');
+        const st = new SymbolTable();
+        st.build('test://pkg-a.sysml', parseDocument(pkgAText));
+        st.build('test://partdef-a.sysml', parseDocument(partDefAText));
+        expect(st.getAllSymbols().filter(s => s.name === 'A' && s.parentQualifiedName === undefined)).toHaveLength(2);
+
+        const renamedText = `
+package NotA {
+    part def B;
+}
+`;
+        st.build('test://pkg-a.sysml', parseDocument(renamedText));
+
+        const topLevelAs = st.getAllSymbols().filter(s => s.name === 'A' && s.parentQualifiedName === undefined);
+        expect(topLevelAs).toHaveLength(1);
+        expect(topLevelAs[0].kind).toBe('part def');
+        expect(st.getSymbol('A')?.kind).toBe('part def');
+    });
+});
+
 describe('Control nodes (fork/join/merge/decide)', () => {
     it('should extract fork/join/merge/decide as distinct symbol kinds', async () => {
         const { SysMLElementKind } = await import('../../server/src/symbols/sysmlElements.js');
@@ -635,4 +816,3 @@ package P {
         expect(toMetaclassName(SysMLElementKind.DecisionNode)).toBe('DecisionNode');
     });
 });
-

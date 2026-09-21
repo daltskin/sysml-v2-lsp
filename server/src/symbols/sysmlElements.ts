@@ -116,7 +116,60 @@ export interface SysMLSymbol {
     viewFilters?: string[];
     /** View rendering reference (e.g., "Views::asElementTable") */
     viewRendering?: string;
+    /** `import` statements owned directly by a package's body (see ImportTarget). */
+    importTargets?: ImportTarget[];
+    /**
+     * Package-level `filter <expr>;` conditions (§7.5.4), applying to every
+     * import of this package -- AND'd together with each other and with any
+     * per-import `ImportTarget.filter`.
+     */
+    filterConditions?: FilterExpr[];
 }
+
+/**
+ * A parsed `import` statement, resolved relative to the owning namespace.
+ * Mirrors the grammar's membershipImport/namespaceImport distinction:
+ * - 'membership': `import Owner::Name;` — makes exactly `Name` visible.
+ * - 'membership-deep': `import Owner::Name::**;` — `Name` and everything nested under it.
+ * - 'namespace-shallow': `import Owner::*;` — direct public members of `Owner`.
+ * - 'namespace-deep': `import Owner::*::**;` — all members of `Owner`, at any nesting depth.
+ */
+export interface ImportTarget {
+    kind: 'membership' | 'membership-deep' | 'namespace-shallow' | 'namespace-deep';
+    /** Qualified name of the imported element (membership kinds) or namespace (namespace kinds). */
+    target: string;
+    /**
+     * Visibility keyword on the import itself (private by default per the standard,
+     * §7.5.3) — governs whether a *further* importer of this namespace also sees the
+     * imported membership, independent of the source element's own visibility.
+     */
+    visibility: 'public' | 'private' | 'protected';
+    /**
+     * Inline filter condition(s) from a filtered import, §7.5.4:
+     * `import Owner::Target[@Metadata and ...];`. Multiple `[...]` brackets on
+     * one import are combined with AND ("if and only if they satisfy all the
+     * given filter conditions").
+     */
+    filter?: FilterExpr;
+}
+
+/**
+ * A boolean filter-condition expression (§7.5.4), supporting the metadata
+ * classification-test subset (`@Name`, `and`/`or`/`not`) evaluated against a
+ * candidate's `metadataAnnotations`. Only the prefix `#Name` annotation form
+ * is currently modeled as `metadataAnnotations` -- the body-member `@Name {
+ * ... }` metadata *usage* form (as in the standard's own §7.5.4 examples) and
+ * attribute-value comparisons inside filters (e.g. `level > 1`) are not
+ * evaluable with the data currently in the symbol table, and parse into
+ * 'unsupported', which `evaluateFilter` treats as passing (fail-open, so an
+ * unrecognized condition never silently hides an otherwise-valid import).
+ */
+export type FilterExpr =
+    | { kind: 'metadata'; name: string }
+    | { kind: 'and'; left: FilterExpr; right: FilterExpr }
+    | { kind: 'or'; left: FilterExpr; right: FilterExpr }
+    | { kind: 'not'; expr: FilterExpr }
+    | { kind: 'unsupported' };
 
 /**
  * Whether an element kind is a definition (type) or usage (instance).
