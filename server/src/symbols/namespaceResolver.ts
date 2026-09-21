@@ -29,8 +29,25 @@ export interface ResolvedMember {
     visibility: 'public' | 'private' | 'protected';
 }
 
-/** Permissiveness order for picking the effective visibility when the same element has more than one membership of a namespace (see `getResolvedMembers`'s `addMember`). */
+/** Permissiveness order for picking the effective visibility when the same
+ *  element has more than one membership of a namespace 
+ * (see `getResolvedMembers`'s `addMember`).
+ */
 const VISIBILITY_RANK: Record<ResolvedMember['visibility'], number> = { public: 2, protected: 1, private: 0 };
+
+/**
+ * Depth cap for the specialization-chain walk in `isSpecializationOf`. Not the
+ * actual cycle guard (that's its `visited` set) -- a generous safety net in
+ * case that guard ever has a gap, since no real model specializes this deep.
+ */
+const MAX_SPECIALIZATION_CHAIN_DEPTH = 64;
+
+/**
+ * Depth cap for the enclosing-namespace climb in `namespaceAncestorsOf`. A
+ * safety net against a malformed/cyclic `parentQualifiedName` chain, since no
+ * real model nests namespaces anywhere near this deep.
+ */
+const MAX_NAMESPACE_NESTING_DEPTH = 64;
 
 /**
  * QualifiedNames claimed by more than one symbol *of the same kind* --
@@ -187,6 +204,8 @@ export function evaluateFilter(expr: FilterExpr, symbol: SysMLSymbol): boolean {
  */
 export class NamespaceResolver {
     private resolvedMembersByIndexes?: WeakMap<SymbolIndexes, Map<string, Map<string, ResolvedMember[]>>>;
+    /** `(candidateQualifiedName, ownerQualifiedName)` pairs currently mid-check in `isSpecializationOf`, guarding against re-entrant recursion (see its own doc comment). */
+    private specializationChecksInProgress = new Set<string>();
 
     /**
      * Whether `name` (simple or qualified, e.g. `"Owner::Nested::Target"`) is
@@ -295,28 +314,46 @@ export class NamespaceResolver {
      * one `candidateQualifiedName`'s own `:>` clause actually refers to, so
      * an unrelated definition in a different package sharing a supertype's
      * simple name could falsely satisfy this check.
+     *
+     * Guarded against re-entrancy: resolving a candidate's own `:>` target
+     * can recurse back into `isProtectedVisibleFrom` -> `isSpecializationOf`
+     * for the very same (candidate, owner) pair before this call has
+     * returned. Each such call gets a *fresh* `visited` set (it's local, not
+     * shared across calls), so the in-BFS cycle guard below doesn't catch
+     * this -- only a check that survives across separate top-level calls
+     * does. Fails closed (not proven a specialization) rather than
+     * recursing forever; the guard key is scoped to `indexes` implicitly by
+     * being cleared once the outermost call for it returns, so it can't
+     * leak a stale answer across different `SymbolIndexes` snapshots.
      */
     private isSpecializationOf(candidateQualifiedName: string, ownerQualifiedName: string, indexes: SymbolIndexes): boolean {
-        const visited = new Set<string>([candidateQualifiedName]);
-        let frontier = [candidateQualifiedName];
-        let guard = 0;
-        while (frontier.length > 0 && guard++ < 64) {
-            const next: string[] = [];
-            for (const qualifiedName of frontier) {
-                const symbol = indexes.byQualifiedName.get(qualifiedName);
-                for (const typeName of symbol?.typeNames ?? []) {
-                    const supertype = this.resolveQualifiedNameFrom(symbol?.parentQualifiedName, typeName, indexes);
-                    if (!supertype) continue;
-                    if (supertype.qualifiedName === ownerQualifiedName) return true;
-                    if (!visited.has(supertype.qualifiedName)) {
-                        visited.add(supertype.qualifiedName);
-                        next.push(supertype.qualifiedName);
+        const reentrancyKey = `${candidateQualifiedName}\0${ownerQualifiedName}`;
+        if (this.specializationChecksInProgress.has(reentrancyKey)) return false;
+        this.specializationChecksInProgress.add(reentrancyKey);
+        try {
+            const visited = new Set<string>([candidateQualifiedName]);
+            let frontier = [candidateQualifiedName];
+            let guard = 0;
+            while (frontier.length > 0 && guard++ < MAX_SPECIALIZATION_CHAIN_DEPTH) {
+                const next: string[] = [];
+                for (const qualifiedName of frontier) {
+                    const symbol = indexes.byQualifiedName.get(qualifiedName);
+                    for (const typeName of symbol?.typeNames ?? []) {
+                        const supertype = this.resolveQualifiedNameFrom(symbol?.parentQualifiedName, typeName, indexes);
+                        if (!supertype) continue;
+                        if (supertype.qualifiedName === ownerQualifiedName) return true;
+                        if (!visited.has(supertype.qualifiedName)) {
+                            visited.add(supertype.qualifiedName);
+                            next.push(supertype.qualifiedName);
+                        }
                     }
                 }
+                frontier = next;
             }
-            frontier = next;
+            return false;
+        } finally {
+            this.specializationChecksInProgress.delete(reentrancyKey);
         }
-        return false;
     }
 
     /**
@@ -344,7 +381,7 @@ export class NamespaceResolver {
         const ancestors = new Set<string>();
         let current = startQualifiedName;
         let guard = 0;
-        while (current && guard++ < 64) {
+        while (current && guard++ < MAX_NAMESPACE_NESTING_DEPTH) {
             ancestors.add(current);
             current = indexes.byQualifiedName.get(current)?.parentQualifiedName;
         }

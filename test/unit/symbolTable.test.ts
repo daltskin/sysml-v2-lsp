@@ -734,6 +734,31 @@ part def NotA {
         expect(topLevelAs[0].kind).toBe('package');
         expect(st.getSymbol('A')?.kind).toBe('package');
     });
+
+    it('goes back to a single "A" when the *package* side is removed instead, leaving the non-package sibling', async () => {
+        // Mirror image of the test above: `unregisterPackageFragment`'s own
+        // fallback to a remaining non-package conflicting symbol, exercised
+        // separately from `unregisterPlainSymbol`'s fallback to a remaining
+        // package.
+        const { parseDocument } = await import('../../server/src/parser/parseDocument.js');
+        const { SymbolTable } = await import('../../server/src/symbols/symbolTable.js');
+        const st = new SymbolTable();
+        st.build('test://pkg-a.sysml', parseDocument(pkgAText));
+        st.build('test://partdef-a.sysml', parseDocument(partDefAText));
+        expect(st.getAllSymbols().filter(s => s.name === 'A' && s.parentQualifiedName === undefined)).toHaveLength(2);
+
+        const renamedText = `
+package NotA {
+    part def B;
+}
+`;
+        st.build('test://pkg-a.sysml', parseDocument(renamedText));
+
+        const topLevelAs = st.getAllSymbols().filter(s => s.name === 'A' && s.parentQualifiedName === undefined);
+        expect(topLevelAs).toHaveLength(1);
+        expect(topLevelAs[0].kind).toBe('part def');
+        expect(st.getSymbol('A')?.kind).toBe('part def');
+    });
 });
 
 describe('Control nodes (fork/join/merge/decide)', () => {
@@ -791,5 +816,3 @@ package P {
         expect(toMetaclassName(SysMLElementKind.DecisionNode)).toBe('DecisionNode');
     });
 });
-
-

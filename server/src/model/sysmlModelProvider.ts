@@ -1219,14 +1219,16 @@ export class SysMLModelProvider {
         }
         const libraryNames = this.libraryNamesCache;
 
-        // Ambiguous namespace names (a `package A` and an unrelated `part def
-        // A` sharing a qualifiedName -- see `findConflictedQualifiedNames`'s
-        // doc comment) also need the workspace symbol table: the conflict, and
-        // the resulting unresolved references it causes, can span two files.
-        // Ported from `SemanticValidator.checkAmbiguousNamespaceName` so the
-        // `sysml/model` request's own diagnostics (Model Explorer, Dashboard,
-        // Feature Inspector) explain *why* a reference is unresolved the same
-        // way the editor's own diagnostics do, not just leave it unexplained.
+        // Ambiguous namespace names (two symbols of the *same* kind sharing a
+        // qualifiedName, e.g. two `part def A` -- see
+        // `findConflictedQualifiedNames`'s doc comment for why a package and
+        // an unrelated definition sharing a name is NOT one of these) also
+        // need the workspace symbol table: the conflict, and the resulting
+        // unresolved references it causes, can span two files. Ported from
+        // `SemanticValidator.checkAmbiguousNamespaceName` so the `sysml/model`
+        // request's own diagnostics (Model Explorer, Dashboard, Feature
+        // Inspector) explain *why* a reference is unresolved the same way the
+        // editor's own diagnostics do, not just leave it unexplained.
         const conflicts = findConflictedQualifiedNames(this.documentManager.getWorkspaceSymbolTable().getAllSymbols());
 
         for (const symbol of symbols) {

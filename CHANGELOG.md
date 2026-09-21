@@ -2,9 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- Import filtering (SysML v2 §7.5.4), e.g., `import Pkg::**[@Approval and not @Deprecated];` and inline filter conditions on individual imports now restrict which members are brought into scope based on their metadata annotations.
+- A new `ambiguous-namespace-name` diagnostic flags two same-kind declarations (e.g. two `part def A`) sharing a qualified name in the workspace; a package legitimately reopened across files, or a package and an unrelated definition sharing a name, are not flagged (KerML `Membership.isDistinguishableFrom`, §8.3.2.4.4).
+
 ### Fixed
 
 - The `unresolved-type` diagnostic, and equivalent `sysml/model` resolution, now respects package/namespace visibility instead of matching any name anywhere in the workspace, so two unrelated packages reusing the same short name no longer mask a genuine unresolved reference.
+- Improved robustness of namespace resolution against stack overflows, guarding against recursive/mutually re-exported package import cycles and protected-member visibility checks through a self-referential specialization chain.
+- A nested package's own imports are no longer attributed to its enclosing definition, replacing the definition's own imports; import extraction is now restricted to the owning namespace's body.
 
 ## [0.27.0]
 

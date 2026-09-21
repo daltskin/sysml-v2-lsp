@@ -184,6 +184,14 @@ const RE_SPEC = /(?:specializes|:>|:>>)\s*('[^']+'|[A-Za-z_]\w*(?:::\w+)*)(?:\s*
 // by feature subsetting relationships.
 const RE_SPEC_WITH_SUBSETS = /(?:specializes|subsets|:>|:>>)\s*('[^']+'|[A-Za-z_]\w*(?:::\w+)*)(?:\s*,\s*(?:'[^']+'|[A-Za-z_]\w*(?:::\w+)*))*/;
 const RE_DEFINED_BY = /definedby\s*([A-Za-z_]\w*(?:::\w+)*(?:\s*,\s*[A-Za-z_]\w*(?:::\w+)*)*)/;
+
+/**
+ * Recursion-depth cap for `findOwnBodyRule`/`findRule`'s parse-tree search --
+ * a safety net against an unexpectedly deep parse tree, consistent with the
+ * same "don't go too deep" cap already used elsewhere in this file.
+ */
+const MAX_RULE_SEARCH_DEPTH = 6;
+
 const RE_TYPING = /:(?![:>])\s*('[^']+'|[A-Za-z_]\w*(?:::\w+)*)/;
 const RE_QUOTED_NAME = /'([^']+)'/;
 const RE_IDENT_START = /^([A-Za-z_]\w*(?:::\w+)*)/;
@@ -669,7 +677,25 @@ export class SymbolTable {
     private removeFromConflictTracking(sym: SysMLSymbol): void {
         const conflictSet = this.conflictedSymbolsByQualifiedName.get(sym.qualifiedName);
         if (!conflictSet) return;
-        conflictSet.delete(sym);
+        if (sym.kind === SysMLElementKind.Package) {
+            // The conflict set tracks the package side by its *merged*
+            // representative object (see `mergePackageFragments`), never the
+            // same object identity as any raw per-uri fragment (`sym` here)
+            // -- `conflictSet.delete(sym)` would silently no-op, leaving a
+            // permanently stale merged object behind once the package's
+            // last fragment is gone. Only clean it up once no fragments
+            // remain at all: if some still do, `mergePackageFragments`
+            // (called by `unregisterPackageFragment` just before this) has
+            // already refreshed the conflict set with the current merged
+            // view, which removing by kind here would wrongly undo.
+            if (!this.packageFragmentsByQualifiedName.has(sym.qualifiedName)) {
+                for (const s of [...conflictSet]) {
+                    if (s.kind === SysMLElementKind.Package) conflictSet.delete(s);
+                }
+            }
+        } else {
+            conflictSet.delete(sym);
+        }
         const remaining = [...conflictSet];
         if (remaining.length <= 1 || remaining.every(s => s.kind === SysMLElementKind.Package)) {
             this.conflictedSymbolsByQualifiedName.delete(sym.qualifiedName);
@@ -1671,7 +1697,7 @@ export class SymbolTable {
      */
     private findOwnBodyRule(ctx: ParserRuleContext, ruleIndex: number, depth = 0): ParserRuleContext | undefined {
         if (ctx.ruleIndex === ruleIndex) return ctx;
-        if (depth > 6) return undefined;
+        if (depth > MAX_RULE_SEARCH_DEPTH) return undefined;
         for (let i = 0; i < ctx.getChildCount(); i++) {
             const child = ctx.getChild(i);
             if (!(child instanceof ParserRuleContext)) continue;
@@ -1766,7 +1792,7 @@ export class SymbolTable {
      */
     private findRule(ctx: ParserRuleContext, ruleIndex: number, depth = 0): ParserRuleContext | undefined {
         if (ctx.ruleIndex === ruleIndex) return ctx;
-        if (depth > 6) return undefined;
+        if (depth > MAX_RULE_SEARCH_DEPTH) return undefined;
         for (let i = 0; i < ctx.getChildCount(); i++) {
             const child = ctx.getChild(i);
             if (child instanceof ParserRuleContext) {

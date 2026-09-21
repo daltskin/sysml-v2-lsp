@@ -1512,3 +1512,64 @@ function validateElementTree(elements: any[]): void {
         }
     }
 }
+
+
+describe('sysml/model diagnostics scope reuses the same NamespaceResolver as the editor', () => {
+    // `extractSemanticDiagnostics` in sysmlModelProvider.ts shares the exact
+    // same NamespaceResolver instance/resolveTypeName/buildSymbolIndexes as
+    // SemanticValidator's editor diagnostics -- these lock in that the
+    // re-entrancy and import-cycle guards protect this request path too,
+    // not just `textDocument/publishDiagnostics`.
+    async function getModelForTextInline(text: string, scopes?: string[]) {
+        const { DocumentManager } = await import('../../server/src/documentManager.js');
+        const { SysMLModelProvider } = await import('../../server/src/model/sysmlModelProvider.js');
+        const { TextDocument } = await import('vscode-languageserver-textdocument');
+        const uri = 'test://model-namespace-resolver.sysml';
+        const docManager = new DocumentManager();
+        docManager.parse(TextDocument.create(uri, 'sysml', 1, text));
+        const provider = new SysMLModelProvider(docManager);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return provider.getModel(uri, 1, scopes as any);
+    }
+
+    it('does not stack overflow on a protected member reachable through a self-referential specialization chain', async () => {
+        const text = `
+package Lib {
+    part def Engine;
+}
+part def Vehicle {
+    protected import Lib::Engine;
+}
+part def Container :> Container::Child {
+    part def Child :> Vehicle::Engine;
+    part engine : Vehicle::Engine;
+}
+`;
+        const model = await getModelForTextInline(text, ['diagnostics']);
+        const unresolvedDiags = model.diagnostics!.filter(d => d.code === 'unresolved-type');
+        expect(unresolvedDiags.filter(d => d.message.includes('Vehicle::Engine')).length).toBe(2);
+    });
+
+    it('does not stack overflow on a mutual ::** import cycle and still resolves types through it', async () => {
+        const text = `
+package A {
+    part def PartA;
+    public import B::**;
+}
+package B {
+    part def PartB;
+    public import A::**;
+}
+package User {
+    import A::*;
+    import B::*;
+    part usesA : PartA;
+    part usesB : PartB;
+}
+`;
+        const model = await getModelForTextInline(text, ['diagnostics']);
+        const unresolvedDiags = model.diagnostics!.filter(d => d.code === 'unresolved-type');
+        expect(unresolvedDiags.some(d => d.message.includes("'PartA'"))).toBe(false);
+        expect(unresolvedDiags.some(d => d.message.includes("'PartB'"))).toBe(false);
+    });
+});

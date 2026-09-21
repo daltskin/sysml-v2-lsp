@@ -1944,6 +1944,125 @@ package PkgB {
             expect(unresolvedDiags.some(d => d.message.includes('PkgA::Vehicle::Engine'))).toBe(true);
         });
 
+        it('should not let a protected member become visible through a specialization chain that never actually reaches the owning definition', async () => {
+            // Test if the protected visibility remains inaccessible, which
+            // requires the implementation of a re-entrancy guard, otherwise
+            // causing a serious range error / stack size overflow
+            const text = `
+package Lib {
+    part def Engine;
+}
+part def Vehicle {
+    protected import Lib::Engine;
+}
+part def Container :> Container::Child {
+    part def Child :> Vehicle::Engine;
+    part engine : Vehicle::Engine;
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unresolvedDiags = diags.filter(d => d.code === 'unresolved-type');
+            expect(unresolvedDiags.filter(d => d.message.includes('Vehicle::Engine')).length).toBe(2);
+        });
+
+        describe('incremental visibility changes are reassessed on re-parse', () => {
+            // Resolution results must not be stale-cached across edits: an
+            // import's own visibility keyword is just as much a part of a
+            // document's content as anything else, so tightening or loosening
+            // it (with no other change) must be picked up on the very next
+            // validate() call, the same way adding/removing a symbol is.
+            it('re-flags an external reference once a public import is edited down to private, and clears it again if reverted', async () => {
+                const { DocumentManager } = await import('../../server/src/documentManager.js');
+                const { SemanticValidator } = await import('../../server/src/providers/semanticValidator.js');
+
+                const uriLib = 'file:///lib.sysml';
+                const uriB = 'file:///b.sysml';
+                const uriExternal = 'file:///external.sysml';
+                const libText = `
+package Lib {
+    part def Part3;
+}
+`;
+                const bTextPublic = `
+package PkgB {
+    public import Lib::Part3;
+}
+`;
+                const bTextPrivate = `
+package PkgB {
+    private import Lib::Part3;
+}
+`;
+                const externalText = `
+package External {
+    import PkgB::*;
+    part usesPart3 : Part3;
+}
+`;
+
+                const docManager = new DocumentManager();
+                docManager.parse(await makeDoc(libText, uriLib));
+                docManager.parse(await makeDoc(bTextPublic, uriB));
+                docManager.parse(await makeDoc(externalText, uriExternal));
+                const validator = new SemanticValidator(docManager);
+
+                expect(validator.validate(uriExternal).filter(d => d.code === 'unresolved-type')).toHaveLength(0);
+
+                const mod = await import('../../server/node_modules/vscode-languageserver-textdocument/lib/esm/main.js');
+                docManager.parse(mod.TextDocument.create(uriB, 'sysml', 2, bTextPrivate));
+                const afterDiags = validator.validate(uriExternal).filter(d => d.code === 'unresolved-type');
+                expect(afterDiags.some(d => d.message.includes("'Part3'"))).toBe(true);
+
+                docManager.parse(mod.TextDocument.create(uriB, 'sysml', 3, bTextPublic));
+                expect(validator.validate(uriExternal).filter(d => d.code === 'unresolved-type')).toHaveLength(0);
+            });
+
+            it('re-flags a non-specializing reference once a public import is edited down to protected, and clears it again if reverted', async () => {
+                const { DocumentManager } = await import('../../server/src/documentManager.js');
+                const { SemanticValidator } = await import('../../server/src/providers/semanticValidator.js');
+
+                const uriLib = 'file:///lib.sysml';
+                const uriVehicle = 'file:///vehicle.sysml';
+                const uriUser = 'file:///user.sysml';
+                const libText = `
+package Lib {
+    part def Engine;
+}
+`;
+                const vehicleTextPublic = `
+part def Vehicle {
+    public import Lib::Engine;
+}
+`;
+                const vehicleTextProtected = `
+part def Vehicle {
+    protected import Lib::Engine;
+}
+`;
+                const userText = `
+package User {
+    part usesEngine : Vehicle::Engine;
+}
+`;
+
+                const docManager = new DocumentManager();
+                docManager.parse(await makeDoc(libText, uriLib));
+                docManager.parse(await makeDoc(vehicleTextPublic, uriVehicle));
+                docManager.parse(await makeDoc(userText, uriUser));
+                const validator = new SemanticValidator(docManager);
+
+                expect(validator.validate(uriUser).filter(d => d.code === 'unresolved-type')).toHaveLength(0);
+
+                const mod = await import('../../server/node_modules/vscode-languageserver-textdocument/lib/esm/main.js');
+                docManager.parse(mod.TextDocument.create(uriVehicle, 'sysml', 2, vehicleTextProtected));
+                const afterDiags = validator.validate(uriUser).filter(d => d.code === 'unresolved-type');
+                expect(afterDiags.some(d => d.message.includes('Vehicle::Engine'))).toBe(true);
+
+                docManager.parse(mod.TextDocument.create(uriVehicle, 'sysml', 3, vehicleTextPublic));
+                expect(validator.validate(uriUser).filter(d => d.code === 'unresolved-type')).toHaveLength(0);
+            });
+        });
+
         describe('mixed-visibility duplicate imports of the same target (order-independence)', () => {
             // §7.5: "an element may have... multiple... memberships with the same
             // namespace" -- two `import` statements for the same target (here, across
@@ -2191,6 +2310,34 @@ package User {
                 expect(unresolvedDiags.some(d => d.message.includes("'Part5'"))).toBe(true);
             });
 
+            it('should support "or" in filter expressions', async () => {
+                const twoMetaLibText = `
+package Lib {
+    metadata def Approval;
+    metadata def Deprecated;
+    #Approval part def Part3;
+    #Deprecated part def Part4;
+    part def Part5;
+}
+`;
+                const userText = `
+package User {
+    import Lib::**[@Approval or @Deprecated];
+    part usesPart3 : Part3;
+    part usesPart4 : Part4;
+    part usesPart5 : Part5;
+}
+`;
+                const diags = await getSemanticDiagnosticsForUri(
+                    [{ uri: 'file:///lib.sysml', text: twoMetaLibText }, { uri: 'file:///user.sysml', text: userText }],
+                    'file:///user.sysml',
+                );
+                const unresolvedDiags = diags.filter(d => d.code === 'unresolved-type');
+                expect(unresolvedDiags.some(d => d.message.includes("'Part3'"))).toBe(false);
+                expect(unresolvedDiags.some(d => d.message.includes("'Part4'"))).toBe(false);
+                expect(unresolvedDiags.some(d => d.message.includes("'Part5'"))).toBe(true);
+            });
+
             it('should treat an unsupported filter expression (e.g. attribute comparisons) as passing (fail-open)', async () => {
                 const userText = `
 package User {
@@ -2206,6 +2353,104 @@ package User {
                 const unresolvedDiags = diags.filter(d => d.code === 'unresolved-type');
                 expect(unresolvedDiags.some(d => d.message.includes("'Part3'"))).toBe(false);
                 expect(unresolvedDiags.some(d => d.message.includes("'Part4'"))).toBe(false);
+            });
+
+            describe('incremental metadata changes are reassessed on re-parse', () => {
+                // A filter condition's own metadata annotations are just as
+                // much part of a document's content as anything else, so
+                // adding/removing one must be picked up on the very next
+                // validate() call, the same way an import's own visibility
+                // keyword is (see the analogous describe block above).
+                it('re-flags a filtered-import reference once #Approval metadata is removed from its target, and clears it again if reverted', async () => {
+                    const { DocumentManager } = await import('../../server/src/documentManager.js');
+                    const { SemanticValidator } = await import('../../server/src/providers/semanticValidator.js');
+
+                    const uriLib = 'file:///lib.sysml';
+                    const uriUser = 'file:///user.sysml';
+                    const libTextApproved = `
+package Lib {
+    metadata def Approval;
+    #Approval part def Part3;
+}
+`;
+                    const libTextNotApproved = `
+package Lib {
+    metadata def Approval;
+    part def Part3;
+}
+`;
+                    const userText = `
+package User {
+    import Lib::**[@Approval];
+    part usesPart3 : Part3;
+}
+`;
+
+                    const docManager = new DocumentManager();
+                    docManager.parse(await makeDoc(libTextApproved, uriLib));
+                    docManager.parse(await makeDoc(userText, uriUser));
+                    const validator = new SemanticValidator(docManager);
+
+                    expect(validator.validate(uriUser).filter(d => d.code === 'unresolved-type')).toHaveLength(0);
+
+                    const mod = await import('../../server/node_modules/vscode-languageserver-textdocument/lib/esm/main.js');
+                    docManager.parse(mod.TextDocument.create(uriLib, 'sysml', 2, libTextNotApproved));
+                    const afterDiags = validator.validate(uriUser).filter(d => d.code === 'unresolved-type');
+                    expect(afterDiags.some(d => d.message.includes("'Part3'"))).toBe(true);
+
+                    docManager.parse(mod.TextDocument.create(uriLib, 'sysml', 3, libTextApproved));
+                    expect(validator.validate(uriUser).filter(d => d.code === 'unresolved-type')).toHaveLength(0);
+                });
+
+                it('re-flags an external reference once a filtered import is separately edited down to private, with the metadata unchanged', async () => {
+                    // Combined case: metadata (filter match) and visibility
+                    // are independent axes -- editing just one, while the
+                    // other stays exactly as it was, must still be reassessed.
+                    const { DocumentManager } = await import('../../server/src/documentManager.js');
+                    const { SemanticValidator } = await import('../../server/src/providers/semanticValidator.js');
+
+                    const uriLib = 'file:///lib.sysml';
+                    const uriB = 'file:///b.sysml';
+                    const uriExternal = 'file:///external.sysml';
+                    const libTextApproved = `
+package Lib {
+    metadata def Approval;
+    #Approval part def Part3;
+}
+`;
+                    const bTextPublicFiltered = `
+package PkgB {
+    public import Lib::**[@Approval];
+}
+`;
+                    const bTextPrivateFiltered = `
+package PkgB {
+    private import Lib::**[@Approval];
+}
+`;
+                    const externalText = `
+package External {
+    import PkgB::*;
+    part usesPart3 : Part3;
+}
+`;
+
+                    const docManager = new DocumentManager();
+                    docManager.parse(await makeDoc(libTextApproved, uriLib));
+                    docManager.parse(await makeDoc(bTextPublicFiltered, uriB));
+                    docManager.parse(await makeDoc(externalText, uriExternal));
+                    const validator = new SemanticValidator(docManager);
+
+                    expect(validator.validate(uriExternal).filter(d => d.code === 'unresolved-type')).toHaveLength(0);
+
+                    const mod = await import('../../server/node_modules/vscode-languageserver-textdocument/lib/esm/main.js');
+                    docManager.parse(mod.TextDocument.create(uriB, 'sysml', 2, bTextPrivateFiltered));
+                    const afterDiags = validator.validate(uriExternal).filter(d => d.code === 'unresolved-type');
+                    expect(afterDiags.some(d => d.message.includes("'Part3'"))).toBe(true);
+
+                    docManager.parse(mod.TextDocument.create(uriB, 'sysml', 3, bTextPublicFiltered));
+                    expect(validator.validate(uriExternal).filter(d => d.code === 'unresolved-type')).toHaveLength(0);
+                });
             });
         });
     });
@@ -2477,9 +2722,3 @@ package External {
         });
     });
 });
-
-
-
-
-
-
