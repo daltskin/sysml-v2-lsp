@@ -547,8 +547,32 @@ function revalidateOpenDocuments(): void {
 // Document sync — parse on open/change
 // --------------------------------------------------------------------------
 
-/** Debounced timer for cross-file re-validation after a document opens. */
+/** Debounced timer for cross-file re-validation after a document opens or changes. */
 let crossFileRevalidateTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * Debounce delay in ms before re-validating every open document after one
+ * document's symbols change (open, edit, or a workspace file-watcher event).
+ * Longer than `DEBOUNCE_MS` since the work it guards is O(open documents),
+ * not O(1) -- worth waiting for edits to fully settle before paying that
+ * cost, rather than re-running it on every pause in typing. One constant
+ * shared by both callers, `onDidChangeContent` and `onDidOpen`.
+ */
+const CROSS_FILE_REVALIDATE_DEBOUNCE_MS = 500;
+
+/**
+ * (Re)start the debounced cross-file revalidation timer -- called after a
+ * document opens or its content settles, since either can change its
+ * contribution to workspace-wide symbol conflicts and leave other open
+ * documents' diagnostics stale otherwise.
+ */
+function scheduleCrossFileRevalidate(): void {
+    if (crossFileRevalidateTimer) clearTimeout(crossFileRevalidateTimer);
+    crossFileRevalidateTimer = setTimeout(() => {
+        crossFileRevalidateTimer = undefined;
+        revalidateOpenDocuments();
+    }, CROSS_FILE_REVALIDATE_DEBOUNCE_MS);
+}
 
 documents.onDidOpen((event) => {
     if (!serverReady) {
@@ -566,11 +590,7 @@ documents.onDidOpen((event) => {
     // A newly opened file adds symbols to the workspace table.
     // Debounce cross-file re-validation so bulk-opening many files
     // (e.g. workspace scan) doesn't cause O(n²) validateDocument calls.
-    if (crossFileRevalidateTimer) clearTimeout(crossFileRevalidateTimer);
-    crossFileRevalidateTimer = setTimeout(() => {
-        crossFileRevalidateTimer = undefined;
-        revalidateOpenDocuments();
-    }, 500);
+    scheduleCrossFileRevalidate();
 });
 
 /** Pending debounce timers keyed by document URI. */
@@ -594,6 +614,13 @@ documents.onDidChangeContent((event) => {
             return;
         }
         validateDocument(event.document);
+
+        // An edit can change this document's contribution to workspace-wide
+        // symbol conflicts (e.g. renaming away a name collision, or
+        // introducing one) — other open documents whose diagnostics depend
+        // on that (ambiguous-namespace-name, unresolved-type) would
+        // otherwise keep showing stale results until closed and reopened.
+        scheduleCrossFileRevalidate();
     }, DEBOUNCE_MS));
 });
 

@@ -9,6 +9,7 @@
 
 ### Fixed
 
+- Editing an open document to resolve (or introduce) a name collision with another open document now re-validates that other document too, instead of leaving it with a stale `ambiguous-namespace-name` / cascaded `unresolved-type` diagnostic until closed and reopened.
 - The `unresolved-type` diagnostic, and equivalent `sysml/model` resolution, now respects package/namespace visibility instead of matching any name anywhere in the workspace, so two unrelated packages reusing the same short name no longer mask a genuine unresolved reference.
 - Improved robustness of namespace resolution against stack overflows, guarding against recursive/mutually re-exported package import cycles and protected-member visibility checks through a self-referential specialization chain.
 - A nested package's own imports are no longer attributed to its enclosing definition, replacing the definition's own imports; import extraction is now restricted to the owning namespace's body.

@@ -2608,6 +2608,56 @@ package External {
             const afterRevertAmbiguous = validator.validate(uriA).filter(d => d.code === 'ambiguous-namespace-name');
             expect(afterRevertAmbiguous).toHaveLength(0);
         });
+
+        it('reflects a sibling document\'s conflicting/renamed declaration on the next validate() call, in both directions', async () => {
+            // The `unresolved-type` on `wheels` here isn't "Wheel doesn't
+            // exist" -- it's cascading from "Wheel" being excluded from
+            // resolution entirely while its qualifiedName is ambiguous
+            // (buildSymbolIndexes). Checked in both directions: introducing
+            // the conflict must raise both diagnostics, and removing it again
+            // must clear both -- no stale state left over from the conflict
+            // either way.
+            const { DocumentManager } = await import('../../server/src/documentManager.js');
+            const { SemanticValidator } = await import('../../server/src/providers/semanticValidator.js');
+
+            const uriA = 'file:///vehicle.sysml';
+            const uriB = 'file:///duplicate-wheel.sysml';
+            const aText = `
+part def Wheel {}
+part def Vehicle {
+    part wheels : Wheel;
+}
+`;
+            const bTextNoConflict = `
+part def Wheel2;
+`;
+
+            const bTextConflicting = `
+part def Wheel;
+`;
+
+            const docManager = new DocumentManager();
+            docManager.parse(await makeDoc(aText, uriA));
+            docManager.parse(await makeDoc(bTextNoConflict, uriB));
+            const validator = new SemanticValidator(docManager);
+
+            const beforeDiags = validator.validate(uriA);
+            expect(beforeDiags.filter(d => d.code === 'ambiguous-namespace-name')).toHaveLength(0);
+            expect(beforeDiags.filter(d => d.code === 'unresolved-type')).toHaveLength(0);
+
+            const mod = await import('../../server/node_modules/vscode-languageserver-textdocument/lib/esm/main.js');
+            docManager.parse(mod.TextDocument.create(uriB, 'sysml', 2, bTextConflicting));
+
+            const duringDiags = validator.validate(uriA);
+            expect(duringDiags.some(d => d.code === 'ambiguous-namespace-name' && d.message.includes("'Wheel'"))).toBe(true);
+            expect(duringDiags.some(d => d.code === 'unresolved-type' && d.message.includes("'Wheel'"))).toBe(true);
+
+            docManager.parse(mod.TextDocument.create(uriB, 'sysml', 3, bTextNoConflict));
+
+            const afterDiags = validator.validate(uriA);
+            expect(afterDiags.filter(d => d.code === 'ambiguous-namespace-name')).toHaveLength(0);
+            expect(afterDiags.filter(d => d.code === 'unresolved-type')).toHaveLength(0);
+        });
     });
 
     describe('non-conflicting different-kind symbols sharing a qualifiedName (valid per KerML)', () => {
