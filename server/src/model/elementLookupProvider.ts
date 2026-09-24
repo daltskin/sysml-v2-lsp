@@ -24,10 +24,13 @@ export class ElementLookupProvider {
      * a namespace, or completes a `'qualifiedName'` one relative to it. See
      * `ElementLookupQuery`'s doc comment in `elementLookupTypes.ts` for the
      * exact matching rules.
+     * Object.create(null) avoids Object.prototype special-casing keys like
+     * __proto__ (a valid SysML element name), which would otherwise be
+     * silently dropped when set on a plain {} literal.
      */
     elementLookup(params: SysMLElementLookupParams): SysMLElementLookupResult {
         const allSymbols = this.documentManager.getWorkspaceSymbolTable().getAllSymbolsIncludingDuplicates();
-        const results: Record<string, ElementMatch[]> = {};
+        const results: Record<string, ElementMatch[]> = Object.create(null);
         for (const query of params?.queries ?? []) {
             const kind = query.kind ?? (query.name.includes('::') ? 'qualifiedName' : 'name');
             const matches = this.resolveMatches(allSymbols, query.name, kind, query.scope);

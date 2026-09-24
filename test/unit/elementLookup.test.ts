@@ -504,4 +504,29 @@ part def Wheel;`;
         expect(indexingComplete).toBe(false);
         expect(results.Wheel).toEqual([]);
     });
+
+    // "__proto__" is a legal SysML identifier but, as a key on a plain {} object, is
+    // special-cased by JS to set the object's prototype rather than a real own
+    // property -- silently dropping the entry instead of storing it. `results` must
+    // be built on a null-prototype object so this key behaves like any other.
+    it('returns matches for the element name "__proto__" and survives JSON round-tripping', async () => {
+        const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+
+        const text = `
+part def __proto__;`;
+
+        const dm = await setupMulti([{ uri: 'test://a.sysml', text }]);
+        const provider = new ElementLookupProvider(dm);
+
+        const { results } = provider.elementLookup({ queries: [{ name: '__proto__' }] });
+
+        expect(Object.prototype.hasOwnProperty.call(results, '__proto__')).toBe(true);
+        expect(results.__proto__).toHaveLength(1);
+        expect(results.__proto__[0].qualifiedName).toBe('__proto__');
+
+        const roundTripped = JSON.parse(JSON.stringify({ results }));
+        expect(roundTripped.results.__proto__).toHaveLength(1);
+        expect(roundTripped.results.__proto__[0].qualifiedName).toBe('__proto__');
+    });
+
 });
