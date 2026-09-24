@@ -5,7 +5,7 @@ export default tseslint.config(
     eslint.configs.recommended,
     ...tseslint.configs.recommended,
     {
-        files: ["clients/vscode/src/**/*.ts", "server/src/**/*.ts"],
+        files: ["clients/vscode/src/**/*.ts", "server/src/**/*.ts", "test/**/*.ts"],
         rules: {
             "@typescript-eslint/no-unused-vars": [
                 "warn",
