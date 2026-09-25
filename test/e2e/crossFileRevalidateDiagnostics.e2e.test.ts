@@ -17,7 +17,10 @@
  * test:e2e` builds it first; see that script in package.json.
  */
 import { fork, type ChildProcess } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 type PublishDiagnosticsParams = {
@@ -27,6 +30,83 @@ type PublishDiagnosticsParams = {
 
 const serverPath = fileURLToPath(new URL('../../dist/server/server.js', import.meta.url));
 
+describe('workspace preload policy (real server, over LSP)', () => {
+    it.each([
+        { policy: 'always', isWorkspaceFile: false, shouldScan: true },
+        { policy: 'always', isWorkspaceFile: true, shouldScan: true },
+        { policy: 'workspaceOnly', isWorkspaceFile: false, shouldScan: false },
+        { policy: 'workspaceOnly', isWorkspaceFile: true, shouldScan: true },
+        { policy: 'never', isWorkspaceFile: false, shouldScan: false },
+        { policy: 'never', isWorkspaceFile: true, shouldScan: false },
+        { policy: undefined, isWorkspaceFile: true, shouldScan: true },
+        { policy: 'invalid', isWorkspaceFile: false, shouldScan: false },
+    ])('honors $policy with saved workspace=$isWorkspaceFile', async ({ policy, isWorkspaceFile, shouldScan }) => {
+        const root = await mkdtemp(join(tmpdir(), 'sysml-preload-'));
+        const rpc = await import('../../server/node_modules/vscode-jsonrpc/lib/node/main.js');
+        const child = fork(serverPath, ['--node-ipc'], { silent: true });
+        const connection = rpc.createMessageConnection(new rpc.IPCMessageReader(child), new rpc.IPCMessageWriter(child));
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+            await mkdir(join(root, 'nested'));
+            await writeFile(join(root, 'nested', 'wheel.sysml'), 'part def Wheel;');
+            await writeFile(join(root, 'nested', 'axle.kerml'), 'class Axle;');
+            connection.onRequest('client/registerCapability', () => null);
+            connection.onRequest('workspace/configuration', (params: { items: { section: string }[] }) =>
+                params.items.map(item => item.section === 'sysml.workspace'
+                    ? { preloadOnOpen: policy } : {}));
+            const scanMessages: string[] = [];
+            connection.onNotification('window/logMessage', (params: { message: string }) => {
+                if (params.message.startsWith('Workspace scan:')) scanMessages.push(params.message);
+            });
+            const uri = pathToFileURL(join(root, 'consumer.sysml')).toString();
+            const validated = new Promise<PublishDiagnosticsParams>((resolve, reject) => {
+                timer = setTimeout(() => reject(new Error('Consumer was not validated')), 10_000);
+                let semanticDone = false;
+                connection.onNotification('sysml/status', (params: { uri: string; state: string }) => {
+                    if (params.uri === uri) semanticDone = params.state === 'end';
+                });
+                connection.onNotification('textDocument/publishDiagnostics', (params: PublishDiagnosticsParams) => {
+                    if (params.uri === uri && semanticDone && (!shouldScan || scanMessages.length > 0)) {
+                        resolve(params);
+                    }
+                });
+            });
+            connection.listen();
+            await connection.sendRequest('initialize', {
+                processId: process.pid,
+                rootUri: pathToFileURL(root).toString(),
+                capabilities: { workspace: { configuration: true } },
+                initializationOptions: { isWorkspaceFile },
+            });
+            await connection.sendNotification('initialized', {});
+            await connection.sendNotification('textDocument/didOpen', {
+                textDocument: {
+                    uri, languageId: 'sysml', version: 1,
+                    text: 'part def Vehicle { part wheel : Wheel; }',
+                },
+            });
+            const result = await validated;
+            if (shouldScan) {
+                expect(result.diagnostics.some(diagnostic => diagnostic.code === 'unresolved-type')).toBe(false);
+            }
+            const definitions = await connection.sendRequest<{ uri: string } | { uri: string }[] | null>('textDocument/definition', {
+                textDocument: { uri },
+                position: { line: 0, character: 'part def Vehicle { part wheel : '.length + 1 },
+            });
+            const locations = Array.isArray(definitions) ? definitions : definitions ? [definitions] : [];
+            expect(locations.some(location => location.uri === pathToFileURL(join(root, 'nested', 'wheel.sysml')).toString()))
+                .toBe(shouldScan);
+            expect(scanMessages).toHaveLength(shouldScan ? 1 : 0);
+            if (shouldScan) expect(scanMessages[0]).toContain('pre-parsed 2');
+        } finally {
+            clearTimeout(timer);
+            connection.dispose();
+            child.kill();
+            await rm(root, { recursive: true, force: true });
+        }
+    }, 20_000);
+});
+
 describe('cross-file diagnostics revalidation (real server, over LSP)', () => {
     // Typed from the same relative module the runtime import below uses (not the bare
     // specifier 'vscode-jsonrpc/node', which isn't installed at this package's own root) --
@@ -34,6 +114,7 @@ describe('cross-file diagnostics revalidation (real server, over LSP)', () => {
     let child: ChildProcess;
     let connection: import('../../server/node_modules/vscode-jsonrpc/lib/node/main.js').MessageConnection;
     let received: PublishDiagnosticsParams[];
+    let disabledCodes: string[] = [];
 
     /** Waits until a semantic `publishDiagnostics` matching `predicate` has been received, or times out. */
     async function waitForDiagnostics(
@@ -54,6 +135,9 @@ describe('cross-file diagnostics revalidation (real server, over LSP)', () => {
 
         child = fork(serverPath, ['--node-ipc'], { silent: true });
         connection = rpc.createMessageConnection(new rpc.IPCMessageReader(child), new rpc.IPCMessageWriter(child));
+        connection.onRequest('client/registerCapability', () => null);
+        connection.onRequest('workspace/configuration', (params: { items: { section: string }[] }) =>
+            params.items.map(item => item.section === 'sysml.validation' ? { disabledCodes } : {}));
         connection.listen();
 
         received = [];
@@ -71,7 +155,10 @@ describe('cross-file diagnostics revalidation (real server, over LSP)', () => {
             }
         });
 
-        await connection.sendRequest('initialize', { processId: process.pid, rootUri: null, capabilities: {} });
+        await connection.sendRequest('initialize', {
+            processId: process.pid, rootUri: null,
+            capabilities: { workspace: { configuration: true } },
+        });
         await connection.sendNotification('initialized', {});
     }, 20_000);
 
@@ -80,6 +167,31 @@ describe('cross-file diagnostics revalidation (real server, over LSP)', () => {
         connection.sendNotification('exit');
         child.kill();
     });
+
+    it('updates disabled diagnostic codes without editing open documents', async () => {
+        const uri = 'file:///diagnostic-settings.sysml';
+        await connection.sendNotification('textDocument/didOpen', {
+            textDocument: {
+                uri, languageId: 'sysml', version: 1,
+                text: 'part def Undocumented { part missing : UnknownType; }',
+            },
+        });
+        await waitForDiagnostics(params => params.uri === uri
+            && params.diagnostics.some(diagnostic => diagnostic.code === 'missing-doc'));
+
+        received = [];
+        disabledCodes = ['missing-doc'];
+        await connection.sendNotification('workspace/didChangeConfiguration', { settings: {} });
+        const filtered = await waitForDiagnostics(params => params.uri === uri
+            && !params.diagnostics.some(diagnostic => diagnostic.code === 'missing-doc'));
+        expect(filtered.diagnostics.some(diagnostic => diagnostic.code === 'unresolved-type')).toBe(true);
+
+        received = [];
+        disabledCodes = [];
+        await connection.sendNotification('workspace/didChangeConfiguration', { settings: {} });
+        await waitForDiagnostics(params => params.uri === uri
+            && params.diagnostics.some(diagnostic => diagnostic.code === 'missing-doc'));
+    }, 15_000);
 
     it(
         'pushes updated diagnostics to an untouched sibling document, in both directions, as another document\'s conflict is introduced and then resolved',

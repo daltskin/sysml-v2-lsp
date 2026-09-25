@@ -3,6 +3,7 @@ import {
     CodeActionParams,
     CompletionItem,
     DefinitionParams,
+    Diagnostic,
     DidChangeConfigurationNotification,
     DocumentFormattingParams,
     DocumentRangeFormattingParams,
@@ -101,6 +102,18 @@ let workspaceRoots: string[] = [];
 
 /** True when the client opened a `.code-workspace` file (multi-file project). */
 let isWorkspaceFile = false;
+
+let preloadOnOpen: 'always' | 'workspaceOnly' | 'never' = 'workspaceOnly';
+
+let disabledDiagnosticCodes: ReadonlySet<string> = new Set();
+
+function publishDiagnostics(uri: string, diagnostics: Diagnostic[]): void {
+    connection.sendDiagnostics({
+        uri,
+        diagnostics: diagnostics.filter(diagnostic => diagnostic.code === undefined
+            || !disabledDiagnosticCodes.has(String(diagnostic.code))),
+    });
+}
 
 /** User-configurable set of directory names to skip during workspace scan. */
 let skipDirs: ReadonlySet<string> = new Set(DEFAULT_SKIP_DIRS);
@@ -212,7 +225,7 @@ function handleWorkerMessage(msg: any): void {
     }
 
     // Send worker diagnostics immediately (fast path)
-    connection.sendDiagnostics({ uri, diagnostics });
+    publishDiagnostics(uri, diagnostics);
 
     // Run the main-thread parse via setImmediate so the event loop
     // processes diagnostic notifications first.  The main-thread parse
@@ -235,7 +248,7 @@ function handleWorkerMessage(msg: any): void {
             correctedDiags.push(...validateKeywords(parseResult));
         }
 
-        connection.sendDiagnostics({ uri, diagnostics: correctedDiags });
+        publishDiagnostics(uri, correctedDiags);
 
         connection.sendNotification('sysml/status', {
             state: 'end',
@@ -256,7 +269,7 @@ function handleWorkerMessage(msg: any): void {
 
             // Merge corrected diagnostics with semantic diagnostics
             const allDiags = [...correctedDiags, ...semanticDiags];
-            connection.sendDiagnostics({ uri, diagnostics: allDiags });
+            publishDiagnostics(uri, allDiags);
         }, 50));
     });
 }
@@ -371,14 +384,14 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
     return result;
 });
 
-connection.onInitialized(() => {
+connection.onInitialized(async () => {
     if (hasConfigurationCapability) {
         connection.client.register(
             DidChangeConfigurationNotification.type,
             undefined
         );
         // Pull initial settings from the client
-        pullSettings().catch(() => { /* best effort */ });
+        await pullSettings().catch(() => { /* best effort */ });
     }
 
     // Bootstrap the standard library index for Go-to-Definition on
@@ -404,14 +417,13 @@ connection.onInitialized(() => {
 
     // Scan workspace folders for .sysml files and pre-parse them so
     // cross-file type references resolve even before files are opened.
-    // Only scan when a .code-workspace file is open — single-file mode
-    // does not need cross-file pre-parsing (it would wastefully scan
-    // all .sysml files under the folder root).
     // Server is marked ready immediately; scan runs asynchronously.
     serverReady = true;
     spawnParseWorker();
 
-    if (isWorkspaceFile && workspaceRoots.length > 0) {
+    if (workspaceRoots.length > 0
+        && (preloadOnOpen === 'always'
+            || (preloadOnOpen === 'workspaceOnly' && isWorkspaceFile))) {
         documentManager.setWorkspaceScanComplete(false);
         scanWorkspaceFoldersAsync(workspaceRoots).then(({ fileCount, scanMs }) => {
             connection.console.log(
@@ -444,12 +456,19 @@ connection.onInitialized(() => {
 // --------------------------------------------------------------------------
 
 /**
- * Fetch the current sysml.scan settings from the client and apply them.
+ * Fetch the current workspace and scan settings from the client and apply them.
  */
 async function pullSettings(): Promise<void> {
     if (!hasConfigurationCapability) return;
     const config = await connection.workspace.getConfiguration('sysml.scan');
     applySettings(config);
+    const workspace = await connection.workspace.getConfiguration('sysml.workspace');
+    const policy = workspace?.preloadOnOpen;
+    preloadOnOpen = policy === 'always' || policy === 'never' ? policy : 'workspaceOnly';
+    const validation = await connection.workspace.getConfiguration('sysml.validation');
+    const codes: unknown = validation?.disabledCodes;
+    disabledDiagnosticCodes = new Set(Array.isArray(codes)
+        ? codes.filter((code): code is string => typeof code === 'string') : []);
 }
 
 /**
@@ -466,7 +485,7 @@ function applySettings(config: Record<string, unknown> | undefined): void {
 connection.onDidChangeConfiguration((_change) => {
     // Re-fetch settings from the client (LSP spec says the notification
     // payload format varies by client, so always pull explicitly).
-    pullSettings().catch(() => { /* best effort */ });
+    pullSettings().then(() => revalidateOpenDocuments()).catch(() => { /* best effort */ });
 });
 
 // --------------------------------------------------------------------------
@@ -648,7 +667,7 @@ documents.onDidClose((event) => {
     documentManager.remove(event.document.uri);
     modelProvider.removeUri(event.document.uri);
     // Clear diagnostics for closed documents
-    connection.sendDiagnostics({ uri: event.document.uri, diagnostics: [] });
+    publishDiagnostics(event.document.uri, []);
 
     // When a file is closed, re-parse it from disk so its symbols
     // remain available for cross-file resolution.
@@ -739,7 +758,7 @@ async function validateDocument(document: TextDocument): Promise<void> {
     }
 
     // Send fast diagnostics immediately so the user sees syntax errors
-    connection.sendDiagnostics({ uri: document.uri, diagnostics });
+    publishDiagnostics(document.uri, diagnostics);
 
     // Notify the client that parsing is complete
     connection.sendNotification('sysml/status', {
@@ -772,7 +791,7 @@ async function validateDocument(document: TextDocument): Promise<void> {
 
         // Merge with current diagnostics
         diagnostics.push(...semanticDiags);
-        connection.sendDiagnostics({ uri: document.uri, diagnostics });
+        publishDiagnostics(document.uri, diagnostics);
     }, 50);
     semanticTimers.set(document.uri, semanticTimer);
 }

@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- `sysml.validation.disabledCodes` filters published diagnostics by code and revalidates open documents when settings change (daltskin/VSCode_SysML_Extension#97).
+
+### Fixed
+
+- Load startup configuration before workspace scanning and honor `sysml.workspace.preloadOnOpen` (`always`, `workspaceOnly`, or `never`) for nested unopened SysML and KerML files (daltskin/VSCode_SysML_Extension#96).
+
 ## [0.28.0]
 
 ### Added

@@ -75,6 +75,27 @@
           "default": "off",
           "description": "Traces the communication between VS Code and the SysML language server."
         },
+        "sysml.workspace.preloadOnOpen": {
+          "scope": "window",
+          "type": "string",
+          "enum": [
+            "always",
+            "workspaceOnly",
+            "never"
+          ],
+          "default": "workspaceOnly",
+          "description": "Preload unopened SysML and KerML files on startup: always, only for a saved workspace, or never. Restart the server after changing this setting."
+        },
+        "sysml.validation.disabledCodes": {
+          "scope": "window",
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true,
+          "default": [],
+          "description": "Diagnostic codes to suppress, such as missing-doc. Changes apply to open documents immediately."
+        },
         "sysml.maxNumberOfProblems": {
           "scope": "resource",
           "type": "number",
