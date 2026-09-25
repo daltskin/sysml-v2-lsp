@@ -33,6 +33,8 @@ import { Worker } from 'node:worker_threads';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { DocumentManager } from './documentManager.js';
 import { getLibraryFileContent, initLibraryIndex } from './library/libraryIndex.js';
+import { ElementLookupProvider } from './model/elementLookupProvider.js';
+import type { SysMLElementLookupParams } from './model/elementLookupTypes.js';
 import { SysMLModelProvider } from './model/sysmlModelProvider.js';
 import type { SysMLModelParams } from './model/sysmlModelTypes.js';
 import { loadDFASnapshot } from './parser/dfaLoader.js';
@@ -74,6 +76,7 @@ const serverStartTime = Date.now();
 // Core services
 const documentManager = new DocumentManager();
 const modelProvider = new SysMLModelProvider(documentManager);
+const elementLookupProvider = new ElementLookupProvider(documentManager);
 const diagnosticsProvider = new DiagnosticsProvider(documentManager);
 const completionProvider = new CompletionProvider(documentManager);
 const hoverProvider = new HoverProvider(documentManager);
@@ -409,10 +412,12 @@ connection.onInitialized(() => {
     spawnParseWorker();
 
     if (isWorkspaceFile && workspaceRoots.length > 0) {
+        documentManager.setWorkspaceScanComplete(false);
         scanWorkspaceFoldersAsync(workspaceRoots).then(({ fileCount, scanMs }) => {
             connection.console.log(
                 `Workspace scan: pre-parsed ${fileCount} .sysml files in ${scanMs} ms`
             );
+            documentManager.setWorkspaceScanComplete(true);
             // Re-validate open documents now that cross-file symbols are available
             revalidateOpenDocuments();
         });
@@ -604,6 +609,7 @@ const DEBOUNCE_MS = 200;
 
 documents.onDidChangeContent((event) => {
     const uri = event.document.uri;
+    documentManager.cacheTextOnly(uri, event.document.version, event.document.getText());
     const existing = debounceTimers.get(uri);
     if (existing) clearTimeout(existing);
 
@@ -867,6 +873,15 @@ connection.onRequest('sysml/model', (params: SysMLModelParams) => {
         1,
         params.scope,
     );
+});
+
+/**
+ * `sysml/elementLookup` — batch, exact-match lookup of elements by name
+ * across the whole workspace. Unscoped: no import/namespace-aware
+ * resolution, no fuzzy/substring matching -- see `elementLookupTypes.ts`.
+ */
+connection.onRequest('sysml/elementLookup', (params: SysMLElementLookupParams) => {
+    return elementLookupProvider.elementLookup(params);
 });
 
 /**

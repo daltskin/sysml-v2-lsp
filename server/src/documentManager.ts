@@ -14,6 +14,14 @@ export class DocumentManager {
     private wsSymbolTable = new SymbolTable();
     /** Tracks per-URI versions that were last built into the workspace table. */
     private wsBuiltVersions = new Map<string, number>();
+    /**
+     * Whether the initial workspace-wide file scan has finished. `true` by
+     * default (single-file mode has nothing to scan); the server sets this
+     * `false` while `scanWorkspaceFoldersAsync` is in flight so consumers
+     * (e.g. `sysml/elementLookup`) can tell an empty result from "not
+     * indexed yet" apart from "genuinely doesn't exist".
+     */
+    private workspaceScanComplete = true;
 
     /**
      * Parse a document and cache the result.
@@ -238,6 +246,16 @@ export class DocumentManager {
      */
     getUris(): string[] {
         return Array.from(this.cache.keys());
+    }
+
+    /** Mark the initial workspace scan as in-progress or finished. */
+    setWorkspaceScanComplete(complete: boolean): void {
+        this.workspaceScanComplete = complete;
+    }
+
+    /** Whether the initial workspace scan has finished — see the field's own doc comment. */
+    isWorkspaceScanComplete(): boolean {
+        return this.workspaceScanComplete;
     }
 }
 

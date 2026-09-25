@@ -70,6 +70,8 @@ export enum SysMLElementKind {
 export interface SysMLSymbol {
     /** The symbol's name */
     name: string;
+    /** Declared `<shortName>` alias (`identification: LT name GT name | LT name GT`), if any. */
+    shortName?: string;
     /** The kind of SysML element */
     kind: SysMLElementKind;
     /** The fully qualified name (e.g., "VehicleModel::Chassis::wheel") */

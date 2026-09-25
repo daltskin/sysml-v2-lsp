@@ -1,5 +1,6 @@
 import { ParserRuleContext, TerminalNode, Token } from 'antlr4ng';
 import { Range } from 'vscode-languageserver/node';
+import { SysMLv2Lexer } from '../generated/SysMLv2Lexer.js';
 import { MultiplicityBoundsContext, OwnedExpressionContext, SysMLv2Parser } from '../generated/SysMLv2Parser.js';
 import { ParseResult } from '../parser/parseDocument.js';
 import { contextToRange, tokenToRange } from '../parser/positionUtils.js';
@@ -291,6 +292,16 @@ export class SymbolTable {
             this.allSymbolsCache = all;
         }
         return this.allSymbolsCache;
+    }
+
+    /**
+     * Get every registered symbol, one entry per declaration site — unlike
+     * `getAllSymbols()`, two symbols sharing a `qualifiedName` (e.g. the same
+     * name declared in two different files) both appear here. Backed by
+     * `symbolsByUri`, which is never collapsed by qualified name.
+     */
+    getAllSymbolsIncludingDuplicates(): SysMLSymbol[] {
+        return Array.from(this.symbolsByUri.values()).flat();
     }
 
     /**
@@ -934,6 +945,9 @@ export class SymbolTable {
         if (!name) {
             return undefined;
         }
+        // Transitions synthesize their own name above and never carry a
+        // declared <shortName> alias.
+        const shortName = transition ? undefined : this.extractShortName(ctx);
 
         const qualifiedName = parentQualifiedName
             ? `${parentQualifiedName}::${name}`
@@ -970,6 +984,7 @@ export class SymbolTable {
 
         return {
             name,
+            shortName,
             kind,
             qualifiedName,
             range,
@@ -1162,7 +1177,7 @@ export class SymbolTable {
                     const declarationChild = child.getChild(j);
                     if (declarationChild instanceof ParserRuleContext &&
                         declarationChild.ruleIndex === SysMLv2Parser.RULE_identification) {
-                        return this.extractTextFromSubtree(declarationChild);
+                        return this.parseIdentification(declarationChild).name;
                     }
                 }
                 return undefined;
@@ -1185,7 +1200,13 @@ export class SymbolTable {
 
             // Check child rules named 'identification', 'declarationUsageName', etc.
             if (child instanceof ParserRuleContext) {
-                if (NAME_RULE_INDICES.has(child.ruleIndex)) {
+                if (child.ruleIndex === SysMLv2Parser.RULE_identification) {
+                    // `identification: LT name GT name | LT name GT | name` — the
+                    // declared name is the long name when present, else the
+                    // <shortName> alias itself; never their concatenation.
+                    const name = this.parseIdentification(child).name;
+                    if (name) return name;
+                } else if (NAME_RULE_INDICES.has(child.ruleIndex)) {
                     const name = this.extractTextFromSubtree(child);
                     if (name) return name;
                 }
@@ -1201,6 +1222,88 @@ export class SymbolTable {
                 if (this.isPrefixOrExtensionContext(child)) continue;
                 const name = this.extractName(child);
                 if (name) return name;
+            }
+        }
+
+        return undefined;
+    }
+
+    /**
+     * Splits an `identification` node (`LT name GT name | LT name GT | name`)
+     * into its optional `<shortName>` alias and its primary declared name.
+     * Without angle brackets the single `name` is the declared name only;
+     * with a lone `<shortName>` and no long name, the short name doubles as
+     * the declared name (SysML v2 §identification allows referencing either).
+     */
+    private parseIdentification(ctx: ParserRuleContext): { shortName?: string; name?: string } {
+        let hasAngleBrackets = false;
+        const nameCtxs: ParserRuleContext[] = [];
+        for (let i = 0; i < ctx.getChildCount(); i++) {
+            const child = ctx.getChild(i);
+            if (child instanceof TerminalNode && child.symbol.type === SysMLv2Lexer.LT) {
+                hasAngleBrackets = true;
+            } else if (child instanceof ParserRuleContext && child.ruleIndex === SysMLv2Parser.RULE_name) {
+                nameCtxs.push(child);
+            }
+        }
+        if (!hasAngleBrackets) {
+            return { name: nameCtxs[0] ? this.extractTextFromSubtree(nameCtxs[0]) : undefined };
+        }
+        if (nameCtxs.length >= 2) {
+            return {
+                shortName: this.extractTextFromSubtree(nameCtxs[0]),
+                name: this.extractTextFromSubtree(nameCtxs[1]),
+            };
+        }
+        const shortName = nameCtxs[0] ? this.extractTextFromSubtree(nameCtxs[0]) : undefined;
+        return { shortName, name: shortName };
+    }
+
+    /**
+     * Extract the declared `<shortName>` alias, if any. Mirrors extractName()'s
+     * traversal but only cares about an `identification` node's short-name
+     * production — reaching a bare `name`/`qualifiedName` rule (no
+     * `identification` wrapper) means there is no short name at this level.
+     */
+    private extractShortName(ctx: ParserRuleContext): string | undefined {
+        if (ctx.ruleIndex === SysMLv2Parser.RULE_connectionUsage) {
+            for (let i = 0; i < ctx.getChildCount(); i++) {
+                const child = ctx.getChild(i);
+                if (!(child instanceof ParserRuleContext) ||
+                    child.ruleIndex !== SysMLv2Parser.RULE_usageDeclaration) {
+                    continue;
+                }
+                for (let j = 0; j < child.getChildCount(); j++) {
+                    const declarationChild = child.getChild(j);
+                    if (declarationChild instanceof ParserRuleContext &&
+                        declarationChild.ruleIndex === SysMLv2Parser.RULE_identification) {
+                        return this.parseIdentification(declarationChild).shortName;
+                    }
+                }
+                return undefined;
+            }
+            return undefined;
+        }
+
+        for (let i = 0; i < ctx.getChildCount(); i++) {
+            const child = ctx.getChild(i);
+            if (child instanceof ParserRuleContext) {
+                if (child.ruleIndex === SysMLv2Parser.RULE_identification) {
+                    return this.parseIdentification(child).shortName;
+                }
+                if (NAME_RULE_INDICES.has(child.ruleIndex)) {
+                    return undefined;
+                }
+            }
+        }
+
+        for (let i = 0; i < Math.min(ctx.getChildCount(), 5); i++) {
+            const child = ctx.getChild(i);
+            if (child instanceof ParserRuleContext) {
+                if (this.isPrefixOrExtensionContext(child)) continue;
+                if (RULE_INDEX_TO_KIND.has(child.ruleIndex)) continue;
+                const shortName = this.extractShortName(child);
+                if (shortName) return shortName;
             }
         }
 
