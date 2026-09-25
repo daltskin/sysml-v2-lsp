@@ -35,7 +35,7 @@ describe('cross-file diagnostics revalidation (real server, over LSP)', () => {
     let connection: import('../../server/node_modules/vscode-jsonrpc/lib/node/main.js').MessageConnection;
     let received: PublishDiagnosticsParams[];
 
-    /** Waits until a `publishDiagnostics` matching `predicate` has been received, or times out. */
+    /** Waits until a semantic `publishDiagnostics` matching `predicate` has been received, or times out. */
     async function waitForDiagnostics(
         predicate: (p: PublishDiagnosticsParams) => boolean,
         timeoutMs = 5000,
@@ -57,8 +57,18 @@ describe('cross-file diagnostics revalidation (real server, over LSP)', () => {
         connection.listen();
 
         received = [];
+        const pendingSemanticUris = new Set<string>();
+        connection.onNotification('sysml/status', (params: { uri: string; state: string }) => {
+            if (params.state === 'end') {
+                pendingSemanticUris.add(params.uri);
+            } else if (params.state === 'begin') {
+                pendingSemanticUris.delete(params.uri);
+            }
+        });
         connection.onNotification('textDocument/publishDiagnostics', (params: PublishDiagnosticsParams) => {
-            received.push(params);
+            if (pendingSemanticUris.delete(params.uri)) {
+                received.push(params);
+            }
         });
 
         await connection.sendRequest('initialize', { processId: process.pid, rootUri: null, capabilities: {} });
@@ -113,7 +123,7 @@ describe('cross-file diagnostics revalidation (real server, over LSP)', () => {
             // uriA would ever arrive here -- A would keep showing its stale,
             // conflict-free diagnostics until closed and reopened.
             const updatedA = await waitForDiagnostics(
-                p => p.uri === uriA && p.diagnostics.some(d => d.code === 'ambiguous-namespace-name'),
+                p => p.uri === uriA,
             );
 
             expect(updatedA.diagnostics.some(d => d.code === 'ambiguous-namespace-name' && d.message.includes("'Wheel'"))).toBe(true);
@@ -129,7 +139,7 @@ describe('cross-file diagnostics revalidation (real server, over LSP)', () => {
             });
 
             const revertedA = await waitForDiagnostics(
-                p => p.uri === uriA && !p.diagnostics.some(d => d.code === 'ambiguous-namespace-name'),
+                p => p.uri === uriA,
             );
 
             expect(revertedA.diagnostics.some(d => d.code === 'ambiguous-namespace-name')).toBe(false);

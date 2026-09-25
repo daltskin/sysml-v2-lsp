@@ -11,6 +11,7 @@
 ### Fixed
 
 - Editing an open document to resolve (or introduce) a name collision with another open document now re-validates that other document too, instead of leaving it with a stale `ambiguous-namespace-name` / cascaded `unresolved-type` diagnostic until closed and reopened.
+- Cross-file diagnostic regression coverage now waits for semantic publications, so transient syntax-only results cannot falsely confirm that a conflict has cleared.
 - Short-name lookup no longer attributes a nested declaration's alias to its enclosing package, definition, or usage.
 - Element lookup now reflects unsaved edits immediately, before debounced validation runs, including renamed and deleted declarations.
 - The `unresolved-type` diagnostic, and equivalent `sysml/model` resolution, now respects package/namespace visibility instead of matching any name anywhere in the workspace, so two unrelated packages reusing the same short name no longer mask a genuine unresolved reference.
