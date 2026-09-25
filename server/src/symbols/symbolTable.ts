@@ -1301,6 +1301,7 @@ export class SymbolTable {
             const child = ctx.getChild(i);
             if (child instanceof ParserRuleContext) {
                 if (this.isPrefixOrExtensionContext(child)) continue;
+                if (RULE_INDEX_TO_KIND.has(child.ruleIndex)) continue;
                 const shortName = this.extractShortName(child);
                 if (shortName) return shortName;
             }

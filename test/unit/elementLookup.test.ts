@@ -5,8 +5,101 @@
  * vscode-languageserver-textdocument resolve from server/node_modules.
  */
 import { describe, expect, it } from 'vitest';
+import type { SysMLElementLookupResult } from '../../server/src/model/elementLookupTypes.js';
 
 describe('ElementLookupProvider', () => {
+
+    it('reflects live LSP edits before debounced validation runs', async () => {
+        const { build } = await import('esbuild');
+        const { spawn } = await import('node:child_process');
+        const { mkdtemp, rm } = await import('node:fs/promises');
+        const { tmpdir } = await import('node:os');
+        const { join } = await import('node:path');
+        const { createMessageConnection, StreamMessageReader, StreamMessageWriter } = await import('vscode-languageserver/node');
+        const directory = await mkdtemp(join(tmpdir(), 'sysml-lookup-'));
+
+        try {
+            await build({
+                entryPoints: {
+                    server: 'server/src/server.ts',
+                    parseWorker: 'server/src/parser/parseWorker.ts',
+                },
+                bundle: true,
+                platform: 'node',
+                format: 'cjs',
+                outdir: directory,
+                logLevel: 'silent',
+            });
+            const child = spawn(process.execPath, [join(directory, 'server.js'), '--stdio'], {
+                stdio: ['pipe', 'pipe', 'pipe'],
+            });
+            const exited = new Promise<void>(resolve => child.once('exit', () => resolve()));
+            const connection = createMessageConnection(
+                new StreamMessageReader(child.stdout),
+                new StreamMessageWriter(child.stdin),
+            );
+            child.stderr.resume();
+            connection.onClose(() => connection.dispose());
+            connection.listen();
+            const deadline = setTimeout(() => child.kill(), 20000);
+
+            try {
+                await connection.sendRequest('initialize', { processId: null, rootUri: null, capabilities: {} });
+                await connection.sendNotification('initialized', {});
+                const uri = 'untitled:live-lookup.sysml';
+                await connection.sendNotification('textDocument/didOpen', {
+                    textDocument: { uri, languageId: 'sysml', version: 1, text: 'part def Before;' },
+                });
+                const params = { queries: [{ name: 'Before' }, { name: 'After' }] };
+                const initial = await connection.sendRequest<SysMLElementLookupResult>('sysml/elementLookup', params);
+                expect(initial.results.Before).toHaveLength(1);
+
+                await connection.sendNotification('textDocument/didChange', {
+                    textDocument: { uri, version: 2 },
+                    contentChanges: [{ text: 'part def After;' }],
+                });
+                const renamed = await connection.sendRequest<SysMLElementLookupResult>('sysml/elementLookup', params);
+                expect(renamed.indexingComplete).toBe(true);
+                expect(renamed.results.Before).toEqual([]);
+                expect(renamed.results.After).toHaveLength(1);
+
+                await connection.sendNotification('textDocument/didChange', {
+                    textDocument: { uri, version: 3 },
+                    contentChanges: [{
+                        range: { start: { line: 0, character: 0 }, end: { line: 0, character: 15 } },
+                        text: '',
+                    }],
+                });
+                const removed = await connection.sendRequest<SysMLElementLookupResult>('sysml/elementLookup', params);
+                expect(removed.results.Before).toEqual([]);
+                expect(removed.results.After).toEqual([]);
+            } finally {
+                clearTimeout(deadline);
+                connection.dispose();
+                child.kill();
+                await exited;
+            }
+        } finally {
+            await rm(directory, { recursive: true, force: true });
+        }
+    });
+
+    it.each(['package', 'part def', 'part'])('does not assign a child alias to an unaliased %s', async (kind) => {
+        const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+        const uri = 'test://parent.sysml';
+        const dm = await setupMulti([{
+            uri,
+            text: `${kind} Parent { part <childAlias> child; }`,
+        }]);
+        expect(dm.get(uri)?.errors).toEqual([]);
+        const provider = new ElementLookupProvider(dm);
+        const { results } = provider.elementLookup({ queries: [
+            { name: 'childAlias', kind: 'shortName' },
+            { name: 'Parent' },
+        ] });
+        expect(results.childAlias.map(match => match.qualifiedName)).toEqual(['Parent::child']);
+        expect(results.Parent[0].shortName).toBeUndefined();
+    });
 
     /** Helper: Create a TextDocument from raw SysML text */
     async function makeDoc(text: string, uri = 'test://test.sysml', version = 1) {

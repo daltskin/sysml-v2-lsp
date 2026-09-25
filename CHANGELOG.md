@@ -10,6 +10,8 @@
 
 ### Fixed
 
+- Short-name lookup no longer attributes a nested declaration's alias to its enclosing package, definition, or usage.
+- Element lookup now reflects unsaved edits immediately, before debounced validation runs, including renamed and deleted declarations.
 - The `unresolved-type` diagnostic, and equivalent `sysml/model` resolution, now respects package/namespace visibility instead of matching any name anywhere in the workspace, so two unrelated packages reusing the same short name no longer mask a genuine unresolved reference.
 - Improved robustness of namespace resolution against stack overflows, guarding against recursive/mutually re-exported package import cycles and protected-member visibility checks through a self-referential specialization chain.
 - A nested package's own imports are no longer attributed to its enclosing definition, replacing the definition's own imports; import extraction is now restricted to the owning namespace's body.

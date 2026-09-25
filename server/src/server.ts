@@ -589,6 +589,7 @@ const DEBOUNCE_MS = 200;
 
 documents.onDidChangeContent((event) => {
     const uri = event.document.uri;
+    documentManager.cacheTextOnly(uri, event.document.version, event.document.getText());
     const existing = debounceTimers.get(uri);
     if (existing) clearTimeout(existing);
 
