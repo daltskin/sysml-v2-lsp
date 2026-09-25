@@ -10,6 +10,7 @@
 
 ### Fixed
 
+- Element lookup now returns one match per reopened package qualified name, retaining a matching fragment's location without hiding distinct non-package declarations or aliases on later fragments (#106).
 - Editing an open document to resolve (or introduce) a name collision with another open document now re-validates that other document too, instead of leaving it with a stale `ambiguous-namespace-name` / cascaded `unresolved-type` diagnostic until closed and reopened.
 - Cross-file diagnostic regression coverage now waits for semantic publications, so transient syntax-only results cannot falsely confirm that a conflict has cleared.
 - Short-name lookup no longer attributes a nested declaration's alias to its enclosing package, definition, or usage.

@@ -132,6 +132,91 @@ part def Wheel;`;
         expect(results).toEqual({ Engine: [] });
     });
 
+    it.each([
+        { name: 'P', kind: 'name' as const },
+        { name: 'Root::P', kind: 'qualifiedName' as const },
+        { name: 'P', kind: 'name' as const, scope: 'Root' },
+        { name: 'P', kind: 'qualifiedName' as const, scope: 'Root' },
+        { name: 'pkg', kind: 'shortName' as const, scope: 'Root' },
+    ])('returns one match per reopened package for $kind lookup of $name', async (query) => {
+        const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+        const dm = await setupMulti([
+            { uri: 'test://a.sysml', text: 'package Root { package <pkg> P { part def A; } }' },
+            { uri: 'test://b.sysml', text: 'package Root { package <pkg> P { part def B; } }' },
+        ]);
+        const provider = new ElementLookupProvider(dm);
+        const { results } = provider.elementLookup({ queries: [query, { name: 'A' }, { name: 'B' }] });
+
+        expect(results[query.name]).toHaveLength(1);
+        expect(results[query.name][0]).toMatchObject({
+            qualifiedName: 'Root::P',
+            type: 'package',
+            uri: 'test://a.sysml',
+            range: dm.getSymbolTable('test://a.sysml')!.getSymbol('Root::P')!.range,
+        });
+        expect(results.A.map(match => match.qualifiedName)).toEqual(['Root::P::A']);
+        expect(results.B.map(match => match.qualifiedName)).toEqual(['Root::P::B']);
+    });
+
+    it('deduplicates same-file package fragments without hiding other namespaces or definition collisions', async () => {
+        const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+        const dm = await setupMulti([
+            { uri: 'test://a.sysml', text: 'package P; package P; part def P; package Other { package P; }' },
+            { uri: 'test://b.sysml', text: 'package P; part def P;' },
+        ]);
+        const provider = new ElementLookupProvider(dm);
+        const { results } = provider.elementLookup({ queries: [{ name: 'P' }] });
+
+        expect(results.P).toHaveLength(4);
+        expect(results.P.filter(match => match.type === 'package').map(match => match.qualifiedName))
+            .toEqual(['P', 'Other::P']);
+        expect(results.P.filter(match => match.type === 'part def').map(match => match.uri))
+            .toEqual(['test://a.sysml', 'test://b.sysml']);
+    });
+
+    it('keeps aliases declared only on later package fragments searchable', async () => {
+        const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+        const dm = await setupMulti([
+            { uri: 'test://a.sysml', text: 'package P;' },
+            { uri: 'test://b.sysml', text: 'package <pkg> P;' },
+            { uri: 'test://c.sysml', text: 'package <other> P;' },
+        ]);
+        const provider = new ElementLookupProvider(dm);
+        const { results } = provider.elementLookup({ queries: [
+            { name: 'P' },
+            { name: 'pkg', kind: 'shortName' },
+            { name: 'other', kind: 'shortName' },
+        ] });
+
+        expect(results.P).toHaveLength(1);
+        expect(results.pkg).toHaveLength(1);
+        expect(results.other).toHaveLength(1);
+        expect(results.pkg[0]).toMatchObject({ qualifiedName: 'P', shortName: 'pkg', uri: 'test://b.sysml' });
+        expect(results.other[0]).toMatchObject({ qualifiedName: 'P', shortName: 'other', uri: 'test://c.sysml' });
+    });
+
+    it('updates the representative package fragment after an unsaved rename and deletion', async () => {
+        const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+        const dm = await setupMulti([
+            { uri: 'test://a.sysml', text: 'package P;' },
+            { uri: 'test://b.sysml', text: '\npackage P;' },
+        ]);
+        const provider = new ElementLookupProvider(dm);
+        const params = { queries: [{ name: 'P' }, { name: 'Q' }] };
+        expect(provider.elementLookup(params).results.P.map(match => match.uri)).toEqual(['test://a.sysml']);
+
+        dm.parse(await makeDoc('package Q;', 'test://a.sysml', 2));
+        const renamed = provider.elementLookup(params).results;
+        expect(renamed.P).toHaveLength(1);
+        expect(renamed.P[0]).toMatchObject({ uri: 'test://b.sysml', range: { start: { line: 1 } } });
+        expect(renamed.Q.map(match => match.uri)).toEqual(['test://a.sysml']);
+
+        dm.parse(await makeDoc('', 'test://b.sysml', 2));
+        expect(provider.elementLookup(params).results.P).toEqual([]);
+        dm.remove('test://a.sysml');
+        expect(provider.elementLookup(params).results.Q).toEqual([]);
+    });
+
     it('finds exactly one match for a bare name that exists once', async () => {
         const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
 

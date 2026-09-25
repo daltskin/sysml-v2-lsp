@@ -4,7 +4,7 @@
  */
 
 import { DocumentManager } from '../documentManager.js';
-import { SysMLSymbol } from '../symbols/sysmlElements.js';
+import { SysMLElementKind, SysMLSymbol } from '../symbols/sysmlElements.js';
 import type {
     ElementLookupQueryKind,
     ElementMatch,
@@ -34,7 +34,13 @@ export class ElementLookupProvider {
         for (const query of params?.queries ?? []) {
             const kind = query.kind ?? (query.name.includes('::') ? 'qualifiedName' : 'name');
             const matches = this.resolveMatches(allSymbols, query.name, kind, query.scope);
-            results[query.name] = matches.map(sym => this.toElementMatch(sym));
+            const matchedPackages = new Set<string>();
+            results[query.name] = matches.filter(sym => {
+                if (sym.kind !== SysMLElementKind.Package) return true;
+                if (matchedPackages.has(sym.qualifiedName)) return false;
+                matchedPackages.add(sym.qualifiedName);
+                return true;
+            }).map(sym => this.toElementMatch(sym));
         }
         return { results, indexingComplete: this.documentManager.isWorkspaceScanComplete() };
     }

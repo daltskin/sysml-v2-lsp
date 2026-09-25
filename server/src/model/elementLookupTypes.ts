@@ -93,6 +93,12 @@ export interface SysMLElementLookupResult {
      * collision, since the same simple name can legitimately exist in
      * different packages.
      *
+    * Reopened package fragments sharing a qualified name produce one match
+    * per query. Its metadata (including short name, URI, and range) comes
+    * from the first matching fragment in workspace symbol-table order.
+    * Non-package declarations remain separate even when their qualified
+    * names collide.
+    *
      * Batching the same `name` string twice in one request with a different
      * `kind` or `scope` isn't meaningfully supported under this keying (e.g.
      * `{ name: "whl", kind: "name" }` and `{ name: "whl", kind: "shortName" }`
