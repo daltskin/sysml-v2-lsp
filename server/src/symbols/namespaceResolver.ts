@@ -106,6 +106,57 @@ export function findConflictedQualifiedNames(allSymbols: SysMLSymbol[]): Map<str
     return conflicts;
 }
 
+/**
+ * Where a conflicting declaration lives, as seen from the document `fromUri` being diagnosed --
+ * worked out from the two URIs alone (no file access): "this document" when they are the same,
+ * otherwise `uri` as a relative reference from `fromUri` (RFC 3986 §4.2, e.g. `wheel.sysml`,
+ * `../lib/wheel.sysml`) when both share scheme and authority, else `uri` in full.
+ */
+export function describeDocumentLocation(uri: string, fromUri: string): string {
+    if (uri === fromUri) return 'this document';
+    let target: URL;
+    let from: URL;
+    try {
+        target = new URL(uri);
+        from = new URL(fromUri);
+    } catch {
+        return uri;
+    }
+    if (target.protocol !== from.protocol || target.host !== from.host) return uri;
+    const targetSegments = target.pathname.split('/');
+    const fromFolder = from.pathname.split('/').slice(0, -1);
+    let common = 0;
+    while (common < fromFolder.length && common < targetSegments.length - 1 && fromFolder[common] === targetSegments[common]) common++;
+    const relative = [...fromFolder.slice(common).map(() => '..'), ...targetSegments.slice(common)].join('/');
+    return decodeURIComponent(relative);
+}
+
+/**
+ * The declarations in `conflicting` other than `symbol` itself, in a stable order (by document URI,
+ * then position) -- compared by document and position, not object identity, since `symbol` may come
+ * from a different symbol table (e.g. one document's own) than the workspace-wide `conflicting` list.
+ */
+export function otherDeclarations(conflicting: SysMLSymbol[], symbol: SysMLSymbol): SysMLSymbol[] {
+    const start = (s: SysMLSymbol) => s.selectionRange.start;
+    return conflicting
+        .filter(s => !(s.uri === symbol.uri && start(s).line === start(symbol).line && start(s).character === start(symbol).character))
+        .sort((a, b) => (a.uri < b.uri ? -1 : a.uri > b.uri ? 1 : start(a).line - start(b).line || start(a).character - start(b).character));
+}
+
+/**
+ * The other declarations sharing a conflicted name, for a diagnostic on one of them: the first
+ * one's kind and location (`describeDocumentLocation`, 1-based line), plus a count of any further
+ * ones, e.g. "part def in document wheel.sysml (line 3) and 2 other occurrences".
+ */
+export function describeConflictingDeclarations(others: SysMLSymbol[], fromUri: string): string {
+    if (others.length === 0) return '';
+    const [first, ...rest] = others;
+    const location = describeDocumentLocation(first.uri, fromUri);
+    const described = `${first.kind} in ${location === 'this document' ? location : `document ${location}`} (line ${first.selectionRange.start.line + 1})`;
+    if (rest.length === 0) return described;
+    return `${described} and ${rest.length} other ${rest.length === 1 ? 'occurrence' : 'occurrences'}`;
+}
+
 /** Build the byName/byParent/byQualifiedName/etc. indexes a `NamespaceResolver` (and other checks) need from a flat symbol array. */
 export function buildSymbolIndexes(allSymbols: SysMLSymbol[]): SymbolIndexes {
     const byName = new Map<string, SysMLSymbol[]>();

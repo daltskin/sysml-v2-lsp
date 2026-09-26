@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Changed
+
+- the diagnostic message `ambiguous-namespace-name` has been improved, indicating in which document the conflict is and how many occurances are found.
+
 ## [0.30.0]
 
 ### Fixed

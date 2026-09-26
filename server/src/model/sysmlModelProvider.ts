@@ -12,7 +12,7 @@ import { analyseComplexity } from '../analysis/complexityAnalyzer.js';
 import { DocumentManager } from '../documentManager.js';
 import { getLibraryPackageNames } from '../library/libraryIndex.js';
 import { ParseResult } from '../parser/parseDocument.js';
-import { NamespaceResolver, buildSymbolIndexes, findConflictedQualifiedNames } from '../symbols/namespaceResolver.js';
+import { NamespaceResolver, buildSymbolIndexes, describeConflictingDeclarations, findConflictedQualifiedNames, otherDeclarations } from '../symbols/namespaceResolver.js';
 import { SymbolTable } from '../symbols/symbolTable.js';
 import {
     SysMLElementKind,
@@ -1234,11 +1234,10 @@ export class SysMLModelProvider {
         for (const symbol of symbols) {
             const conflicting = conflicts.get(symbol.qualifiedName);
             if (conflicting) {
-                const others = conflicting.filter(s => s !== symbol);
-                const otherKinds = [...new Set(others.map(s => s.kind))].join(', ');
+                const others = otherDeclarations(conflicting, symbol);
                 diagnostics.push({
                     code: 'ambiguous-namespace-name',
-                    message: `Ambiguous name '${symbol.name}': also declared as ${otherKinds} elsewhere in the workspace. Only a package may be reopened under the same name; rename one of these declarations.`,
+                    message: `Ambiguous name '${symbol.name}': also declared as ${describeConflictingDeclarations(others, symbol.uri)}.`,
                     severity: 'error',
                     range: this.rangeToDTO(symbol.selectionRange),
                     elementName: symbol.name,

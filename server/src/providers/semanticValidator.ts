@@ -2,7 +2,7 @@ import { Diagnostic, DiagnosticSeverity } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
 import { getLibraryPackageNames, resolveLibraryType } from '../library/libraryIndex.js';
 import { SysMLModelProvider } from '../model/sysmlModelProvider.js';
-import { NamespaceResolver, SymbolIndexes, buildSymbolIndexes, findConflictedQualifiedNames } from '../symbols/namespaceResolver.js';
+import { NamespaceResolver, SymbolIndexes, buildSymbolIndexes, describeConflictingDeclarations, findConflictedQualifiedNames, otherDeclarations } from '../symbols/namespaceResolver.js';
 import { SysMLElementKind, SysMLSymbol, isDefinition } from '../symbols/sysmlElements.js';
 import { resolveTypeName } from '../symbols/typeResolution.js';
 import { stripComments } from '../utils/identUtils.js';
@@ -1348,12 +1348,11 @@ export class SemanticValidator {
             const conflicting = conflicts.get(symbol.qualifiedName);
             if (!conflicting) continue;
 
-            const others = conflicting.filter(s => s !== symbol);
-            const otherKinds = [...new Set(others.map(s => s.kind))].join(', ');
+            const others = otherDeclarations(conflicting, symbol);
             diagnostics.push({
                 severity: DiagnosticSeverity.Error,
                 range: symbol.selectionRange,
-                message: `Ambiguous name '${symbol.name}': also declared as ${otherKinds} elsewhere in the workspace. Only a package may be reopened under the same name; rename one of these declarations.`,
+                message: `Ambiguous name '${symbol.name}': also declared as ${describeConflictingDeclarations(others, symbol.uri)}.`,
                 source: 'sysml',
                 code: 'ambiguous-namespace-name',
                 data: { name: symbol.name },

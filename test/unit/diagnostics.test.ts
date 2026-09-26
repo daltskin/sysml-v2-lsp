@@ -2512,6 +2512,55 @@ package External {
             expect(ambiguousInA2.some(d => d.message.includes("'A'"))).toBe(true);
         });
 
+        it('says where the other declaration is -- its kind, document (relative to the diagnosed one) and line', async () => {
+            const entries = [
+                { uri: 'file:///ws/partdef-a-1.sysml', text: `\npart def A;\n` },
+                { uri: 'file:///ws/lib/partdef-a-2.sysml', text: `\n\npart def A;\n` },
+            ];
+
+            const [inFirst] = (await getSemanticDiagnosticsForUri(entries, 'file:///ws/partdef-a-1.sysml')).filter(d => d.code === 'ambiguous-namespace-name');
+            expect(inFirst.message).toContain("also declared as part def in document lib/partdef-a-2.sysml (line 3)");
+
+            const [inSecond] = (await getSemanticDiagnosticsForUri(entries, 'file:///ws/lib/partdef-a-2.sysml')).filter(d => d.code === 'ambiguous-namespace-name');
+            expect(inSecond.message).toContain("also declared as part def in document ../partdef-a-1.sysml (line 2)");
+        });
+
+        it('names the first other declaration and counts the rest as other occurrences when declared in three or more documents', async () => {
+            const entries = [
+                { uri: 'file:///ws/a1.sysml', text: `part def A;\n` },
+                { uri: 'file:///ws/a2.sysml', text: `part def A;\n` },
+                { uri: 'file:///ws/a3.sysml', text: `part def A;\n` },
+                { uri: 'file:///ws/a4.sysml', text: `part def A;\n` },
+            ];
+
+            const ambiguous = (await getSemanticDiagnosticsForUri(entries, 'file:///ws/a1.sysml')).filter(d => d.code === 'ambiguous-namespace-name');
+            expect(ambiguous).toHaveLength(1);
+            expect(ambiguous[0].message).toBe("Ambiguous name 'A': also declared as part def in document a2.sysml (line 1) and 2 other occurrences.");
+        });
+
+        it('counts a single further occurrence in the singular, and names a same-document one as "this document"', async () => {
+            const three = [
+                { uri: 'file:///ws/a1.sysml', text: `part def A;\n` },
+                { uri: 'file:///ws/a2.sysml', text: `part def A;\n` },
+                { uri: 'file:///ws/a3.sysml', text: `part def A;\n` },
+            ];
+            const [singular] = (await getSemanticDiagnosticsForUri(three, 'file:///ws/a1.sysml')).filter(d => d.code === 'ambiguous-namespace-name');
+            expect(singular.message).toBe("Ambiguous name 'A': also declared as part def in document a2.sysml (line 1) and 1 other occurrence.");
+
+            const mixed = [
+                { uri: 'file:///ws/a1.sysml', text: `part def A;\npart def A;\n` },
+                { uri: 'file:///ws/b.sysml', text: `part def A;\n` },
+            ];
+            const messages = (await getSemanticDiagnosticsForUri(mixed, 'file:///ws/a1.sysml'))
+                .filter(d => d.code === 'ambiguous-namespace-name')
+                .map(d => d.message);
+            // a1.sysml sorts before b.sysml, so each a1 declaration names the other a1 one first.
+            expect([...messages].sort()).toEqual([
+                "Ambiguous name 'A': also declared as part def in this document (line 1) and 1 other occurrence.",
+                "Ambiguous name 'A': also declared as part def in this document (line 2) and 1 other occurrence.",
+            ]);
+        });
+
         it('flags the conflict when both same-kind conflicting declarations are in the same file', async () => {
             const text = `
 part def A {
@@ -2524,6 +2573,8 @@ part def A {
             const diags = await getSemanticDiagnostics(text);
             const ambiguous = diags.filter(d => d.code === 'ambiguous-namespace-name');
             expect(ambiguous.length).toBe(2);
+            // Same document: named as "this document", with the other declaration's line.
+            expect(ambiguous.every(d => /also declared as part def in this document \(line \d+\)\.$/.test(d.message))).toBe(true);
         });
 
         it('does not flag a legitimate package reopened across files as a conflict', async () => {
