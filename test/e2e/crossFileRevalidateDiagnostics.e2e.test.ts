@@ -168,6 +168,28 @@ describe('cross-file diagnostics revalidation (real server, over LSP)', () => {
         child.kill();
     });
 
+    it('returns current model versions and elements immediately after unsaved edits', async () => {
+        const uri = 'file:///model-version.sysml';
+        await connection.sendNotification('textDocument/didOpen', {
+            textDocument: { uri, languageId: 'sysml', version: 4, text: 'requirement def Original;' },
+        });
+        const requestModel = () => connection.sendRequest<{
+            version: number; elements: { name: string }[];
+        }>('sysml/model', { textDocument: { uri }, scope: ['elements', 'relationships'] });
+        expect((await requestModel()).version).toBe(4);
+        for (const version of [5, 6]) {
+            const name = `Requirement${version}`;
+            await connection.sendNotification('textDocument/didChange', {
+                textDocument: { uri, version }, contentChanges: [{ text: `requirement def ${name};` }],
+            });
+            const model = await requestModel();
+            expect(model.version).toBe(version);
+            expect(model.elements.map(element => element.name)).toEqual([name]);
+            expect((await requestModel()).version).toBe(version);
+        }
+        await connection.sendNotification('textDocument/didClose', { textDocument: { uri } });
+    });
+
     it('updates disabled diagnostic codes without editing open documents', async () => {
         const uri = 'file:///diagnostic-settings.sysml';
         await connection.sendNotification('textDocument/didOpen', {

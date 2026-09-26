@@ -889,7 +889,7 @@ connection.onDocumentRangeFormatting(
 connection.onRequest('sysml/model', (params: SysMLModelParams) => {
     return modelProvider.getModel(
         params.textDocument.uri,
-        1,
+        documentManager.getVersion(params.textDocument.uri),
         params.scope,
     );
 });

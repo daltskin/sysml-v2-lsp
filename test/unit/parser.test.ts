@@ -48,4 +48,34 @@ describe('Parser', () => {
         result.tokenStream.fill();
         expect(result.tokenStream.getTokens().length).toBeGreaterThan(0);
     });
+
+    it.each([
+        ['a + b * c', '+', 1, '*'],
+        ['a * b + c', '+', 0, '*'],
+        ['a ** b ** c', '**', 1, '**'],
+        ['a or b and c', 'or', 1, 'and'],
+    ] as const)('should preserve operator grouping in %s', async (text, root, childIndex, nested) => {
+        const { CharStream, CommonTokenStream, Token } = await import('antlr4ng');
+        const { SysMLv2Lexer } = await import('../../server/src/generated/SysMLv2Lexer.js');
+        const { SysMLv2Parser } = await import('../../server/src/generated/SysMLv2Parser.js');
+        const lexer = new SysMLv2Lexer(CharStream.fromString(text));
+        const parser = new SysMLv2Parser(new CommonTokenStream(lexer));
+        const expression = parser.ownedExpression();
+
+        expect(parser.numberOfSyntaxErrors).toBe(0);
+        expect(parser.getCurrentToken().type).toBe(Token.EOF);
+        expect(expression.getChild(1)?.getText()).toBe(root);
+        expect(expression.ownedExpression()[childIndex].getChild(1)?.getText()).toBe(nested);
+    });
+
+    it.each([
+        'a + if b ? c else d',
+        'not if a ? b else c',
+        '(as MetadataType).isMandatory',
+    ])('should accept the expression %s in a document', async expression => {
+        const { parseDocument } = await import('../../server/src/parser/parseDocument.js');
+        const result = parseDocument(`package Test { attribute value = ${expression}; }`);
+
+        expect(result.errors).toEqual([]);
+    });
 });

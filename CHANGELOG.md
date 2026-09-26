@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Update the generated parser and DFA snapshot from `sysml-v2-grammar` commit `062b459` (OMG 2026-08), correcting expression precedence, right-associative exponentiation, conditional operands, and primary-expression boundaries.
+- Preserve metadata filters and parenthesized boolean groups with the updated expression grammar; add downstream parser and filter regressions.
+- Return the current document version from `sysml/model` after unsaved edits, allowing source-backed editors to refresh without persistent stale-model errors.
+
 ## [0.29.0]
 
 ### Added

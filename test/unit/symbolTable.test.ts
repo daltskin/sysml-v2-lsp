@@ -569,6 +569,25 @@ package PkgFilter {
         expect(pkg).toBeDefined();
     });
 
+    it('should preserve grouped metadata filter expressions', async () => {
+        const { st, result } = await buildST(`
+package Filtered {
+    filter (@Approved or @Proposed) and not @Deprecated;
+}
+`);
+        expect(result.errors).toEqual([]);
+        const pkg = st.getAllSymbols().find(symbol => symbol.name === 'Filtered');
+        expect(pkg?.filterConditions).toEqual([{
+            kind: 'and',
+            left: {
+                kind: 'or',
+                left: { kind: 'metadata', name: 'Approved' },
+                right: { kind: 'metadata', name: 'Proposed' },
+            },
+            right: { kind: 'not', expr: { kind: 'metadata', name: 'Deprecated' } },
+        }]);
+    });
+
     it('should inherit viewFilters from view definition to view usage', async () => {
         const { st } = await buildST(`
 package InheritTest {

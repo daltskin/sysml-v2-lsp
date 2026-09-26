@@ -3,6 +3,7 @@ import { AbstractParseTreeVisitor } from "antlr4ng";
 
 
 import { OwnedExpressionContext } from "./SysMLv2Parser.js";
+import { PrimaryExpressionContext } from "./SysMLv2Parser.js";
 import { TypeReferenceContext } from "./SysMLv2Parser.js";
 import { SequenceExpressionListContext } from "./SysMLv2Parser.js";
 import { BaseExpressionContext } from "./SysMLv2Parser.js";
@@ -468,6 +469,12 @@ export class SysMLv2ParserVisitor<Result> extends AbstractParseTreeVisitor<Resul
      * @return the visitor result
      */
     visitOwnedExpression?: (ctx: OwnedExpressionContext) => Result;
+    /**
+     * Visit a parse tree produced by `SysMLv2Parser.primaryExpression`.
+     * @param ctx the parse tree
+     * @return the visitor result
+     */
+    visitPrimaryExpression?: (ctx: PrimaryExpressionContext) => Result;
     /**
      * Visit a parse tree produced by `SysMLv2Parser.typeReference`.
      * @param ctx the parse tree

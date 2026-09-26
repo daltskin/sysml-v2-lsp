@@ -1970,7 +1970,7 @@ export class SymbolTable {
         if (expr.NOT() && children.length === 1) {
             return { kind: 'not', expr: this.parseFilterExpression(children[0]) };
         }
-        if ((expr.AT_SIGN() || expr.AT_AT()) && expr.typeReference() && children.length === 0) {
+        if (expr.AT_SIGN() && expr.typeReference() && children.length === 0) {
             const qualifiedName = this.extractFullExposeText(expr.typeReference()!);
             if (qualifiedName) {
                 const simpleName = qualifiedName.includes('::') ? qualifiedName.split('::').pop()! : qualifiedName;
@@ -1979,7 +1979,7 @@ export class SymbolTable {
         }
         // Parenthesized grouping: baseExpression -> LPAREN sequenceExpressionList RPAREN
         // with exactly one element, e.g. "(@Approval and @Deprecated)".
-        const base = expr.baseExpression();
+        const base = expr.primaryExpression()?.baseExpression();
         if (base) {
             const seqList = this.findRule(base, SysMLv2Parser.RULE_sequenceExpressionList, 1);
             if (seqList && seqList.getChildCount() === 1) {

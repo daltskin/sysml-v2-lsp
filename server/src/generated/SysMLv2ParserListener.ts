@@ -3,6 +3,7 @@ import { ErrorNode, ParseTreeListener, ParserRuleContext, TerminalNode } from "a
 
 
 import { OwnedExpressionContext } from "./SysMLv2Parser.js";
+import { PrimaryExpressionContext } from "./SysMLv2Parser.js";
 import { TypeReferenceContext } from "./SysMLv2Parser.js";
 import { SequenceExpressionListContext } from "./SysMLv2Parser.js";
 import { BaseExpressionContext } from "./SysMLv2Parser.js";
@@ -469,6 +470,16 @@ export class SysMLv2ParserListener implements ParseTreeListener {
      * @param ctx the parse tree
      */
     exitOwnedExpression?: (ctx: OwnedExpressionContext) => void;
+    /**
+     * Enter a parse tree produced by `SysMLv2Parser.primaryExpression`.
+     * @param ctx the parse tree
+     */
+    enterPrimaryExpression?: (ctx: PrimaryExpressionContext) => void;
+    /**
+     * Exit a parse tree produced by `SysMLv2Parser.primaryExpression`.
+     * @param ctx the parse tree
+     */
+    exitPrimaryExpression?: (ctx: PrimaryExpressionContext) => void;
     /**
      * Enter a parse tree produced by `SysMLv2Parser.typeReference`.
      * @param ctx the parse tree

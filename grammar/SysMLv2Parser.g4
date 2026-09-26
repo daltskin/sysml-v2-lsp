@@ -20,34 +20,39 @@ options {
 // ===== Expression rules (precedence-climbing) =====
 
 ownedExpression
-    : IF ownedExpression QUESTION ownedExpression ELSE ownedExpression
-    | ownedExpression QUESTION_QUESTION ownedExpression
-    | ownedExpression IMPLIES ownedExpression
-    | ownedExpression OR ownedExpression
-    | ownedExpression AND ownedExpression
-    | ownedExpression XOR ownedExpression
-    | ownedExpression PIPE ownedExpression
-    | ownedExpression AMP ownedExpression
-    | ownedExpression ( EQ_EQ | BANG_EQ | EQ_EQ_EQ | BANG_EQ_EQ ) ownedExpression
-    | ownedExpression ( LT | GT | LE | GE ) ownedExpression
-    | ownedExpression DOT_DOT ownedExpression
-    | ownedExpression ( PLUS | MINUS ) ownedExpression
-    | ownedExpression ( STAR | SLASH | PERCENT ) ownedExpression
-    | <assoc=right> ownedExpression ( STAR_STAR | CARET ) ownedExpression
+    : ( ISTYPE | HASTYPE | AT_SIGN | AS ) typeReference
+    | ALL typeReference
     | ( PLUS | MINUS | TILDE | NOT ) ownedExpression
-    | ( AT_SIGN | AT_AT ) typeReference
+    | <assoc=right> ownedExpression ( STAR_STAR | CARET ) ownedExpression
+    | ownedExpression ( STAR | SLASH | PERCENT ) ownedExpression
+    | ownedExpression ( PLUS | MINUS ) ownedExpression
+    | ownedExpression DOT_DOT ownedExpression
+    | ownedExpression ( LT | GT | LE | GE ) ownedExpression
     | ownedExpression ( ISTYPE | HASTYPE | AT_SIGN ) typeReference
     | ownedExpression AS typeReference
-    | ownedExpression AT_AT typeReference
-    | ownedExpression META typeReference
-    | ownedExpression LBRACK sequenceExpressionList? RBRACK
-    | ownedExpression HASH LPAREN sequenceExpressionList? RPAREN
-    | ownedExpression argumentList
-    | ownedExpression DOT qualifiedName
-    | ownedExpression DOT_QUESTION bodyExpression
-    | ownedExpression ARROW qualifiedName ( bodyExpression | argumentList )
-    | ALL typeReference
+    | ownedExpression ( EQ_EQ | BANG_EQ | EQ_EQ_EQ | BANG_EQ_EQ ) ownedExpression
+    | ownedExpression ( AMP | AND ) ownedExpression
+    | ownedExpression XOR ownedExpression
+    | ownedExpression ( PIPE | OR ) ownedExpression
+    | ownedExpression IMPLIES ownedExpression
+    | ownedExpression QUESTION_QUESTION ownedExpression
+    | primaryExpression
+    | IF ownedExpression QUESTION ownedExpression ELSE ownedExpression
+    ;
+
+primaryExpression
+    : qualifiedName ( AT_AT | META ) typeReference
     | baseExpression
+      ( DOT featureChainMember )?
+      (
+        ( LBRACK sequenceExpressionList RBRACK
+        | HASH LPAREN sequenceExpressionList RPAREN
+        | ARROW featureChainMember ( bodyExpression | qualifiedName | argumentList )
+        | DOT bodyExpression
+        | DOT_QUESTION bodyExpression
+        )
+        ( DOT featureChainMember )?
+      )*
     ;
 
 typeReference
@@ -55,23 +60,22 @@ typeReference
     ;
 
 sequenceExpressionList
-    : ownedExpression ( COMMA ownedExpression )*
+    : ownedExpression ( COMMA ownedExpression )* COMMA?
     ;
 
 baseExpression
     : nullExpression
     | REGULAR_COMMENT   // ignore block comments used as expression placeholders
     | literalExpression
+    | qualifiedName DOT qualifiedName ( DOT qualifiedName )* argumentList
     | qualifiedName ( argumentList | DOT METADATA )?   // merged featureRef/metadataAccess/invocation
     | constructorExpression
     | bodyExpression
-    | LPAREN AS typeReference RPAREN   // metadata cast expression: (as MetadataType)
     | LPAREN sequenceExpressionList? RPAREN
     ;
 
 nullExpression
     : NULL
-    | LPAREN RPAREN
     ;
 
 featureReferenceExpression
@@ -79,7 +83,7 @@ featureReferenceExpression
     ;
 
 constructorExpression
-    : NEW qualifiedName argumentList
+    : NEW featureChainMember argumentList
     ;
 
 bodyExpression
