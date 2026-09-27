@@ -26,6 +26,13 @@ describe('describeDocumentLocation', () => {
         expect(describeDocumentLocation('https://host-b/b.sysml', 'https://host-a/a.sysml')).toBe('https://host-b/b.sysml');
         expect(describeDocumentLocation('not a uri', 'file:///ws/a.sysml')).toBe('not a uri');
     });
+
+    it('preserves malformed percent escapes instead of throwing', () => {
+        expect(describeDocumentLocation(
+            'test://workspace/models/%ZZ.sysml',
+            'test://workspace/models/main.sysml',
+        )).toBe('%ZZ.sysml');
+    });
 });
 
 describe('describeConflictingDeclarations', () => {

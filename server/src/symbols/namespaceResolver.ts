@@ -128,7 +128,11 @@ export function describeDocumentLocation(uri: string, fromUri: string): string {
     let common = 0;
     while (common < fromFolder.length && common < targetSegments.length - 1 && fromFolder[common] === targetSegments[common]) common++;
     const relative = [...fromFolder.slice(common).map(() => '..'), ...targetSegments.slice(common)].join('/');
-    return decodeURIComponent(relative);
+    try {
+        return decodeURIComponent(relative);
+    } catch {
+        return relative;
+    }
 }
 
 /**
