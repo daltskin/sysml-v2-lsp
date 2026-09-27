@@ -12,7 +12,7 @@ package WarmUp {
     public import ISQ::*;
     private import ScalarValues::*;
     public import Pkg::**;
-    import OtherPkg::*;
+    private import OtherPkg::*;
     import all OtherPkg2::*;
 
     // ---- Part / Port / Item / Interface / Connection / Allocation ----

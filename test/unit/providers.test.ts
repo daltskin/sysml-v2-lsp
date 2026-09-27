@@ -121,7 +121,7 @@ package Library {
 }
 
 package Main {
-    import Library::*;
+    private import Library::*;
     part mySensor : Sensor;
 }
 `;
@@ -1077,7 +1077,7 @@ describe('References Provider', () => {
         const { SymbolTable } = await import('../../server/src/symbols/symbolTable.js');
 
         const fileA = `package Lib { part def Sensor { attribute reading : Real; } }`;
-        const fileB = `package App { import Lib::*; part mySensor : Sensor; }`;
+        const fileB = `package App { private import Lib::*; part mySensor : Sensor; }`;
 
         const { dm } = await setupMulti([
             { text: fileA, uri: 'test://lib.sysml' },

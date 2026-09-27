@@ -603,7 +603,7 @@ package PkgA {
 }`;
         const textB = `
 package PkgB {
-    import PkgA::*;
+    private import PkgA::*;
 }`;
 
         const dm = await setupMulti([
