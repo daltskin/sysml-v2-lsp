@@ -934,6 +934,85 @@ package Test {
     // -------------------------------------------------------------------
 
     describe('diagnostics', () => {
+        it('should model nested anonymous interfaces under their ends\' paths, without reporting them as ambiguous', async () => {
+            // Each `interface source.pN to target.pN;` is anonymous (spec 7.14): `source` is an
+            // endpoint reference, not the interface's name.
+            const model = await getModelForText(`
+package Demo {
+    port def P { port p1; port p2; }
+    interface def I {
+        end source : P;
+        end target : ~P;
+    }
+    part assembly {
+        part a { port pa : P; }
+        part b { port pb : ~P; }
+        interface link : I
+            connect source ::> a.pa to target ::> b.pb {
+                interface source.p1 to target.p1;
+                interface source.p2 to target.p2;
+            }
+    }
+}
+`, ['elements', 'diagnostics']);
+
+            expect(model.diagnostics!.filter(d => d.code === 'ambiguous-namespace-name')).toEqual([]);
+            const interfacesNamed = (name: string) => {
+                const found: unknown[] = [];
+                const walk = (els: any[]) => els.forEach(el => { if (el.type === 'interface' && el.name === name) found.push(el); walk(el.children ?? []); });
+                walk(model.elements ?? []);
+                return found;
+            };
+            expect(interfacesNamed('source')).toEqual([]);
+            expect(interfacesNamed('source.p1-target.p1')).toHaveLength(1);
+            expect(interfacesNamed('source.p2-target.p2')).toHaveLength(1);
+            expect(interfacesNamed('link')).toHaveLength(1);
+            // Anonymity is reported as an element attribute; a declared name has none.
+            const [anonymous] = interfacesNamed('source.p1-target.p1') as any[];
+            const [declared] = interfacesNamed('link') as any[];
+            expect(anonymous.attributes.isAnonymous).toBe(true);
+            expect(declared.attributes.isAnonymous).toBeUndefined();
+        });
+
+        it('should report declared duplicates across documents, but keep and not report anonymous elements sharing a synthesized name', async () => {
+            const fileA = `
+package Demo {
+    port def P { port p1; }
+    interface def I {
+        end source : P;
+        end target : ~P;
+    }
+    part a { port pa : P; }
+    part b { port pb : ~P; }
+    part c { port pc : ~P; }
+    interface a.pa to b.pb;
+    connect a.pa to b.pb;
+    interface link : I connect source ::> a.pa to target ::> b.pb;
+}
+`;
+            const fileB = `
+package Demo {
+    interface a.pa to b.pb;
+    connect a.pa to b.pb;
+    interface link : I connect source ::> a.pa to target ::> c.pc;
+}
+`;
+            const model = await getModelForDocuments([
+                { uri: 'file:///ws/a.sysml', text: fileA },
+                { uri: 'file:///ws/b.sysml', text: fileB },
+            ], 'file:///ws/b.sysml', ['elements', 'diagnostics']);
+
+            const ambiguous = model.diagnostics!.filter(d => d.code === 'ambiguous-namespace-name');
+            expect(ambiguous.map(d => d.elementName)).toEqual(['link']);
+            // This document's own anonymous interface and connection are still modeled.
+            const names: string[] = [];
+            const walk = (els: { type: string; name: string; children?: unknown[] }[]) =>
+                els.forEach(el => { if (el.type === 'interface' || el.type === 'connection') names.push(el.name); walk((el.children ?? []) as typeof els); });
+            walk(model.elements ?? []);
+            expect(names.filter(n => n === 'a.pa-b.pb')).toHaveLength(2); // this document's interface and connection
+            expect(names).toContain('link');
+        });
+
         it('should report unresolved type references', async () => {
             const model = await getModelForText(`
 package Test {

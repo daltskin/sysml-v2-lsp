@@ -85,6 +85,8 @@ const MAX_NAMESPACE_NESTING_DEPTH = 64;
 export function findConflictedQualifiedNames(allSymbols: SysMLSymbol[]): Map<string, SysMLSymbol[]> {
     const byQualifiedNameAndKind = new Map<string, Map<SysMLElementKind, SysMLSymbol[]>>();
     for (const s of allSymbols) {
+        // An anonymous element (`SysMLSymbol.isAnonymous`) declares no name, so it can't conflict.
+        if (s.isAnonymous) continue;
         let byKind = byQualifiedNameAndKind.get(s.qualifiedName);
         if (!byKind) {
             byKind = new Map();

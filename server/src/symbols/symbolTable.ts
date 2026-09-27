@@ -935,13 +935,18 @@ export class SymbolTable {
         // Anonymous transitions still need symbols so their endpoints can be
         // exposed to diagram consumers. Give them a readable, location-based
         // synthetic name rather than incorrectly using the source state name.
-        const name = transition
+        const declaredName = transition
             ? transition.declaredName ?? (
                 transition.source && transition.target
                     ? `<transition ${transition.source} to ${transition.target}>#${range.start.line + 1}`
                     : undefined
             )
             : this.extractName(ctx);
+        // An anonymous connection or interface usage (`connect a.p to b.q;`) is
+        // named after its ends' reference paths, dash-joined (`a.p-b.q`), so it
+        // still gets a symbol. The ends are assumed to identify it uniquely.
+        const synthesizedName = declaredName ? undefined : this.connectorEndsName(ctx);
+        const name = declaredName ?? synthesizedName;
         if (!name) {
             return undefined;
         }
@@ -984,6 +989,7 @@ export class SymbolTable {
 
         return {
             name,
+            isAnonymous: synthesizedName ? true : undefined,
             shortName,
             kind,
             qualifiedName,
@@ -1161,28 +1167,20 @@ export class SymbolTable {
      * Looks for an IDENT token or a name/identification sub-rule.
      */
     private extractName(ctx: ParserRuleContext): string | undefined {
-        // A connection usage may omit its declaration entirely:
-        // `connect source.port to target.port;`. In that form, the first
-        // identifier below the context belongs to the source endpoint, not to
-        // the connection. Only an explicit usage declaration can name it.
+        // A connection or interface usage may omit its declaration entirely:
+        // `connect source.port to target.port;` / `interface source.p to target.p;`.
+        // In that form, the first identifier below the context belongs to the
+        // source endpoint, not to the connector. Only an explicit usage
+        // declaration can name it -- directly under a connection usage, one
+        // level down (in interfaceUsageDeclaration) under an interface usage.
+        // Without one, the symbol builder synthesizes a name instead
+        // (`connectorEndsName`).
         if (ctx.ruleIndex === SysMLv2Parser.RULE_connectionUsage) {
-            for (let i = 0; i < ctx.getChildCount(); i++) {
-                const child = ctx.getChild(i);
-                if (!(child instanceof ParserRuleContext) ||
-                    child.ruleIndex !== SysMLv2Parser.RULE_usageDeclaration) {
-                    continue;
-                }
-
-                for (let j = 0; j < child.getChildCount(); j++) {
-                    const declarationChild = child.getChild(j);
-                    if (declarationChild instanceof ParserRuleContext &&
-                        declarationChild.ruleIndex === SysMLv2Parser.RULE_identification) {
-                        return this.parseIdentification(declarationChild).name;
-                    }
-                }
-                return undefined;
-            }
-            return undefined;
+            return this.extractDeclaredUsageName(ctx);
+        }
+        if (ctx.ruleIndex === SysMLv2Parser.RULE_interfaceUsage) {
+            const declaration = this.findChildRule(ctx, SysMLv2Parser.RULE_interfaceUsageDeclaration);
+            return declaration ? this.extractDeclaredUsageName(declaration) : undefined;
         }
 
         // Walk children looking for a name-producing rule or IDENT token
@@ -1225,6 +1223,57 @@ export class SymbolTable {
             }
         }
 
+        return undefined;
+    }
+
+    /**
+     * A connection or interface usage's end reference paths, dash-joined in
+     * declaration order (`source.p1-target.p1` for `interface source.p1 to
+     * target.p1;`) -- a dash never occurs in an unquoted name, so this can't
+     * equal a declared one. Read from its own end part only; undefined for any
+     * other element, or one without ends.
+     */
+    private connectorEndsName(ctx: ParserRuleContext): string | undefined {
+        let endPart: ParserRuleContext | undefined;
+        if (ctx.ruleIndex === SysMLv2Parser.RULE_connectionUsage) {
+            endPart = this.findChildRule(ctx, SysMLv2Parser.RULE_connectorPart);
+        } else if (ctx.ruleIndex === SysMLv2Parser.RULE_interfaceUsage) {
+            const declaration = this.findChildRule(ctx, SysMLv2Parser.RULE_interfaceUsageDeclaration);
+            endPart = declaration && this.findChildRule(declaration, SysMLv2Parser.RULE_interfacePart);
+        }
+        if (!endPart) return undefined;
+        const references: ParserRuleContext[] = [];
+        this.collectDescendantRules(endPart, SysMLv2Parser.RULE_ownedReferenceSubsetting, references);
+        return references.map((reference) => reference.getText()).join('-') || undefined;
+    }
+
+    /** Every outermost node of rule `ruleIndex` below `ctx`, in source order, into `out`. */
+    private collectDescendantRules(ctx: ParserRuleContext, ruleIndex: number, out: ParserRuleContext[]): void {
+        for (let i = 0; i < ctx.getChildCount(); i++) {
+            const child = ctx.getChild(i);
+            if (!(child instanceof ParserRuleContext)) continue;
+            if (child.ruleIndex === ruleIndex) out.push(child);
+            else this.collectDescendantRules(child, ruleIndex, out);
+        }
+    }
+
+    /**
+     * The name declared by `ctx`'s own `usageDeclaration → identification`
+     * child, or undefined when it has none (an anonymous connector usage,
+     * whose first identifier is an endpoint reference, not its name).
+     */
+    private extractDeclaredUsageName(ctx: ParserRuleContext): string | undefined {
+        const declaration = this.findChildRule(ctx, SysMLv2Parser.RULE_usageDeclaration);
+        const identification = declaration && this.findChildRule(declaration, SysMLv2Parser.RULE_identification);
+        return identification ? this.parseIdentification(identification).name : undefined;
+    }
+
+    /** The first direct child of `ctx` that is a parse-tree node of rule `ruleIndex`. */
+    private findChildRule(ctx: ParserRuleContext, ruleIndex: number): ParserRuleContext | undefined {
+        for (let i = 0; i < ctx.getChildCount(); i++) {
+            const child = ctx.getChild(i);
+            if (child instanceof ParserRuleContext && child.ruleIndex === ruleIndex) return child;
+        }
         return undefined;
     }
 

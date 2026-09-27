@@ -144,6 +144,87 @@ package Demo {
         expect(connection[0].kind).toBe('connection');
     });
 
+    it('should name an anonymous interface usage after its ends\' reference paths', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    port def P { port p1; port p2; }
+    interface def I {
+        end source : P;
+        end target : ~P;
+    }
+    part assembly {
+        part a { port pa : P; }
+        part b { port pb : ~P; }
+        interface link : I
+            connect source ::> a.pa to target ::> b.pb {
+                interface source.p1 to target.p1;
+                interface source.p2 to target.p2;
+            }
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        // `interface source.p1 to target.p1;` declares no name -- `source` is an endpoint reference,
+        // so the interface is named after the whole path instead, and flagged as synthesized.
+        expect(st.findByName('source').filter((s) => s.kind === 'interface')).toHaveLength(0);
+        for (const path of ['source.p1-target.p1', 'source.p2-target.p2']) {
+            const [iface] = st.findByName(path);
+            expect(iface?.kind).toBe('interface');
+            expect(iface?.isAnonymous).toBe(true);
+            expect(iface?.qualifiedName).toBe(`Demo::assembly::link::${path}`);
+        }
+        expect(st.findByName('link')[0].isAnonymous).toBeUndefined();
+    });
+
+    it('should give every anonymous interface usage that fans out from the same end a unique name', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    port def P { port p1; port p2; }
+    part assembly {
+        part a { port pa : P; }
+        part b { port pb : ~P; }
+        part c { port pc : ~P; }
+        interface a.pa to b.pb;
+        interface a.pa to c.pc;
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        const named = st.getSymbolsForUri('test://test.sysml').filter((s) => s.kind === 'interface');
+        // Fan-out from the same end differs by its other end.
+        expect(named.map((s) => s.name)).toEqual(['a.pa-b.pb', 'a.pa-c.pc']);
+        expect(named.every((s) => s.isAnonymous)).toBe(true);
+    });
+
+    it('should preserve names declared explicitly on interface usages', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    port def P { port p1; port p2; }
+    interface def I {
+        end source : P;
+        end target : ~P;
+    }
+    part assembly {
+        part a { port pa : P; }
+        part b { port pb : ~P; }
+        interface link : I
+            connect source ::> a.pa to target ::> b.pb {
+                interface source.p1 to target.p1;
+                interface source.p2 to target.p2;
+            }
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        const link = st.findByName('link');
+        expect(link).toHaveLength(1);
+        expect(link[0].kind).toBe('interface');
+        expect(link[0].typeNames).toContain('I');
+    });
+
     it('should extract transition endpoints without colliding with the source state', async () => {
         const { st, result } = await buildST(`
 package Demo {
@@ -833,5 +914,81 @@ package P {
         expect(toMetaclassName(SysMLElementKind.JoinNode)).toBe('JoinNode');
         expect(toMetaclassName(SysMLElementKind.MergeNode)).toBe('MergeNode');
         expect(toMetaclassName(SysMLElementKind.DecisionNode)).toBe('DecisionNode');
+    });
+});
+
+describe('anonymous connection usages', () => {
+    const text = `
+package Demo {
+    part a { port p; port q; }
+    part b { port p; }
+    part c { port p; }
+    part d { port p; }
+    connect a.p to b.p;
+    connect a.p to c.p;
+    connect (a.q, b.p, c.p, d.p);
+    connect e ::> d.p to b.p;
+}
+`;
+
+    it('names each after its ends\' reference paths, dash-joined', async () => {
+        const { st, result } = await buildST(text);
+        expect(result.errors).toHaveLength(0);
+        const connections = st.getSymbolsForUri('test://test.sysml').filter((s) => s.kind === 'connection');
+        // binary, fan-out from the same end, n-ary, and an end with its own name (`e ::> d.p` -> `d.p`)
+        expect(connections.map((s) => s.name)).toEqual(['a.p-b.p', 'a.p-c.p', 'a.q-b.p-c.p-d.p', 'd.p-b.p']);
+        expect(connections.every((s) => s.isAnonymous)).toBe(true);
+        expect(connections.map((s) => s.qualifiedName)).toContain('Demo::a.q-b.p-c.p-d.p');
+    });
+
+    it('keeps the ends\' own parts as they are', async () => {
+        const { st } = await buildST(text);
+        expect(st.findByName('a').map((s) => s.kind)).toEqual(['part']);
+    });
+});
+
+describe('findConflictedQualifiedNames and anonymous elements', () => {
+    // The same package reopened in two files, each with an anonymous interface and connection between
+    // the same ends: `Demo::a.pa-b.pb` then names two interfaces and two connections. Both files also
+    // declare `link`, a real conflict.
+    const fileA = `
+package Demo {
+    port def P { port p1; }
+    interface def I {
+        end source : P;
+        end target : ~P;
+    }
+    part a { port pa : P; }
+    part b { port pb : ~P; }
+    part c { port pc : ~P; }
+    interface a.pa to b.pb;
+    connect a.pa to b.pb;
+    interface link : I connect source ::> a.pa to target ::> b.pb;
+}
+`;
+    const fileB = `
+package Demo {
+    interface a.pa to b.pb;
+    connect a.pa to b.pb;
+    interface link : I connect source ::> a.pa to target ::> c.pc;
+}
+`;
+
+    it('excludes anonymous elements sharing a name across documents, but still reports declared duplicates', async () => {
+        const { findConflictedQualifiedNames } = await import('../../server/src/symbols/namespaceResolver.js');
+        const st = await buildMultiFileST([
+            { uri: 'test://a.sysml', text: fileA },
+            { uri: 'test://b.sysml', text: fileB },
+        ]);
+
+        const all = st.getAllSymbols();
+        const shared = all.filter((s) => s.qualifiedName === 'Demo::a.pa-b.pb');
+        for (const kind of ['interface', 'connection']) {
+            expect(shared.filter((s) => s.kind === kind).map((s) => s.isAnonymous)).toEqual([true, true]);
+        }
+
+        const conflicts = findConflictedQualifiedNames(all);
+        expect([...conflicts.keys()]).toEqual(['Demo::link']);
+        expect(conflicts.get('Demo::link')).toHaveLength(2);
     });
 });

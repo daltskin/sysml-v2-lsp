@@ -2772,3 +2772,81 @@ package External {
         });
     });
 });
+
+describe('Anonymous interface usages', () => {
+    it('does not report nested anonymous interfaces as ambiguous names', async () => {
+        // Each `interface source.pN to target.pN;` is anonymous (spec 7.14): its first identifier is
+        // an endpoint reference, so several of them in one body must not collide on that name.
+        const diagnostics = await getSemanticDiagnostics(`
+package Demo {
+    port def P { port p1; port p2; }
+    interface def I {
+        end source : P;
+        end target : ~P;
+    }
+    part assembly {
+        part a { port pa : P; }
+        part b { port pb : ~P; }
+        interface link : I
+            connect source ::> a.pa to target ::> b.pb {
+                interface source.p1 to target.p1;
+                interface source.p2 to target.p2;
+            }
+    }
+}
+`);
+        expect(diagnostics.filter((d) => d.code === 'ambiguous-namespace-name')).toEqual([]);
+    });
+
+    it('does not report anonymous interfaces fanning out from the same end as ambiguous', async () => {
+        // Named `a.pa-b.pb` and `a.pa-c.pc` after their ends -- synthesized, never declared.
+        const diagnostics = await getSemanticDiagnostics(`
+package Demo {
+    port def P { port p1; port p2; }
+    part assembly {
+        part a { port pa : P; }
+        part b { port pb : ~P; }
+        part c { port pc : ~P; }
+        interface a.pa to b.pb;
+        interface a.pa to c.pc;
+    }
+}
+`);
+        expect(diagnostics.filter((d) => d.code === 'ambiguous-namespace-name')).toEqual([]);
+    });
+
+    it('reports declared duplicates across documents, but not anonymous elements sharing a synthesized name', async () => {
+        // Each file's anonymous interface and connection are both `Demo::a.pa-b.pb`, in both
+        // files (numbering is per document); both files also declare `link`.
+        const fileA = `
+package Demo {
+    port def P { port p1; }
+    interface def I {
+        end source : P;
+        end target : ~P;
+    }
+    part a { port pa : P; }
+    part b { port pb : ~P; }
+    part c { port pc : ~P; }
+    interface a.pa to b.pb;
+    connect a.pa to b.pb;
+    interface link : I connect source ::> a.pa to target ::> b.pb;
+}
+`;
+        const fileB = `
+package Demo {
+    interface a.pa to b.pb;
+    connect a.pa to b.pb;
+    interface link : I connect source ::> a.pa to target ::> c.pc;
+}
+`;
+        const entries = [
+            { uri: 'file:///ws/a.sysml', text: fileA },
+            { uri: 'file:///ws/b.sysml', text: fileB },
+        ];
+        for (const uri of ['file:///ws/a.sysml', 'file:///ws/b.sysml']) {
+            const ambiguous = (await getSemanticDiagnosticsForUri(entries, uri)).filter((d) => d.code === 'ambiguous-namespace-name');
+            expect(ambiguous.map((d) => d.message.match(/'([^']+)'/)?.[1])).toEqual(['link']);
+        }
+    });
+});

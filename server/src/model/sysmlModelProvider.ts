@@ -399,6 +399,11 @@ export class SysMLModelProvider {
             attributes['documentation'] = symbol.documentation;
         }
 
+        // `SysMLSymbol.isAnonymous`: `name` was synthesized, not declared.
+        if (symbol.isAnonymous) {
+            attributes['isAnonymous'] = true;
+        }
+
         // Include prefix metadata annotations (#name)
         if (symbol.metadataAnnotations && symbol.metadataAnnotations.length > 0) {
             attributes['metadataAnnotations'] = symbol.metadataAnnotations.join(', ');

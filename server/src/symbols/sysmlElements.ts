@@ -70,6 +70,13 @@ export enum SysMLElementKind {
 export interface SysMLSymbol {
     /** The symbol's name */
     name: string;
+    /**
+     * True for an anonymous element (KerML: no `declaredName`), whose `name` was synthesized
+     * rather than declared -- e.g. an anonymous interface usage named after its first end's
+     * reference path. It declares no namespace member name, so it never takes part in
+     * duplicate-name checks.
+     */
+    isAnonymous?: boolean;
     /** Declared `<shortName>` alias (`identification: LT name GT name | LT name GT`), if any. */
     shortName?: string;
     /** The kind of SysML element */
