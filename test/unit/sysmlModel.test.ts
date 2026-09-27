@@ -1078,7 +1078,7 @@ package Test {
             // path, not just assume it from shared code.
             const pkgBFile1 = `
 package PkgB {
-    import PkgA::Part3;
+    private import PkgA::Part3;
     part def Part1;
 }
 `;
@@ -1125,7 +1125,7 @@ part def A {
 `;
             const externalText = `
 package External {
-    import A::B;
+    private import A::B;
     part usesB : B;
 }
 `;
@@ -1151,6 +1151,48 @@ package External {
             expect(ambiguousDiag!.message).toContain("'A'");
         });
 
+        it('says where the other declaration is, and counts any further ones as other occurrences (same message as the editor diagnostics)', async () => {
+            const entries = [
+                { uri: 'file:///ws/a1.sysml', text: `part def A;\n` },
+                { uri: 'file:///ws/a2.sysml', text: `part def A;\n` },
+            ];
+            const pair = await getModelForDocuments(entries, 'file:///ws/a1.sysml', ['diagnostics']);
+            expect(pair.diagnostics!.find(d => d.code === 'ambiguous-namespace-name')!.message).toBe(
+                "Ambiguous name 'A': also declared as part def in document a2.sysml (line 1).",
+            );
+
+            const three = await getModelForDocuments([...entries, { uri: 'file:///ws/lib/a3.sysml', text: `part def A;\n` }], 'file:///ws/a1.sysml', ['diagnostics']);
+            expect(three.diagnostics!.find(d => d.code === 'ambiguous-namespace-name')!.message).toBe(
+                "Ambiguous name 'A': also declared as part def in document a2.sysml (line 1) and 1 other occurrence.",
+            );
+        });
+
+        it('counts several further occurrences in the plural, and names a same-document one as "this document"', async () => {
+            const four = [
+                { uri: 'file:///ws/a1.sysml', text: `part def A;\n` },
+                { uri: 'file:///ws/a2.sysml', text: `part def A;\n` },
+                { uri: 'file:///ws/a3.sysml', text: `part def A;\n` },
+                { uri: 'file:///ws/a4.sysml', text: `part def A;\n` },
+            ];
+            const plural = await getModelForDocuments(four, 'file:///ws/a1.sysml', ['diagnostics']);
+            expect(plural.diagnostics!.find(d => d.code === 'ambiguous-namespace-name')!.message).toBe(
+                "Ambiguous name 'A': also declared as part def in document a2.sysml (line 1) and 2 other occurrences.",
+            );
+
+            // Two in a1.sysml itself plus one in b.sysml.
+            const mixed = await getModelForDocuments(
+                [{ uri: 'file:///ws/a1.sysml', text: `part def A;\npart def A;\n` }, { uri: 'file:///ws/b.sysml', text: `part def A;\n` }],
+                'file:///ws/a1.sysml',
+                ['diagnostics'],
+            );
+            const messages = mixed.diagnostics!.filter(d => d.code === 'ambiguous-namespace-name').map(d => d.message);
+            // a1.sysml sorts before b.sysml, so each a1 declaration names the other a1 one first.
+            expect([...messages].sort()).toEqual([
+                "Ambiguous name 'A': also declared as part def in this document (line 1) and 1 other occurrence.",
+                "Ambiguous name 'A': also declared as part def in this document (line 2) and 1 other occurrence.",
+            ]);
+        });
+
         it('should NOT flag a package and an unrelated definition sharing a qualifiedName (valid per KerML)', async () => {
             const pkgAText = `
 package A {
@@ -1164,8 +1206,8 @@ part def A {
 `;
             const externalText = `
 package External {
-    import A::B;
-    import A::B2;
+    private import A::B;
+    private import A::B2;
     part usesB : B;
     part usesB2 : B2;
 }
@@ -1640,8 +1682,8 @@ package B {
     public import A::**;
 }
 package User {
-    import A::*;
-    import B::*;
+    private import A::*;
+    private import B::*;
     part usesA : PartA;
     part usesB : PartB;
 }

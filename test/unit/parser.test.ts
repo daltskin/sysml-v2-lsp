@@ -40,6 +40,13 @@ describe('Parser', () => {
         expect(result.errors.length).toBeGreaterThan(0);
     });
 
+    it('should require explicit import visibility', async () => {
+        const { parseDocument } = await import('../../server/src/parser/parseDocument.js');
+
+        expect(parseDocument('package Test { private import Library::*; }').errors).toEqual([]);
+        expect(parseDocument('package Test { import Library::*; }').errors.length).toBeGreaterThan(0);
+    });
+
     it('should return a token stream', async () => {
         const { parseDocument } = await import('../../server/src/parser/parseDocument.js');
         const result = parseDocument('package Test { }');
