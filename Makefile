@@ -82,10 +82,10 @@ clean: ## Clean build artifacts
 	npm run clean
 
 GRAMMAR_REPO := daltskin/sysml-v2-grammar
-GRAMMAR_BRANCH := main
+GRAMMAR_BRANCH := v2026.08.1
 GRAMMAR_BASE_URL := https://raw.githubusercontent.com/$(GRAMMAR_REPO)/$(GRAMMAR_BRANCH)/grammar
 
-update-grammar: ## Pull latest grammar, rebuild parser, and regenerate DFA snapshot
+update-grammar: ## Pull pinned grammar release, rebuild parser, and regenerate DFA snapshot
 	@echo "📥 Fetching grammar from $(GRAMMAR_REPO)..."
 	curl -fsSL $(GRAMMAR_BASE_URL)/SysMLv2Lexer.g4 -o grammar/SysMLv2Lexer.g4
 	curl -fsSL $(GRAMMAR_BASE_URL)/SysMLv2Parser.g4 -o grammar/SysMLv2Parser.g4

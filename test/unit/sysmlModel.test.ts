@@ -999,7 +999,7 @@ package Test {
             // path, not just assume it from shared code.
             const pkgBFile1 = `
 package PkgB {
-    import PkgA::Part3;
+    private import PkgA::Part3;
     part def Part1;
 }
 `;
@@ -1046,7 +1046,7 @@ part def A {
 `;
             const externalText = `
 package External {
-    import A::B;
+    private import A::B;
     part usesB : B;
 }
 `;
@@ -1085,8 +1085,8 @@ part def A {
 `;
             const externalText = `
 package External {
-    import A::B;
-    import A::B2;
+    private import A::B;
+    private import A::B2;
     part usesB : B;
     part usesB2 : B2;
 }
@@ -1561,8 +1561,8 @@ package B {
     public import A::**;
 }
 package User {
-    import A::*;
-    import B::*;
+    private import A::*;
+    private import B::*;
     part usesA : PartA;
     part usesB : PartB;
 }

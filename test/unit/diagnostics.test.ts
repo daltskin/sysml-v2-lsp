@@ -95,7 +95,7 @@ describe('Semantic Validation', () => {
         it('should NOT produce syntax errors for import inside package body', async () => {
             const text = `
 package CircularReferenceExample {
-    import CircularReferenceExample::*;
+    private import CircularReferenceExample::*;
 
     part def Contained {
         part outer : Container;
@@ -118,7 +118,7 @@ package Lib {
 
 package User {
     part def Vehicle {
-        import Lib::Engine;
+        private import Lib::Engine;
         part engine : Engine;
     }
 }
@@ -137,7 +137,7 @@ package Lib {
 package User {
     part def Vehicle;
     part vehicle : Vehicle {
-        import Lib::Engine;
+        private import Lib::Engine;
         part engine : Engine;
     }
 }
@@ -172,7 +172,7 @@ package Lib {
 
 package User {
     part def Vehicle {
-        import Lib::Engine;
+        private import Lib::Engine;
         part engine : Engine;
     }
     part def Unrelated {
@@ -195,9 +195,9 @@ package Lib {
 
 package User {
     part def Vehicle {
-        import Lib::Engine;
+        private import Lib::Engine;
         package Sub {
-            import Lib::Wheel;
+            private import Lib::Wheel;
         }
         part engine : Engine;
     }
@@ -1201,10 +1201,10 @@ package PkgB {
             expect(unresolvedDiags.some(d => d.message.includes("'Part3'"))).toBe(true);
         });
 
-        it('should resolve via an exact membership import (import PkgA::Part3;)', async () => {
+        it('should resolve via an exact membership import (private import PkgA::Part3;)', async () => {
             const pkgBText = `
 package PkgB {
-    import PkgA::Part3;
+    private import PkgA::Part3;
     part def Part1;
     part usesPart3 : Part3;
 }
@@ -1217,10 +1217,10 @@ package PkgB {
             expect(unresolvedDiags.some(d => d.message.includes("'Part3'"))).toBe(false);
         });
 
-        it('should resolve via a shallow namespace import (import PkgA::*;)', async () => {
+        it('should resolve via a shallow namespace import (private import PkgA::*;)', async () => {
             const pkgBText = `
 package PkgB {
-    import PkgA::*;
+    private import PkgA::*;
     part def Part1;
     part usesPart3 : Part3;
 }
@@ -1233,7 +1233,7 @@ package PkgB {
             expect(unresolvedDiags.some(d => d.message.includes("'Part3'"))).toBe(false);
         });
 
-        it('should resolve nested members via a deep membership import (import PkgA::**;)', async () => {
+        it('should resolve nested members via a deep membership import (private import PkgA::**;)', async () => {
             const nestedPkgAText = `
 package PkgA {
     part def Housing {
@@ -1243,7 +1243,7 @@ package PkgA {
 `;
             const pkgBText = `
 package PkgB {
-    import PkgA::**;
+    private import PkgA::**;
     part def Part1;
     part usesPart3 : Part3;
 }
@@ -1264,7 +1264,7 @@ package PkgC {
 `;
             const pkgBText = `
 package PkgB {
-    import PkgC::*;
+    private import PkgC::*;
     part def Part1;
     part usesPart3 : Part3;
 }
@@ -1303,7 +1303,7 @@ package PkgB {
         it('should combine imports from every fragment of a package split across files', async () => {
             const pkgBFile1 = `
 package PkgB {
-    import PkgA::Part3;
+    private import PkgA::Part3;
     part def Part1;
 }
 `;
@@ -1356,7 +1356,7 @@ package PkgB {
             const uriB2 = 'file:///pkg-b-2.sysml';
             const pkgB1WithImport = `
 package PkgB {
-    import PkgA::Part3;
+    private import PkgA::Part3;
     part def Part1;
 }
 `;
@@ -1400,7 +1400,7 @@ package Lib {
 `;
             const userText = `
 package User {
-    import Lib::*;
+    private import Lib::*;
     attribute def Vehicle {
         attribute mass : Mass;
         port powerIn : PowerPort;
@@ -1432,7 +1432,7 @@ package Lib {
 `;
             const userText = `
 package User {
-    import Lib::SharedEngine;
+    private import Lib::SharedEngine;
     part def Vehicle {
         part engine : SharedEngine;
     }
@@ -1483,8 +1483,8 @@ package Lib {
 `;
             const pText = `
 package P {
-    import Lib::A;
-    import A::B;
+    private import Lib::A;
+    private import A::B;
     part usesB : B;
 }
 `;
@@ -1512,7 +1512,7 @@ package P2 {
 `;
             const p3Text = `
 package P3 {
-    import P2::P2_2::Part1;
+    private import P2::P2_2::Part1;
     part usesPart1 : Part1;
 }
 `;
@@ -1544,7 +1544,7 @@ package P2 {
 `;
             const p3Text = `
 package P3 {
-    import P2::P2_2::Part1;
+    private import P2::P2_2::Part1;
     part usesPart1 : Part1;
 }
 `;
@@ -1576,7 +1576,7 @@ package P2 {
 `;
             const p3Text = `
 package P3 {
-    import P2::P2_2::Part1;
+    private import P2::P2_2::Part1;
     part usesPart1 : Part1;
 }
 `;
@@ -1631,7 +1631,7 @@ package Outer {
 `;
             const externalText = `
 package External {
-    import Outer::X;
+    private import Outer::X;
     part usesX : X;
 }
 `;
@@ -1679,7 +1679,7 @@ package PkgC {
         it('should follow recursive membership import into nested packages (standard §7.5.3 P4/P5 example)', async () => {
             // package P4 { item A; item B; package Q { item C; } }
             // package P5 { private import P4::**; } -- equivalent to
-            //   import P4; import P4::*; import P4::Q::*;
+            //   import P4; private import P4::*; private import P4::Q::*;
             const p4Text = `
 package P4 {
     part def A;
@@ -1708,7 +1708,7 @@ package P5 {
         it('should follow recursive namespace import into nested packages (standard §7.5.3 P4/P6 example)', async () => {
             // package P4 { item A; item B; package Q { item C; } }
             // package P6 { private import P4::*::**; } -- equivalent to
-            //   import P4::*; import P4::Q::*;
+            //   private import P4::*; private import P4::Q::*;
             // (Note that P4 itself is NOT imported, unlike P4::** in the P5 case above.)
             const p4Text = `
 package P4 {
@@ -1747,8 +1747,8 @@ package B {
     public import A::**;
 }
 package User {
-    import A::*;
-    import B::*;
+    private import A::*;
+    private import B::*;
     part usesA : PartA;
     part usesB : PartB;
 }
@@ -1766,7 +1766,7 @@ package Self {
     public import Self::**;
 }
 package User {
-    import Self::*;
+    private import Self::*;
     part usesX : X;
 }
 `;
@@ -1790,7 +1790,7 @@ package C {
     public import A::**;
 }
 package User {
-    import A::*;
+    private import A::*;
     part usesC : PartC;
 }
 `;
@@ -1813,7 +1813,7 @@ package PkgB {
 `;
             const pkgDText = `
 package PkgD {
-    import PkgB::*;
+    private import PkgB::*;
     part usesPart3 : Part3;
 }
 `;
@@ -1842,7 +1842,7 @@ package PkgB {
 `;
             const pkgDText = `
 package PkgD {
-    import PkgB::*;
+    private import PkgB::*;
     part usesPart3 : Part3;
 }
 `;
@@ -1871,7 +1871,7 @@ package PkgB {
 `;
             const pkgDText = `
 package PkgD {
-    import PkgB::*;
+    private import PkgB::*;
     part usesPart3 : Part3;
 }
 `;
@@ -1995,7 +1995,7 @@ package PkgB {
 `;
                 const externalText = `
 package External {
-    import PkgB::*;
+    private import PkgB::*;
     part usesPart3 : Part3;
 }
 `;
@@ -2090,7 +2090,7 @@ package PkgB {
 `;
                 const pkgDText = `
 package PkgD {
-    import PkgB::*;
+    private import PkgB::*;
     part usesPart1 : Part1;
 }
 `;
@@ -2120,7 +2120,7 @@ package PkgB {
 `;
                 const pkgDText = `
 package PkgD {
-    import PkgB::*;
+    private import PkgB::*;
     part usesPart1 : Part1;
 }
 `;
@@ -2188,7 +2188,7 @@ package PkgC {
                 // namespace -- that must hold for a qualified-path segment
                 // just as much as for a wildcard-import propagation (already
                 // covered by the "should NOT propagate a privately-imported
-                // name" tests above, which only exercise `import PkgB::*;`,
+                // name" tests above, which only exercise `private import PkgB::*;`,
                 // not a direct `PkgB::Part3` qualified reference).
                 const pkgBText = `
 package PkgB {
@@ -2250,7 +2250,7 @@ package Lib {
             it('should import only metadata-matching members through a package-level filter', async () => {
                 const userText = `
 package User {
-    import Lib::**;
+    private import Lib::**;
     filter @Approval;
     part usesPart3 : Part3;
     part usesPart4 : Part4;
@@ -2268,7 +2268,7 @@ package User {
             it('should import only metadata-matching members through an inline filtered import', async () => {
                 const userText = `
 package User {
-    import Lib::**[@Approval];
+    private import Lib::**[@Approval];
     part usesPart3 : Part3;
     part usesPart4 : Part4;
 }
@@ -2294,7 +2294,7 @@ package Lib {
 `;
                 const userText = `
 package User {
-    import Lib::**[@Approval and not @Deprecated];
+    private import Lib::**[@Approval and not @Deprecated];
     part usesPart3 : Part3;
     part usesPart4 : Part4;
     part usesPart5 : Part5;
@@ -2322,7 +2322,7 @@ package Lib {
 `;
                 const userText = `
 package User {
-    import Lib::**[@Approval or @Deprecated];
+    private import Lib::**[@Approval or @Deprecated];
     part usesPart3 : Part3;
     part usesPart4 : Part4;
     part usesPart5 : Part5;
@@ -2341,7 +2341,7 @@ package User {
             it('should treat an unsupported filter expression (e.g. attribute comparisons) as passing (fail-open)', async () => {
                 const userText = `
 package User {
-    import Lib::**[level > 1];
+    private import Lib::**[level > 1];
     part usesPart3 : Part3;
     part usesPart4 : Part4;
 }
@@ -2381,7 +2381,7 @@ package Lib {
 `;
                     const userText = `
 package User {
-    import Lib::**[@Approval];
+    private import Lib::**[@Approval];
     part usesPart3 : Part3;
 }
 `;
@@ -2430,7 +2430,7 @@ package PkgB {
 `;
                     const externalText = `
 package External {
-    import PkgB::*;
+    private import PkgB::*;
     part usesPart3 : Part3;
 }
 `;
@@ -2480,8 +2480,8 @@ part def A {
 `;
             const externalText = `
 package External {
-    import A::B;
-    import A::B2;
+    private import A::B;
+    private import A::B2;
     part usesB : B;
     part usesB2 : B2;
 }
@@ -2577,7 +2577,7 @@ part def A {
             const externalUri = 'file:///external.sysml';
             const externalText = `
 package External {
-    import A::X;
+    private import A::X;
     part usesX : X;
 }
 `;
@@ -2679,8 +2679,8 @@ part def A {
 `;
             const externalText = `
 package External {
-    import A::B;
-    import A::B2;
+    private import A::B;
+    private import A::B2;
     part usesB : B;
     part usesB2 : B2;
 }
@@ -2701,7 +2701,7 @@ package External {
             expect(partDefADiags.filter(d => d.code === 'ambiguous-namespace-name')).toHaveLength(0);
         });
 
-        it('brings in members from both declarations via a wildcard import (import A::*;)', async () => {
+        it('brings in members from both declarations via a wildcard import (private import A::*;)', async () => {
             // Unlike the exact-membership imports above, a wildcard import
             // doesn't name which declaration's member it wants -- it must
             // still pick up both B (owned by the package) and B2 (owned by
@@ -2720,7 +2720,7 @@ part def A {
 `;
             const externalText = `
 package External {
-    import A::*;
+    private import A::*;
     part usesB : B;
     part usesB2 : B2;
 }
@@ -2739,7 +2739,7 @@ package External {
         it('does not flag an unresolved reference when a wildcard import pools a same-named member from both declarations', async () => {
             // Sharper edge case: package A and part def A each separately own
             // a member also named "C" (a part def and an attribute def,
-            // respectively). `import A::*;` pools both under the same name --
+            // respectively). `private import A::*;` pools both under the same name --
             // which one an external reference to "C" actually ends up typed
             // as is not asserted here (that's a real, separate latent
             // ambiguity this test doesn't attempt to pin down), only that
@@ -2756,7 +2756,7 @@ part def A {
 `;
             const externalText = `
 package External {
-    import A::*;
+    private import A::*;
     part usesC : C;
 }
 `;
