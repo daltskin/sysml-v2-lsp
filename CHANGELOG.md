@@ -5,7 +5,7 @@
 ### Fixed
 
 - fixed false positive on `ambiguous-namespace-name`: an anonymous interface usage (e.g., `interface a.p to b.p;`, no declared name) no longer takes the name of its first endpoint reference.
-- an anonymous interface or connection usage is now named after its ends' reference paths, dash-joined (e.g. `a.p-b.q`, or `a.p-b.q-c.r` for an n-ary one), instead of having no name, so it appears as a symbol, but the synthesized name is excluded from diagnosis. Such a symbol is marked `isAnonymous`, reported by `sysml/model` as the element attribute `isAnonymous: true`. A dash never occurs in an unquoted name, so a synthesized name can't equal a declared one.
+- anonymous connections, interfaces, allocations and transitions get a generated name (`a.p-b.q`), are marked `isAnonymous`, get a unique qualified name (`…#uri:line:col`), and are excluded from name lookup and duplicate checks.
 
 ## [0.31.0]
 

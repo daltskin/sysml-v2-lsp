@@ -2867,8 +2867,8 @@ package Demo {
     });
 
     it('reports declared duplicates across documents, but not anonymous elements sharing a synthesized name', async () => {
-        // Each file's anonymous interface and connection are both `Demo::a.pa-b.pb`, in both
-        // files (numbering is per document); both files also declare `link`.
+        // Each file's anonymous interface and connection are both named `a.pa-b.pb`, at the same
+        // position in both files; both files also declare `link`.
         const fileA = `
 package Demo {
     port def P { port p1; }
@@ -2899,5 +2899,57 @@ package Demo {
             const ambiguous = (await getSemanticDiagnosticsForUri(entries, uri)).filter((d) => d.code === 'ambiguous-namespace-name');
             expect(ambiguous.map((d) => d.message.match(/'([^']+)'/)?.[1])).toEqual(['link']);
         }
+    });
+});
+
+describe('Anonymous connectors and transitions next to declared names', () => {
+    const ambiguousNames = async (text: string) =>
+        (await getSemanticDiagnostics(text))
+            .filter((d) => d.code === 'ambiguous-namespace-name')
+            .map((d) => d.message.match(/'([^']+)'/)?.[1]);
+
+    for (const [order, body] of [
+        ['declared first', `connection 'a.p-b.p';\n    connect a.p to b.p;`],
+        ['anonymous first', `connect a.p to b.p;\n    connection 'a.p-b.p';`],
+    ] as const) {
+        it(`does not report a declared connection quoted like an anonymous one's name (${order})`, async () => {
+            expect(await ambiguousNames(`
+package Demo {
+    part a { port p; }
+    part b { port p; }
+    ${body}
+}
+`)).toEqual([]);
+        });
+    }
+
+    it('does not report anonymous duplicates: connections with identical ends, allocations from the same end, transitions on one line', async () => {
+        expect(await ambiguousNames(`
+package Demo {
+    part a { port p; }
+    part b { port p; }
+    part c;
+    connect a.p to b.p;
+    connect a.p to b.p;
+    allocate a to b;
+    allocate a to c;
+    state def S {
+        state s1; state s2;
+        transition first s1 then s2; transition first s1 then s2;
+    }
+}
+`)).toEqual([]);
+    });
+
+    it('still reports a declared name quoted twice', async () => {
+        expect(await ambiguousNames(`
+package Demo {
+    part a { port p; }
+    part b { port p; }
+    connect a.p to b.p;
+    connection 'a.p-b.p';
+    connection 'a.p-b.p';
+}
+`)).toEqual(['a.p-b.p', 'a.p-b.p']);
     });
 });

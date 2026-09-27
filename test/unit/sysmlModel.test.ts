@@ -1013,6 +1013,29 @@ package Demo {
             expect(names).toContain('link');
         });
 
+        it('should model a declared connection quoted like an anonymous one\'s name, and anonymous duplicates, each as its own element', async () => {
+            const model = await getModelForText(`
+package Demo {
+    part a { port p; }
+    part b { port p; }
+    connect a.p to b.p;
+    connection 'a.p-b.p';
+    connect a.p to b.p;
+}
+`, ['elements', 'diagnostics']);
+
+            expect(model.diagnostics!.filter(d => d.code === 'ambiguous-namespace-name')).toEqual([]);
+            const connections: any[] = [];
+            const walk = (els: any[]) => els.forEach(el => { if (el.type === 'connection') connections.push(el); walk(el.children ?? []); });
+            walk(model.elements ?? []);
+            // All three keep the label as their name; only the anonymous ones are flagged.
+            expect(connections.map(c => [c.name, c.attributes.isAnonymous])).toEqual([
+                ['a.p-b.p', true],
+                ['a.p-b.p', undefined],
+                ['a.p-b.p', true],
+            ]);
+        });
+
         it('should report unresolved type references', async () => {
             const model = await getModelForText(`
 package Test {

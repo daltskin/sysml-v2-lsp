@@ -187,6 +187,12 @@ export function buildSymbolIndexes(allSymbols: SysMLSymbol[]): SymbolIndexes {
     const conflictedQualifiedNames = new Set(findConflictedQualifiedNames(allSymbols).keys());
 
     for (const s of allSymbols) {
+        // An anonymous element (`SysMLSymbol.isAnonymous`) is reachable only by its
+        // unique qualifiedName: its generated name is not a member name to resolve.
+        if (s.isAnonymous) {
+            byQualifiedName.set(s.qualifiedName, s);
+            continue;
+        }
         const nameList = byName.get(s.name) ?? [];
         nameList.push(s);
         byName.set(s.name, nameList);

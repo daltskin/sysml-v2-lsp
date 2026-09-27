@@ -166,13 +166,17 @@ package Demo {
 
         expect(result.errors).toHaveLength(0);
         // `interface source.p1 to target.p1;` declares no name -- `source` is an endpoint reference,
-        // so the interface is named after the whole path instead, and flagged as synthesized.
+        // so the interface is labelled after the whole path instead, and flagged as anonymous. Its
+        // qualified name has its declaration site appended; its name is not looked up.
         expect(st.findByName('source').filter((s) => s.kind === 'interface')).toHaveLength(0);
-        for (const path of ['source.p1-target.p1', 'source.p2-target.p2']) {
-            const [iface] = st.findByName(path);
+        const symbols = st.getSymbolsForUri('test://test.sysml');
+        for (const [path, line] of [['source.p1-target.p1', 13], ['source.p2-target.p2', 14]] as const) {
+            const [iface] = symbols.filter((s) => s.name === path);
             expect(iface?.kind).toBe('interface');
             expect(iface?.isAnonymous).toBe(true);
-            expect(iface?.qualifiedName).toBe(`Demo::assembly::link::${path}`);
+            expect(iface?.qualifiedName).toBe(`Demo::assembly::link::${path}#test://test.sysml:${line}:17`);
+            expect(st.getSymbol(iface.qualifiedName)).toBe(iface);
+            expect(st.findByName(path)).toEqual([]);
         }
         expect(st.findByName('link')[0].isAnonymous).toBeUndefined();
     });
@@ -938,8 +942,60 @@ package Demo {
         // binary, fan-out from the same end, n-ary, and an end with its own name (`e ::> d.p` -> `d.p`)
         expect(connections.map((s) => s.name)).toEqual(['a.p-b.p', 'a.p-c.p', 'a.q-b.p-c.p-d.p', 'd.p-b.p']);
         expect(connections.every((s) => s.isAnonymous)).toBe(true);
-        expect(connections.map((s) => s.qualifiedName)).toContain('Demo::a.q-b.p-c.p-d.p');
+        expect(connections.map((s) => s.qualifiedName)).toContain('Demo::a.q-b.p-c.p-d.p#test://test.sysml:9:5');
     });
+
+    it('keeps two anonymous connections with identical ends apart', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    part a { port p; }
+    part b { port p; }
+    connect a.p to b.p;
+    connect a.p to b.p;
+}
+`);
+        expect(result.errors).toHaveLength(0);
+        const connections = st.getSymbolsForUri('test://test.sysml').filter((s) => s.kind === 'connection');
+        expect(connections.map((s) => [s.name, s.isAnonymous])).toEqual([['a.p-b.p', true], ['a.p-b.p', true]]);
+        expect(new Set(connections.map((s) => s.qualifiedName)).size).toBe(2);
+        // Neither shadows the other: each is still registered under its own qualified name.
+        for (const connection of connections) expect(st.getSymbol(connection.qualifiedName)).toBe(connection);
+        expect(st.getAllSymbols().filter((s) => s.kind === 'connection')).toHaveLength(2);
+    });
+
+    // A quoted name may spell out an anonymous connection's name exactly; in either source order,
+    // the declared connection keeps its qualified name and is the only one found by name.
+    for (const [order, body] of [
+        ['declared first', `connection 'a.p-b.p';\n    connect a.p to b.p;`],
+        ['anonymous first', `connect a.p to b.p;\n    connection 'a.p-b.p';`],
+    ] as const) {
+        it(`never lets an anonymous connection shadow a declared one quoted like its name (${order})`, async () => {
+            const { st, result } = await buildST(`
+package Demo {
+    part a { port p; }
+    part b { port p; }
+    ${body}
+}
+`);
+            expect(result.errors).toHaveLength(0);
+            const connections = st.getSymbolsForUri('test://test.sysml').filter((s) => s.kind === 'connection');
+            const declared = connections.find((s) => !s.isAnonymous)!;
+            const anonymous = connections.find((s) => s.isAnonymous)!;
+            expect([declared.name, anonymous.name]).toEqual(['a.p-b.p', 'a.p-b.p']);
+            expect(declared.qualifiedName).toBe('Demo::a.p-b.p');
+            expect(st.getSymbol('Demo::a.p-b.p')).toBe(declared);
+            expect(st.getSymbol(anonymous.qualifiedName)).toBe(anonymous);
+            expect(st.findByName('a.p-b.p')).toEqual([declared]);
+            expect(st.getGlobalScope().resolve('Demo')).toBeDefined();
+
+            const { buildSymbolIndexes, findConflictedQualifiedNames } = await import('../../server/src/symbols/namespaceResolver.js');
+            const indexes = buildSymbolIndexes(st.getAllSymbols());
+            expect(indexes.byName.get('a.p-b.p')).toEqual([declared]);
+            expect(indexes.byParent.get('Demo')).not.toContain(anonymous);
+            expect(indexes.byQualifiedName.get(anonymous.qualifiedName)).toBe(anonymous);
+            expect(findConflictedQualifiedNames(st.getAllSymbols()).size).toBe(0);
+        });
+    }
 
     it('keeps the ends\' own parts as they are', async () => {
         const { st } = await buildST(text);
@@ -947,10 +1003,65 @@ package Demo {
     });
 });
 
+describe('anonymous allocation usages', () => {
+    it('names each after its ends, never after its first end, and keeps a declared name', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    part a; part b; part c;
+    allocate a to b;
+    allocate a to c;
+    allocation named allocate a to c;
+}
+`);
+        expect(result.errors).toHaveLength(0);
+        const allocations = st.getSymbolsForUri('test://test.sysml').filter((s) => s.kind === 'allocation');
+        expect(allocations.map((s) => [s.name, s.qualifiedName, s.isAnonymous])).toEqual([
+            ['a-b', 'Demo::a-b#test://test.sysml:4:5', true],
+            ['a-c', 'Demo::a-c#test://test.sysml:5:5', true],
+            ['named', 'Demo::named', undefined],
+        ]);
+        // The first end keeps its own name: only the part is found by it.
+        expect(st.findByName('a').map((s) => s.kind)).toEqual(['part']);
+
+        const { findConflictedQualifiedNames } = await import('../../server/src/symbols/namespaceResolver.js');
+        expect(findConflictedQualifiedNames(st.getAllSymbols()).size).toBe(0);
+    });
+});
+
+describe('anonymous transitions', () => {
+    // Two anonymous transitions between the same states on one line, and a declared one quoted like
+    // their generated name.
+    const text = `
+package Demo {
+    state def S {
+        state s1; state s2;
+        transition first s1 then s2; transition first s1 then s2;
+        transition '<transition s1 to s2>' first s2 then s1;
+    }
+}
+`;
+
+    it('names each after its states, keeps them apart, and never lets a quoted declared name shadow one', async () => {
+        const { st, result } = await buildST(text);
+        expect(result.errors).toHaveLength(0);
+        const transitions = st.getSymbolsForUri('test://test.sysml').filter((s) => s.kind === 'transition');
+        expect(transitions.map((s) => [s.name, s.qualifiedName, s.isAnonymous])).toEqual([
+            ['<transition s1 to s2>', 'Demo::S::<transition s1 to s2>#test://test.sysml:5:9', true],
+            ['<transition s1 to s2>', 'Demo::S::<transition s1 to s2>#test://test.sysml:5:38', true],
+            ['<transition s1 to s2>', 'Demo::S::<transition s1 to s2>', undefined],
+        ]);
+        for (const transition of transitions) expect(st.getSymbol(transition.qualifiedName)).toBe(transition);
+        expect(st.findByName('<transition s1 to s2>')).toEqual([transitions[2]]);
+
+        const { findConflictedQualifiedNames } = await import('../../server/src/symbols/namespaceResolver.js');
+        expect(findConflictedQualifiedNames(st.getAllSymbols()).size).toBe(0);
+    });
+});
+
 describe('findConflictedQualifiedNames and anonymous elements', () => {
     // The same package reopened in two files, each with an anonymous interface and connection between
-    // the same ends: `Demo::a.pa-b.pb` then names two interfaces and two connections. Both files also
-    // declare `link`, a real conflict.
+    // the same ends, at the same position: all four are labelled `a.pa-b.pb`, but each keeps its own
+    // qualified name. Both files also declare `link`, a real conflict.
     const fileA = `
 package Demo {
     port def P { port p1; }
@@ -982,10 +1093,11 @@ package Demo {
         ]);
 
         const all = st.getAllSymbols();
-        const shared = all.filter((s) => s.qualifiedName === 'Demo::a.pa-b.pb');
+        const shared = all.filter((s) => s.name === 'a.pa-b.pb');
         for (const kind of ['interface', 'connection']) {
             expect(shared.filter((s) => s.kind === kind).map((s) => s.isAnonymous)).toEqual([true, true]);
         }
+        expect(new Set(shared.map((s) => s.qualifiedName)).size).toBe(4);
 
         const conflicts = findConflictedQualifiedNames(all);
         expect([...conflicts.keys()]).toEqual(['Demo::link']);

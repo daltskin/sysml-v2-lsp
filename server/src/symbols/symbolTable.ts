@@ -774,10 +774,12 @@ export class SymbolTable {
         const uriSymbols = this.symbolsByUri.get(uri) ?? [];
         uriSymbols.push(symbol);
         this.symbolsByUri.set(uri, uriSymbols);
-        // Maintain name index
-        const nameList = this.symbolsByName.get(symbol.name) ?? [];
-        nameList.push(symbol);
-        this.symbolsByName.set(symbol.name, nameList);
+        // Maintain name index -- an anonymous element's label is not a name to look up
+        if (!symbol.isAnonymous) {
+            const nameList = this.symbolsByName.get(symbol.name) ?? [];
+            nameList.push(symbol);
+            this.symbolsByName.set(symbol.name, nameList);
+        }
         // Maintain position-sorted index (insertion sort — symbols arrive
         // in document order so this is nearly always an append → O(1) amortized)
         const posList = this.symbolsByPosition.get(uri) ?? [];
@@ -812,7 +814,7 @@ export class SymbolTable {
             refList.push(symbol);
             this.typeNameRefs.set(tn, refList);
         }
-        scope.define(symbol);
+        if (!symbol.isAnonymous) scope.define(symbol);
     }
 
     /**
@@ -932,31 +934,19 @@ export class SymbolTable {
             ? this.extractTransitionDetails(ctx)
             : undefined;
 
-        // Anonymous transitions still need symbols so their endpoints can be
-        // exposed to diagram consumers. Give them a readable, location-based
-        // synthetic name rather than incorrectly using the source state name.
-        const declaredName = transition
-            ? transition.declaredName ?? (
-                transition.source && transition.target
-                    ? `<transition ${transition.source} to ${transition.target}>#${range.start.line + 1}`
-                    : undefined
-            )
-            : this.extractName(ctx);
-        // An anonymous connection or interface usage (`connect a.p to b.q;`) is
-        // named after its ends' reference paths, dash-joined (`a.p-b.q`), so it
-        // still gets a symbol. The ends are assumed to identify it uniquely.
-        const synthesizedName = declaredName ? undefined : this.connectorEndsName(ctx);
-        const name = declaredName ?? synthesizedName;
+        const declaredName = transition ? transition.declaredName : this.extractName(ctx);
+        // An anonymous transition, connection, interface or allocation usage still gets a
+        // symbol (`generateAnonymousName`).
+        const anonymous = declaredName ? undefined : this.generateAnonymousName(ctx, transition, parentQualifiedName, uri, range);
+        const name = declaredName ?? anonymous?.name;
         if (!name) {
             return undefined;
         }
-        // Transitions synthesize their own name above and never carry a
-        // declared <shortName> alias.
+        // Transitions never carry a declared <shortName> alias.
         const shortName = transition ? undefined : this.extractShortName(ctx);
 
-        const qualifiedName = parentQualifiedName
-            ? `${parentQualifiedName}::${name}`
-            : name;
+        const qualifiedName = anonymous?.qualifiedName
+            ?? (parentQualifiedName ? `${parentQualifiedName}::${name}` : name);
 
         const selectionRange = transition && !transition.declaredName
             ? range
@@ -989,7 +979,7 @@ export class SymbolTable {
 
         return {
             name,
-            isAnonymous: synthesizedName ? true : undefined,
+            isAnonymous: anonymous ? true : undefined,
             shortName,
             kind,
             qualifiedName,
@@ -1167,19 +1157,24 @@ export class SymbolTable {
      * Looks for an IDENT token or a name/identification sub-rule.
      */
     private extractName(ctx: ParserRuleContext): string | undefined {
-        // A connection or interface usage may omit its declaration entirely:
-        // `connect source.port to target.port;` / `interface source.p to target.p;`.
-        // In that form, the first identifier below the context belongs to the
-        // source endpoint, not to the connector. Only an explicit usage
-        // declaration can name it -- directly under a connection usage, one
-        // level down (in interfaceUsageDeclaration) under an interface usage.
+        // A connection, interface or allocation usage may omit its declaration
+        // entirely: `connect source.port to target.port;` / `interface source.p
+        // to target.p;` / `allocate a to b;`. In that form, the first identifier
+        // below the context belongs to the source endpoint, not to the
+        // connector. Only an explicit usage declaration can name it -- directly
+        // under a connection usage, one level down (in interfaceUsageDeclaration
+        // / allocationUsageDeclaration) under an interface or allocation usage.
         // Without one, the symbol builder synthesizes a name instead
-        // (`connectorEndsName`).
+        // (`generateAnonymousName`).
         if (ctx.ruleIndex === SysMLv2Parser.RULE_connectionUsage) {
             return this.extractDeclaredUsageName(ctx);
         }
         if (ctx.ruleIndex === SysMLv2Parser.RULE_interfaceUsage) {
             const declaration = this.findChildRule(ctx, SysMLv2Parser.RULE_interfaceUsageDeclaration);
+            return declaration ? this.extractDeclaredUsageName(declaration) : undefined;
+        }
+        if (ctx.ruleIndex === SysMLv2Parser.RULE_allocationUsage) {
+            const declaration = this.findChildRule(ctx, SysMLv2Parser.RULE_allocationUsageDeclaration);
             return declaration ? this.extractDeclaredUsageName(declaration) : undefined;
         }
 
@@ -1227,19 +1222,43 @@ export class SymbolTable {
     }
 
     /**
-     * A connection or interface usage's end reference paths, dash-joined in
-     * declaration order (`source.p1-target.p1` for `interface source.p1 to
-     * target.p1;`) -- a dash never occurs in an unquoted name, so this can't
-     * equal a declared one. Read from its own end part only; undefined for any
-     * other element, or one without ends.
+     * The name and qualified name of an element without a declared name: an
+     * anonymous transition (`<transition s1 to s2>`), or connection, interface
+     * or allocation usage (its ends, `a.p-b.q`). The qualified name appends
+     * the declaration site (`Demo::a.p-b.q#file:///a.sysml:12:5`), so no other
+     * element can shadow it. Undefined for any other element.
      */
-    private connectorEndsName(ctx: ParserRuleContext): string | undefined {
+    private generateAnonymousName(
+        ctx: ParserRuleContext,
+        transition: { source?: string; target?: string } | undefined,
+        parentQualifiedName: string,
+        uri: string,
+        range: Range,
+    ): { name: string; qualifiedName: string } | undefined {
+        const name = transition
+            ? (transition.source && transition.target ? `<transition ${transition.source} to ${transition.target}>` : undefined)
+            : this.connectorEndsLabel(ctx);
+        if (!name) return undefined;
+        const segment = `${name}#${uri}:${range.start.line + 1}:${range.start.character + 1}`;
+        return { name, qualifiedName: parentQualifiedName ? `${parentQualifiedName}::${segment}` : segment };
+    }
+
+    /**
+     * A connection, interface or allocation usage's end reference paths,
+     * dash-joined in declaration order (`source.p1-target.p1` for `interface
+     * source.p1 to target.p1;`). Read from its own end part only; undefined for any other
+     * element, or one without ends.
+     */
+    private connectorEndsLabel(ctx: ParserRuleContext): string | undefined {
         let endPart: ParserRuleContext | undefined;
         if (ctx.ruleIndex === SysMLv2Parser.RULE_connectionUsage) {
             endPart = this.findChildRule(ctx, SysMLv2Parser.RULE_connectorPart);
         } else if (ctx.ruleIndex === SysMLv2Parser.RULE_interfaceUsage) {
             const declaration = this.findChildRule(ctx, SysMLv2Parser.RULE_interfaceUsageDeclaration);
             endPart = declaration && this.findChildRule(declaration, SysMLv2Parser.RULE_interfacePart);
+        } else if (ctx.ruleIndex === SysMLv2Parser.RULE_allocationUsage) {
+            const declaration = this.findChildRule(ctx, SysMLv2Parser.RULE_allocationUsageDeclaration);
+            endPart = declaration && this.findChildRule(declaration, SysMLv2Parser.RULE_connectorPart);
         }
         if (!endPart) return undefined;
         const references: ParserRuleContext[] = [];

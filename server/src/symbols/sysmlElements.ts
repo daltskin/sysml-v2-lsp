@@ -71,10 +71,11 @@ export interface SysMLSymbol {
     /** The symbol's name */
     name: string;
     /**
-     * True for an anonymous element (KerML: no `declaredName`), whose `name` was synthesized
-     * rather than declared -- e.g. an anonymous interface usage named after its first end's
-     * reference path. It declares no namespace member name, so it never takes part in
-     * duplicate-name checks.
+     * True for an anonymous element (KerML: no `declaredName`): its `name` is generated for
+     * display (`a.p-b.q`, `<transition s1 to s2>`), and its `qualifiedName` has the declaration
+     * site appended (`Demo::a.p-b.q#file:///a.sysml:12:5`) to keep it unique. It declares no
+     * member name, so it is never found by name lookup and never takes part in duplicate-name
+     * checks.
      */
     isAnonymous?: boolean;
     /** Declared `<shortName>` alias (`identification: LT name GT name | LT name GT`), if any. */
