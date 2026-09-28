@@ -12,9 +12,9 @@
  * Requires `dist/server/server.js` -- `npm run test:e2e` builds it first.
  */
 import { fork } from 'node:child_process';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
@@ -25,10 +25,10 @@ type PublishDiagnosticsParams = {
 
 const serverPath = fileURLToPath(new URL('../../dist/server/server.js', import.meta.url));
 
-/** The client spellings under test of a scanned `users.sysml`. */
+/** The client spellings under test of a scanned `users.sysml`, and how messages show them. */
 const spellings = [
-    { spelling: 'percent-encoded', fileName: '%75sers.sysml' },
-    { spelling: 'differently-cased', fileName: 'Users.SYSML' },
+    { spelling: 'percent-encoded', fileName: '%75sers.sysml', shownAs: 'users.sysml' },
+    { spelling: 'differently-cased', fileName: 'Users.SYSML', shownAs: 'Users.SYSML' },
 ];
 
 /**
@@ -36,7 +36,10 @@ const spellings = [
  * and resolves once its workspace scan is done.
  */
 async function startServer(root: string, files: Record<string, string>) {
-    for (const [name, text] of Object.entries(files)) await writeFile(join(root, name), text);
+    for (const [name, text] of Object.entries(files)) {
+        await mkdir(dirname(join(root, name)), { recursive: true });
+        await writeFile(join(root, name), text);
+    }
     const rpc = await import('../../server/node_modules/vscode-jsonrpc/lib/node/main.js');
     const child = fork(serverPath, ['--node-ipc'], { silent: true });
     const connection = rpc.createMessageConnection(new rpc.IPCMessageReader(child), new rpc.IPCMessageWriter(child));
@@ -144,14 +147,16 @@ describe('document URI spelling (real server, over LSP)', () => {
 
     it.each(spellings)(
         'tracks a conflict introduced, resolved, reintroduced and removed with a file the client spells $spelling',
-        async ({ fileName }) => {
+        async ({ fileName, shownAs }) => {
             const root = await mkdtemp(join(tmpdir(), 'sysml-uri-spelling-'));
             const noConflict = 'part def Other;\n';
             const conflict = 'part def Driver;\n';
-            const server = await startServer(root, { 'vehicle.sysml': conflict, 'users.sysml': noConflict });
+            const vehiclePath = join(root, 'Parts', 'vehicle.sysml');
+            const usersPath = join(root, 'Definitions', 'users.sysml');
+            const server = await startServer(root, { 'Parts/vehicle.sysml': conflict, 'Definitions/users.sysml': noConflict });
             try {
-                const vehicleUri = pathToFileURL(join(root, 'vehicle.sysml')).toString();
-                const usersServerUri = pathToFileURL(join(root, 'users.sysml')).toString();
+                const vehicleUri = pathToFileURL(vehiclePath).toString();
+                const usersServerUri = pathToFileURL(usersPath).toString();
                 const usersUri = respell(usersServerUri, fileName);
                 const edit = (version: number, text: string) => server.notify('textDocument/didChange', {
                     textDocument: { uri: usersUri, version }, contentChanges: [{ text }],
@@ -159,6 +164,7 @@ describe('document URI spelling (real server, over LSP)', () => {
                 // Exactly one other declaration: users.sysml must not also count under the scan's spelling.
                 const expectOneConflict = (conflicts: { message: string }[]) => {
                     expect(conflicts).toHaveLength(1);
+                    expect(conflicts[0].message).toContain(`in document ../Definitions/${shownAs} (line 1)`);
                     expect(conflicts[0].message).not.toContain('other occurrence');
                 };
                 // Published diagnostics and `sysml/model` must agree on vehicle.sysml's conflicts.
@@ -195,9 +201,9 @@ describe('document URI spelling (real server, over LSP)', () => {
                 // 5. Removing it resolves the conflict: saved, closed (re-parsed from disk), then
                 // deleted, with the watcher reporting the deletion under the scan's own spelling.
                 const remove = async () => {
-                    await writeFile(join(root, 'users.sysml'), conflict);
+                    await writeFile(usersPath, conflict);
                     await server.close(usersUri);
-                    await rm(join(root, 'users.sysml'));
+                    await rm(usersPath);
                     await server.notify('workspace/didChangeWatchedFiles', {
                         changes: [{ uri: usersServerUri, type: 3 }],
                     })();

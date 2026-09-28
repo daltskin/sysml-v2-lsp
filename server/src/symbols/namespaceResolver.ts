@@ -12,6 +12,7 @@
  * construction time).
  */
 
+import { isSameDocumentUri } from '../utils/documentUri.js';
 import { FilterExpr, ImportTarget, SysMLElementKind, SysMLSymbol, isDefinition, isUsage } from './sysmlElements.js';
 
 export interface SymbolIndexes {
@@ -106,14 +107,34 @@ export function findConflictedQualifiedNames(allSymbols: SysMLSymbol[]): Map<str
     return conflicts;
 }
 
+/** A URI path segment as compared between URIs: ignoring percent-encoding and case, like `canonicalUri`. */
+function segmentKey(segment: string): string {
+    try {
+        return decodeURIComponent(segment).toLowerCase();
+    } catch {
+        return segment.toLowerCase();
+    }
+}
+
+/** URI path segments joined and percent-decoded for display, or left encoded when malformed. */
+function displayPath(segments: string[]): string {
+    const joined = segments.join('/');
+    try {
+        return decodeURIComponent(joined);
+    } catch {
+        return joined;
+    }
+}
+
 /**
  * Where a conflicting declaration lives, as seen from the document `fromUri` being diagnosed --
- * worked out from the two URIs alone (no file access): "this document" when they are the same,
- * otherwise `uri` as a relative reference from `fromUri` (RFC 3986 §4.2, e.g. `wheel.sysml`,
- * `../lib/wheel.sysml`) when both share scheme and authority, else `uri` in full.
+ * worked out from the two URIs alone (no file access): "this document" when both name the same
+ * document, otherwise `uri` as a relative reference from `fromUri` (RFC 3986 §4.2, e.g. `wheel.sysml`,
+ * `../lib/wheel.sysml`) when both share scheme and authority, else `uri` in full. Path segments
+ * compare ignoring percent-encoding and case, as two URIs can spell the same folders differently.
  */
 export function describeDocumentLocation(uri: string, fromUri: string): string {
-    if (uri === fromUri) return 'this document';
+    if (isSameDocumentUri(uri, fromUri)) return 'this document';
     let target: URL;
     let from: URL;
     try {
@@ -125,14 +146,13 @@ export function describeDocumentLocation(uri: string, fromUri: string): string {
     if (target.protocol !== from.protocol || target.host !== from.host) return uri;
     const targetSegments = target.pathname.split('/');
     const fromFolder = from.pathname.split('/').slice(0, -1);
+    // Count the leading folders both paths have in common, so the result only goes up (`..`) to
+    // where the paths split. Folders compare ignoring percent-encoding and case, so e.g. the
+    // Windows drive spellings `c%3A`, `C:` and `c:` match.
     let common = 0;
-    while (common < fromFolder.length && common < targetSegments.length - 1 && fromFolder[common] === targetSegments[common]) common++;
-    const relative = [...fromFolder.slice(common).map(() => '..'), ...targetSegments.slice(common)].join('/');
-    try {
-        return decodeURIComponent(relative);
-    } catch {
-        return relative;
-    }
+    while (common < fromFolder.length && common < targetSegments.length - 1
+        && segmentKey(fromFolder[common]) === segmentKey(targetSegments[common])) common++;
+    return displayPath([...fromFolder.slice(common).map(() => '..'), ...targetSegments.slice(common)]);
 }
 
 /**
