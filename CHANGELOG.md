@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Fixed false positive on `ambiguous-namespace-name` diagnosis: match documents by URI identity, ignoring percent-encoding and case, so a document no longer reports each of its declarations as an conflict with itself.
+
 ## [0.31.0]
 
 ### Changed
