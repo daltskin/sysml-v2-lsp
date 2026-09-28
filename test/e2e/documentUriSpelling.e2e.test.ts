@@ -1,13 +1,13 @@
 /**
  * End-to-end regression test for matching workspace files by identity, not
- * URI spelling (`isSameFileUri` in `server/src/utils/fileUri.ts`).
+ * URI spelling (`isSameDocumentUri` in `server/src/utils/documentUri.ts`).
  *
  * A client can spell a file's URI differently from the server's own
  * `pathToFileURL` (on Windows, `file:///c%3A/...` vs `file:///C:/...`). The
  * server then held the scanned copy and the opened copy side by side, and
  * every declaration in the file reported an ambiguous-name conflict with
- * itself. This test opens a scanned file under an equivalent,
- * percent-encoded spelling, which reproduces the mismatch on any platform.
+ * itself. This test opens a scanned file under a percent-encoded and a
+ * differently-cased spelling, which reproduces the mismatch on any platform.
  *
  * Requires `dist/server/server.js` -- `npm run test:e2e` builds it first.
  */
@@ -25,8 +25,11 @@ type PublishDiagnosticsParams = {
 
 const serverPath = fileURLToPath(new URL('../../dist/server/server.js', import.meta.url));
 
-describe('file URI spelling (real server, over LSP)', () => {
-    it('does not report a file\'s own declarations as ambiguous when the client spells its URI differently', async () => {
+describe('document URI spelling (real server, over LSP)', () => {
+    it.each([
+        { spelling: 'percent-encoded', fileName: '%75sers.sysml' },
+        { spelling: 'differently-cased', fileName: 'Users.SYSML' },
+    ])('does not report a file\'s own declarations as ambiguous when the client spells its URI $spelling', async ({ fileName }) => {
         const root = await mkdtemp(join(tmpdir(), 'sysml-uri-spelling-'));
         const rpc = await import('../../server/node_modules/vscode-jsonrpc/lib/node/main.js');
         const child = fork(serverPath, ['--node-ipc'], { silent: true });
@@ -34,9 +37,9 @@ describe('file URI spelling (real server, over LSP)', () => {
         try {
             const text = 'part def Driver;\n';
             await writeFile(join(root, 'users.sysml'), text);
-            // Same file as the scan's `pathToFileURL` URI, with the `u` percent-encoded.
+            // Same file as the scan's `pathToFileURL` URI, spelled differently.
             const serverUri = pathToFileURL(join(root, 'users.sysml')).toString();
-            const clientUri = serverUri.replace(/\/users\.sysml$/, '/%75sers.sysml');
+            const clientUri = serverUri.replace(/\/users\.sysml$/, `/${fileName}`);
             expect(clientUri).not.toBe(serverUri);
 
             connection.onRequest('client/registerCapability', () => null);

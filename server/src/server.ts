@@ -54,7 +54,7 @@ import { RenameProvider } from './providers/renameProvider.js';
 import { SemanticTokensProvider, tokenModifiers, tokenTypes } from './providers/semanticTokensProvider.js';
 import { SemanticValidator } from './providers/semanticValidator.js';
 import { DEFAULT_SKIP_DIRS, findSysMLFilesAsync, readFilesBatch } from './utils/fileDiscovery.js';
-import { isSameFileUri } from './utils/fileUri.js';
+import { isSameDocumentUri } from './utils/documentUri.js';
 
 /** Convert a file:// URI to a filesystem path, returning undefined for non-file URIs. */
 function toFsPath(uri: string): string | undefined {
@@ -494,12 +494,12 @@ connection.onDidChangeConfiguration((_change) => {
 // --------------------------------------------------------------------------
 
 /**
- * The open editor document for `uri`, matched by file identity rather than
- * spelling: a client may send `file:///c%3A/...` for a file the server
- * itself spells `file:///C:/...` (see `isSameFileUri`).
+ * The open editor document for `uri`, matched by document identity rather
+ * than spelling: a client may send `file:///c%3A/...` for a file the server
+ * itself spells `file:///C:/...`; case is ignored (see `isSameDocumentUri`).
  */
 function openDocumentFor(uri: string): TextDocument | undefined {
-    return documents.get(uri) ?? documents.all().find(d => isSameFileUri(d.uri, uri));
+    return documents.get(uri) ?? documents.all().find(d => isSameDocumentUri(d.uri, uri));
 }
 
 /**
@@ -509,7 +509,7 @@ function openDocumentFor(uri: string): TextDocument | undefined {
  */
 function dropOtherSpellings(uri: string): void {
     for (const other of documentManager.getUris()) {
-        if (other !== uri && isSameFileUri(other, uri)) {
+        if (other !== uri && isSameDocumentUri(other, uri)) {
             documentManager.remove(other);
             modelProvider.removeUri(other);
         }
@@ -719,7 +719,7 @@ connection.onDidChangeWatchedFiles((params) => {
         if (change.type === 3) {
             // File deleted — remove from document manager, under any spelling
             for (const uri of documentManager.getUris()) {
-                if (isSameFileUri(uri, change.uri)) {
+                if (isSameDocumentUri(uri, change.uri)) {
                     documentManager.remove(uri);
                     changed = true;
                 }
