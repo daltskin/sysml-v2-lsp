@@ -16,7 +16,7 @@ export function canonicalUri(uri: string): string {
     if (uri.startsWith('file://')) {
         try {
             return decodeURIComponent(uri).toLowerCase();
-        } catch { /* malformed percent-encoding: compare as spelled */ }
+        } catch { /* malformed percent-encoding: compare without decoding */ }
     }
     return uri.toLowerCase();
 }
