@@ -703,6 +703,10 @@ documents.onDidClose((event) => {
     if (fsPath && (fsPath.endsWith('.sysml') || fsPath.endsWith('.kerml'))) {
         parseWorkspaceFile(fsPath, uri);
     }
+
+    // Closing can change the file's symbols (unsaved edits dropped, or the
+    // file gone from disk), so other open documents' conflicts may change too.
+    scheduleCrossFileRevalidate();
 });
 
 // --------------------------------------------------------------------------
