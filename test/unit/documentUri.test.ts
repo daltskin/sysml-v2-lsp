@@ -3,25 +3,25 @@ import { canonicalUri, isSameDocumentUri } from '../../server/src/utils/document
 
 describe('canonicalUri', () => {
     it('maps an encoded-colon and a plain-colon Windows URI to the same key', () => {
-        expect(canonicalUri('file:///c%3A/Users/a/b.sysml')).toBe('file:///c:/users/a/b.sysml');
-        expect(canonicalUri('file:///C:/Users/a/b.sysml')).toBe('file:///c:/users/a/b.sysml');
+        expect(canonicalUri('file:///c%3A/Users/a/b.sysml')).toBe('file:///c:/Users/a/b.sysml');
+        expect(canonicalUri('file:///c%3a/Users/a/b.sysml')).toBe('file:///c:/Users/a/b.sysml');
+        expect(canonicalUri('file:///C:/Users/a/b.sysml')).toBe('file:///c:/Users/a/b.sysml');
     });
 
-    it('decodes percent-encoded path characters of file URIs', () => {
-        expect(canonicalUri('file:///home/a/my%20model.sysml')).toBe('file:///home/a/my model.sysml');
+    it('preserves the case of the path after the drive letter', () => {
+        expect(canonicalUri('file:///D:/Models/Vehicle.SysML')).toBe('file:///d:/Models/Vehicle.SysML');
+        expect(canonicalUri('file:///home/a/Users.sysml')).toBe('file:///home/a/Users.sysml');
     });
 
-    it('ignores case in file names and folders', () => {
-        expect(canonicalUri('file:///D:/Models/Vehicle.SysML')).toBe('file:///d:/models/vehicle.sysml');
+    it('leaves other percent-encoding and colons unchanged', () => {
+        expect(canonicalUri('file:///home/a/my%20model.sysml')).toBe('file:///home/a/my%20model.sysml');
+        expect(canonicalUri('file:///home/c%3A/a.sysml')).toBe('file:///home/c%3A/a.sysml');
+        expect(canonicalUri('file:///cd%3A/a.sysml')).toBe('file:///cd%3A/a.sysml');
     });
 
-    it('ignores case in https URIs, without decoding them', () => {
-        expect(canonicalUri('HTTPS://Example.com/Models/Vehicle.sysml')).toBe('https://example.com/models/vehicle.sysml');
-        expect(canonicalUri('https://example.com/a%2Fb.sysml')).toBe('https://example.com/a%2fb.sysml');
-    });
-
-    it('only lowercases malformed file URIs', () => {
-        expect(canonicalUri('file:///Bad%E0%A4%A')).toBe('file:///bad%e0%a4%a');
+    it('leaves non-file URIs unchanged', () => {
+        expect(canonicalUri('https://example.com/Models/Vehicle.sysml')).toBe('https://example.com/Models/Vehicle.sysml');
+        expect(canonicalUri('untitled:C:/a.sysml')).toBe('untitled:C:/a.sysml');
     });
 });
 
@@ -33,9 +33,10 @@ describe('isSameDocumentUri', () => {
         )).toBe(true);
     });
 
-    it('treats file names differing only in case as the same document', () => {
-        expect(isSameDocumentUri('file:///home/a/Users.sysml', 'file:///home/a/users.sysml')).toBe(true);
-        expect(isSameDocumentUri('https://example.com/Users.sysml', 'https://example.com/users.sysml')).toBe(true);
+    it('distinguishes documents whose paths differ only in case', () => {
+        expect(isSameDocumentUri('file:///home/a/Users.sysml', 'file:///home/a/users.sysml')).toBe(false);
+        expect(isSameDocumentUri('file:///c:/a/Users.sysml', 'file:///C:/a/users.sysml')).toBe(false);
+        expect(isSameDocumentUri('https://example.com/Users.sysml', 'https://example.com/users.sysml')).toBe(false);
     });
 
     it('distinguishes different documents', () => {

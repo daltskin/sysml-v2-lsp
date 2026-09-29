@@ -12,7 +12,7 @@
  * construction time).
  */
 
-import { isSameDocumentUri } from '../utils/documentUri.js';
+import { canonicalUri, isSameDocumentUri } from '../utils/documentUri.js';
 import { FilterExpr, ImportTarget, SysMLElementKind, SysMLSymbol, isDefinition, isUsage } from './sysmlElements.js';
 
 export interface SymbolIndexes {
@@ -107,15 +107,6 @@ export function findConflictedQualifiedNames(allSymbols: SysMLSymbol[]): Map<str
     return conflicts;
 }
 
-/** A URI path segment as compared between URIs: ignoring percent-encoding and case, like `canonicalUri`. */
-function segmentKey(segment: string): string {
-    try {
-        return decodeURIComponent(segment).toLowerCase();
-    } catch {
-        return segment.toLowerCase();
-    }
-}
-
 /** URI path segments joined and percent-decoded for display, or left encoded when malformed. */
 function displayPath(segments: string[]): string {
     const joined = segments.join('/');
@@ -130,16 +121,20 @@ function displayPath(segments: string[]): string {
  * Where a conflicting declaration lives, as seen from the document `fromUri` being diagnosed --
  * worked out from the two URIs alone (no file access): "this document" when both name the same
  * document, otherwise `uri` as a relative reference from `fromUri` (RFC 3986 §4.2, e.g. `wheel.sysml`,
- * `../lib/wheel.sysml`) when both share scheme and authority, else `uri` in full. Path segments
- * compare ignoring percent-encoding and case, as two URIs can spell the same folders differently.
+ * `../lib/wheel.sysml`) when both share scheme and authority, else `uri` in full. Paths compare
+ * by `canonicalUri`, as two URIs can spell the same Windows drive differently.
  */
 export function describeDocumentLocation(uri: string, fromUri: string): string {
     if (isSameDocumentUri(uri, fromUri)) return 'this document';
     let target: URL;
     let from: URL;
+    let targetKeys: string[];
+    let fromKeys: string[];
     try {
         target = new URL(uri);
         from = new URL(fromUri);
+        targetKeys = new URL(canonicalUri(uri)).pathname.split('/');
+        fromKeys = new URL(canonicalUri(fromUri)).pathname.split('/');
     } catch {
         return uri;
     }
@@ -147,11 +142,11 @@ export function describeDocumentLocation(uri: string, fromUri: string): string {
     const targetSegments = target.pathname.split('/');
     const fromFolder = from.pathname.split('/').slice(0, -1);
     // Count the leading folders both paths have in common, so the result only goes up (`..`) to
-    // where the paths split. Folders compare ignoring percent-encoding and case, so e.g. the
-    // Windows drive spellings `c%3A`, `C:` and `c:` match.
+    // where the paths split. Folders compare canonically, so the Windows drive spellings `c%3A`,
+    // `C:` and `c:` match; canonicalizing never adds or removes a `/`, so segments line up.
     let common = 0;
     while (common < fromFolder.length && common < targetSegments.length - 1
-        && segmentKey(fromFolder[common]) === segmentKey(targetSegments[common])) common++;
+        && fromKeys[common] === targetKeys[common]) common++;
     return displayPath([...fromFolder.slice(common).map(() => '..'), ...targetSegments.slice(common)]);
 }
 

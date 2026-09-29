@@ -496,7 +496,7 @@ connection.onDidChangeConfiguration((_change) => {
 /**
  * The open editor document for `uri`, matched by document identity rather
  * than spelling: a client may send `file:///c%3A/...` for a file the server
- * itself spells `file:///C:/...`; case is ignored (see `isSameDocumentUri`).
+ * itself spells `file:///C:/...` (see `isSameDocumentUri`).
  */
 function openDocumentFor(uri: string): TextDocument | undefined {
     return documents.get(uri) ?? documents.all().find(d => isSameDocumentUri(d.uri, uri));

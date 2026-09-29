@@ -6,8 +6,9 @@
  * `pathToFileURL` (on Windows, `file:///c%3A/...` vs `file:///C:/...`). The
  * server then held the scanned copy and the opened copy side by side, and
  * every declaration in the file reported an ambiguous-name conflict with
- * itself. These tests open scanned files under a percent-encoded and a
- * differently-cased spelling, which reproduces the mismatch on any platform.
+ * itself. The spelling tests open scanned files under the client's Windows
+ * spelling, so they run on Windows only. On a case-sensitive file system, two
+ * files differing only in case must stay distinct documents.
  *
  * Requires `dist/server/server.js` -- `npm run test:e2e` builds it first.
  */
@@ -25,10 +26,13 @@ type PublishDiagnosticsParams = {
 
 const serverPath = fileURLToPath(new URL('../../dist/server/server.js', import.meta.url));
 
-/** The client spellings under test of a scanned `users.sysml`, and how messages show them. */
+/** The drive letter and colon of a Windows `file://` URI, as `pathToFileURL` spells it (`file:///C:`). */
+const DRIVE_COLON = /^file:\/\/\/([A-Za-z]):/;
+
+/** The client spellings under test of a scanned file, e.g. `file:///C:/...` sent as `file:///c%3A/...`. */
 const spellings = [
-    { spelling: 'percent-encoded', fileName: '%75sers.sysml', shownAs: 'users.sysml' },
-    { spelling: 'differently-cased', fileName: 'Users.SYSML', shownAs: 'Users.SYSML' },
+    { spelling: 'with an encoded drive colon', respell: (uri: string) => uri.replace(DRIVE_COLON, (_m, d: string) => `file:///${d.toLowerCase()}%3A`) },
+    { spelling: 'with an encoded drive colon, upper-case drive', respell: (uri: string) => uri.replace(DRIVE_COLON, (_m, d: string) => `file:///${d.toUpperCase()}%3A`) },
 ];
 
 /**
@@ -114,20 +118,20 @@ async function startServer(root: string, files: Record<string, string>) {
     };
 }
 
-/** `uri`, the scan's `pathToFileURL` URI of `users.sysml`, with that file name spelled as `fileName`. */
-function respell(uri: string, fileName: string): string {
-    const respelled = uri.replace(/\/users\.sysml$/, `/${fileName}`);
-    expect(respelled).not.toBe(uri);
-    return respelled;
+/** `uri`, a scan's `pathToFileURL` URI, respelled by `respell`. */
+function respelled(uri: string, respell: (uri: string) => string): string {
+    const result = respell(uri);
+    expect(result).not.toBe(uri);
+    return result;
 }
 
-describe('document URI spelling (real server, over LSP)', () => {
-    it.each(spellings)('does not report a file\'s own declarations as ambiguous when the client spells its URI $spelling', async ({ fileName }) => {
+describe.runIf(process.platform === 'win32')('document URI spelling (real server, over LSP)', () => {
+    it.each(spellings)('does not report a file\'s own declarations as ambiguous when the client spells its URI $spelling', async ({ respell }) => {
         const root = await mkdtemp(join(tmpdir(), 'sysml-uri-spelling-'));
         const text = 'part def Driver;\n';
         const server = await startServer(root, { 'users.sysml': text });
         try {
-            const clientUri = respell(pathToFileURL(join(root, 'users.sysml')).toString(), fileName);
+            const clientUri = respelled(pathToFileURL(join(root, 'users.sysml')).toString(), respell);
             const open = server.notify('textDocument/didOpen', {
                 textDocument: { uri: clientUri, languageId: 'sysml', version: 1, text },
             });
@@ -147,7 +151,7 @@ describe('document URI spelling (real server, over LSP)', () => {
 
     it.each(spellings)(
         'tracks a conflict introduced, resolved, reintroduced and removed with a file the client spells $spelling',
-        async ({ fileName, shownAs }) => {
+        async ({ respell }) => {
             const root = await mkdtemp(join(tmpdir(), 'sysml-uri-spelling-'));
             const noConflict = 'part def Other;\n';
             const conflict = 'part def Driver;\n';
@@ -157,14 +161,14 @@ describe('document URI spelling (real server, over LSP)', () => {
             try {
                 const vehicleUri = pathToFileURL(vehiclePath).toString();
                 const usersServerUri = pathToFileURL(usersPath).toString();
-                const usersUri = respell(usersServerUri, fileName);
+                const usersUri = respelled(usersServerUri, respell);
                 const edit = (version: number, text: string) => server.notify('textDocument/didChange', {
                     textDocument: { uri: usersUri, version }, contentChanges: [{ text }],
                 });
                 // Exactly one other declaration: users.sysml must not also count under the scan's spelling.
                 const expectOneConflict = (conflicts: { message: string }[]) => {
                     expect(conflicts).toHaveLength(1);
-                    expect(conflicts[0].message).toContain(`in document ../Definitions/${shownAs} (line 1)`);
+                    expect(conflicts[0].message).toContain(`in document ../Definitions/users.sysml (line 1)`);
                     expect(conflicts[0].message).not.toContain('other occurrence');
                 };
                 // Published diagnostics and `sysml/model` must agree on vehicle.sysml's conflicts.
@@ -216,4 +220,30 @@ describe('document URI spelling (real server, over LSP)', () => {
         },
         30_000,
     );
+});
+
+describe.runIf(process.platform === 'linux')('document URI case (real server, over LSP)', () => {
+    it('keeps two files whose names differ only in case as distinct documents', async () => {
+        const root = await mkdtemp(join(tmpdir(), 'sysml-uri-case-'));
+        const text = 'part def Driver;\n';
+        const server = await startServer(root, { 'users.sysml': text, 'Users.sysml': text });
+        try {
+            const lowerUri = pathToFileURL(join(root, 'users.sysml')).toString();
+            const upperUri = pathToFileURL(join(root, 'Users.sysml')).toString();
+            // Each file sees the other's declaration: neither was dropped as another spelling of the other.
+            const [lowerConflict] = await server.after(server.notify('textDocument/didOpen', {
+                textDocument: { uri: lowerUri, languageId: 'sysml', version: 1, text },
+            }), lowerUri, true);
+            expect(lowerConflict.message).toContain('in document Users.sysml (line 1)');
+            const [upperConflict] = await server.after(server.notify('textDocument/didOpen', {
+                textDocument: { uri: upperUri, languageId: 'sysml', version: 1, text },
+            }), upperUri, true);
+            expect(upperConflict.message).toContain('in document users.sysml (line 1)');
+            expect(await server.modelConflicts(lowerUri)).toHaveLength(1);
+            expect(await server.modelConflicts(upperUri)).toHaveLength(1);
+        } finally {
+            server.dispose();
+            await rm(root, { recursive: true, force: true });
+        }
+    }, 30_000);
 });
