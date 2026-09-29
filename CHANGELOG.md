@@ -5,7 +5,7 @@
 ### Fixed
 
 - fixed false positive on `ambiguous-namespace-name`: an anonymous interface usage (e.g., `interface a.p to b.p;`, no declared name) no longer takes the name of its first endpoint reference.
-- anonymous connections, interfaces, allocations and transitions get a generated name (`a.p-b.q`), are marked `isAnonymous`, get a unique qualified name (`…#uri:line:col`), and are excluded from name lookup and duplicate checks.
+- anonymous connections, interfaces, allocations and transitions get a generated name (`a.p-b.q`), are marked `isAnonymous`, get an `elementId` (their declaration site, `uri:line:col`) and a qualified name ending in it (`…#uri:line:col`), and are excluded from name lookup and duplicate checks.
 
 ## [0.31.0]
 

@@ -18,6 +18,10 @@ export interface SymbolIndexes {
     byName: Map<string, SysMLSymbol[]>;
     byParent: Map<string, SysMLSymbol[]>;
     byQualifiedName: Map<string, SysMLSymbol>;
+    /** Anonymous symbols (`SysMLSymbol.isAnonymous`) by `elementId` -- never in `byQualifiedName`. */
+    byElementId: Map<string, SysMLSymbol>;
+    /** Anonymous symbols by `qualifiedName`, only to follow their members' parent links (`ownerOf`). */
+    anonymousByPath: Map<string, SysMLSymbol>;
     definitionsByName: Map<string, SysMLSymbol[]>;
     portsByName: Map<string, SysMLSymbol[]>;
 }
@@ -168,6 +172,8 @@ export function buildSymbolIndexes(allSymbols: SysMLSymbol[]): SymbolIndexes {
     const byName = new Map<string, SysMLSymbol[]>();
     const byParent = new Map<string, SysMLSymbol[]>();
     const byQualifiedName = new Map<string, SysMLSymbol>();
+    const byElementId = new Map<string, SysMLSymbol>();
+    const anonymousByPath = new Map<string, SysMLSymbol>();
     const definitionsByName = new Map<string, SysMLSymbol[]>();
     const portsByName = new Map<string, SysMLSymbol[]>();
 
@@ -188,9 +194,11 @@ export function buildSymbolIndexes(allSymbols: SysMLSymbol[]): SymbolIndexes {
 
     for (const s of allSymbols) {
         // An anonymous element (`SysMLSymbol.isAnonymous`) is reachable only by its
-        // unique qualifiedName: its generated name is not a member name to resolve.
+        // elementId: its generated name is not a member name to resolve, and a declared
+        // name quoted like its qualifiedName must not be shadowed by it.
         if (s.isAnonymous) {
-            byQualifiedName.set(s.qualifiedName, s);
+            byElementId.set(s.elementId!, s);
+            anonymousByPath.set(s.qualifiedName, s);
             continue;
         }
         const nameList = byName.get(s.name) ?? [];
@@ -224,7 +232,15 @@ export function buildSymbolIndexes(allSymbols: SysMLSymbol[]): SymbolIndexes {
         }
     }
 
-    return { byName, byParent, byQualifiedName, definitionsByName, portsByName };
+    return { byName, byParent, byQualifiedName, byElementId, anonymousByPath, definitionsByName, portsByName };
+}
+
+/**
+ * The symbol a `parentQualifiedName` link points to: a declared symbol first,
+ * else an anonymous one whose members carry its qualifiedName.
+ */
+export function ownerOf(qualifiedName: string, indexes: SymbolIndexes): SysMLSymbol | undefined {
+    return indexes.byQualifiedName.get(qualifiedName) ?? indexes.anonymousByPath.get(qualifiedName);
 }
 
 /** AND together zero or more (possibly undefined) filter expressions; `undefined` means "no filter". */
@@ -446,7 +462,7 @@ export class NamespaceResolver {
         let guard = 0;
         while (current && guard++ < MAX_NAMESPACE_NESTING_DEPTH) {
             ancestors.add(current);
-            current = indexes.byQualifiedName.get(current)?.parentQualifiedName;
+            current = ownerOf(current, indexes)?.parentQualifiedName;
         }
         ancestors.add('');
         return ancestors;

@@ -470,7 +470,7 @@ export function handleGetHierarchy(
     const ancestors: Array<{ name: string; kind: string; qualifiedName: string }> = [];
     let current = target.parentQualifiedName;
     while (current) {
-        const parent = ctx.symbolTable.getSymbol(current);
+        const parent = ctx.symbolTable.getOwner(current);
         if (!parent) break;
         ancestors.unshift({ name: parent.name, kind: parent.kind, qualifiedName: parent.qualifiedName });
         current = parent.parentQualifiedName;

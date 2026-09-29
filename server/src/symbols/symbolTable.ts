@@ -206,6 +206,10 @@ const RE_IDENT_START = /^([A-Za-z_]\w*(?:::\w+)*)/;
 export class SymbolTable {
     /** All symbols indexed by qualified name */
     private symbols = new Map<string, SysMLSymbol>();
+    /** Anonymous symbols (`SysMLSymbol.isAnonymous`) by `elementId` -- never in `symbols` */
+    private anonymousSymbols = new Map<string, SysMLSymbol>();
+    /** Anonymous symbols by `qualifiedName`, only to follow their members' parent links */
+    private anonymousSymbolsByPath = new Map<string, SysMLSymbol>();
     /** All symbols indexed by URI for cross-file lookup */
     private symbolsByUri = new Map<string, SysMLSymbol[]>();
     /** All symbols indexed by simple name for O(1) lookup */
@@ -253,6 +257,19 @@ export class SymbolTable {
         return this.symbols.get(qualifiedName);
     }
 
+    /** Get an anonymous symbol (`SysMLSymbol.isAnonymous`) by its `elementId`. */
+    getSymbolByElementId(elementId: string): SysMLSymbol | undefined {
+        return this.anonymousSymbols.get(elementId);
+    }
+
+    /**
+     * Get the symbol a `parentQualifiedName` link points to: a declared symbol
+     * first, else an anonymous one whose members carry its qualifiedName.
+     */
+    getOwner(qualifiedName: string): SysMLSymbol | undefined {
+        return this.symbols.get(qualifiedName) ?? this.anonymousSymbolsByPath.get(qualifiedName);
+    }
+
     /**
      * Find a symbol by name (simple name, not qualified).
      */
@@ -273,7 +290,7 @@ export class SymbolTable {
      */
     getAllSymbols(): SysMLSymbol[] {
         if (!this.allSymbolsCache) {
-            const all = Array.from(this.symbols.values());
+            const all = [...this.symbols.values(), ...this.anonymousSymbols.values()];
             // `symbols` holds only one entry per qualifiedName; a genuine
             // naming conflict (see `conflictedSymbolsByQualifiedName`'s doc
             // comment) needs every conflicting declaration surfaced here, not
@@ -426,7 +443,9 @@ export class SymbolTable {
                 // `sym` out of conflict tracking, so that fallback still sees
                 // the full picture, `sym` included -- see
                 // `unregisterPlainSymbol`'s own doc comment.
-                if (sym.kind === SysMLElementKind.Package) {
+                if (sym.isAnonymous) {
+                    this.unregisterAnonymousSymbol(sym);
+                } else if (sym.kind === SysMLElementKind.Package) {
                     this.unregisterPackageFragment(sym.qualifiedName, uri);
                 } else {
                     this.unregisterPlainSymbol(sym);
@@ -747,7 +766,26 @@ export class SymbolTable {
         this.symbols.delete(sym.qualifiedName);
     }
 
+    /** Remove an anonymous symbol (on document edit/close) from its own indexes. */
+    private unregisterAnonymousSymbol(sym: SysMLSymbol): void {
+        if (this.anonymousSymbols.get(sym.elementId!) === sym) this.anonymousSymbols.delete(sym.elementId!);
+        if (this.anonymousSymbolsByPath.get(sym.qualifiedName) === sym) this.anonymousSymbolsByPath.delete(sym.qualifiedName);
+    }
+
     private registerSymbol(symbol: SysMLSymbol, uri: string, scope: Scope): void {
+        // An anonymous symbol is indexed by its elementId, never by qualifiedName,
+        // so a declared name quoted like its qualifiedName is never shadowed.
+        if (symbol.isAnonymous) {
+            this.anonymousSymbols.set(symbol.elementId!, symbol);
+            this.anonymousSymbolsByPath.set(symbol.qualifiedName, symbol);
+        } else {
+            this.registerNamedSymbol(symbol, uri);
+        }
+        this.indexSymbol(symbol, uri, scope);
+    }
+
+    /** Register a declared symbol in `symbols`, tracking conflicts and package fragments. */
+    private registerNamedSymbol(symbol: SysMLSymbol, uri: string): void {
         const existing = this.symbols.get(symbol.qualifiedName);
         const bothPackages = symbol.kind === SysMLElementKind.Package && existing?.kind === SysMLElementKind.Package;
         if (existing && existing !== symbol && !bothPackages) {
@@ -769,6 +807,10 @@ export class SymbolTable {
             fragments.set(uri, symbol);
             this.mergePackageFragments(symbol.qualifiedName);
         }
+    }
+
+    /** Add a symbol to the per-URI, name, position and type-name indexes and to `scope`. */
+    private indexSymbol(symbol: SysMLSymbol, uri: string, scope: Scope): void {
         // Invalidate cached array
         this.allSymbolsCache = undefined;
         const uriSymbols = this.symbolsByUri.get(uri) ?? [];
@@ -980,6 +1022,7 @@ export class SymbolTable {
         return {
             name,
             isAnonymous: anonymous ? true : undefined,
+            elementId: anonymous?.elementId,
             shortName,
             kind,
             qualifiedName,
@@ -1222,11 +1265,11 @@ export class SymbolTable {
     }
 
     /**
-     * The name and qualified name of an element without a declared name: an
-     * anonymous transition (`<transition s1 to s2>`), or connection, interface
-     * or allocation usage (its ends, `a.p-b.q`). The qualified name appends
-     * the declaration site (`Demo::a.p-b.q#file:///a.sysml:12:5`), so no other
-     * element can shadow it. Undefined for any other element.
+     * The name, qualified name and elementId of an element without a declared
+     * name: an anonymous transition (`<transition s1 to s2>`), or connection,
+     * interface or allocation usage (its ends, `a.p-b.q`). The elementId is its
+     * declaration site (`file:///a.sysml:12:5`), which the qualified name
+     * appends (`Demo::a.p-b.q#file:///a.sysml:12:5`). Undefined for any other element.
      */
     private generateAnonymousName(
         ctx: ParserRuleContext,
@@ -1234,13 +1277,14 @@ export class SymbolTable {
         parentQualifiedName: string,
         uri: string,
         range: Range,
-    ): { name: string; qualifiedName: string } | undefined {
+    ): { name: string; qualifiedName: string; elementId: string } | undefined {
         const name = transition
             ? (transition.source && transition.target ? `<transition ${transition.source} to ${transition.target}>` : undefined)
             : this.connectorEndsLabel(ctx);
         if (!name) return undefined;
-        const segment = `${name}#${uri}:${range.start.line + 1}:${range.start.character + 1}`;
-        return { name, qualifiedName: parentQualifiedName ? `${parentQualifiedName}::${segment}` : segment };
+        const elementId = `${uri}:${range.start.line + 1}:${range.start.character + 1}`;
+        const segment = `${name}#${elementId}`;
+        return { name, qualifiedName: parentQualifiedName ? `${parentQualifiedName}::${segment}` : segment, elementId };
     }
 
     /**

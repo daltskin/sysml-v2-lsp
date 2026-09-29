@@ -2,7 +2,7 @@ import { Diagnostic, DiagnosticSeverity } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
 import { getLibraryPackageNames, resolveLibraryType } from '../library/libraryIndex.js';
 import { SysMLModelProvider } from '../model/sysmlModelProvider.js';
-import { NamespaceResolver, SymbolIndexes, buildSymbolIndexes, describeConflictingDeclarations, findConflictedQualifiedNames, otherDeclarations } from '../symbols/namespaceResolver.js';
+import { NamespaceResolver, SymbolIndexes, buildSymbolIndexes, describeConflictingDeclarations, findConflictedQualifiedNames, otherDeclarations, ownerOf } from '../symbols/namespaceResolver.js';
 import { SysMLElementKind, SysMLSymbol, isDefinition } from '../symbols/sysmlElements.js';
 import { resolveTypeName } from '../symbols/typeResolution.js';
 import { stripComments } from '../utils/identUtils.js';
@@ -1140,7 +1140,7 @@ export class SemanticValidator {
             const members = indexes.byParent.get(scope.qualifiedName) ?? [];
             if (members.length > 0) return scope;
             if (!scope.parentQualifiedName) return scope;
-            scope = indexes.byQualifiedName.get(scope.parentQualifiedName);
+            scope = ownerOf(scope.parentQualifiedName, indexes);
         }
         return undefined;
     }
