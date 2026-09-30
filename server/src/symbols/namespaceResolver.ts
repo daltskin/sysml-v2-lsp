@@ -340,7 +340,7 @@ export class NamespaceResolver {
 
     /**
      * Resolve a (possibly qualified) name to its symbol per §7.5.1, searching
-     * outward from `startQualifiedName`'s enclosing namespaces (its own resolved
+     * outward from namespace `start` and its enclosing namespaces (its own resolved
      * members first, then its parent's, ...). Shared by `isLocallyVisible` (an
      * ordinary reference resolving relative to its own enclosing namespace) and
      * import-target resolution (an `import` declaration's target is itself a
@@ -348,11 +348,11 @@ export class NamespaceResolver {
      * name -- so a bare `import C;` inside a nested package can pick up a `C`
      * its own enclosing package already imported, per §7.5.1/§7.5.3).
      */
-    private resolveQualifiedNameFrom(startQualifiedName: NamespaceKey, name: string, indexes: SymbolIndexes): SysMLSymbol | undefined {
+    private resolveQualifiedNameFrom(start: NamespaceKey, name: string, indexes: SymbolIndexes): SysMLSymbol | undefined {
         const [first, ...rest] = name.split('::');
 
         let resolvedQualifiedName: string | undefined;
-        for (const ancestor of this.namespaceAncestorsOf(startQualifiedName, indexes)) {
+        for (const ancestor of this.namespaceAncestorsOf(start, indexes)) {
             const candidates = this.getResolvedMembers(ancestor, indexes).get(first);
             if (candidates && candidates.length > 0) {
                 resolvedQualifiedName = candidates[0].symbol.qualifiedName;
@@ -363,23 +363,23 @@ export class NamespaceResolver {
 
         // A segment beyond the first isn't reached through the resolving
         // context's own ancestor chain (unlike the first segment, found above
-        // by construction only in scopes enclosing `startQualifiedName`), so
+        // by construction only in scopes enclosing `start`), so
         // its membership visibility must actually be checked here: "private"
         // means not visible outside the owning namespace (§7.5.2), and the
         // owning namespace here is whatever the previous segment resolved to,
-        // not necessarily anything enclosing `startQualifiedName`. A private
-        // segment is still resolvable when `startQualifiedName` is itself
+        // not necessarily anything enclosing `start`. A private
+        // segment is still resolvable when `start` is itself
         // that owning namespace or nested within it (querying your own, or an
         // ancestor's, private members from inside is not "outside").
         const isWithinStart = (namespaceQualifiedName: string): boolean =>
-            this.namespaceAncestorsOf(startQualifiedName, indexes).has(namespaceQualifiedName);
+            this.namespaceAncestorsOf(start, indexes).has(namespaceQualifiedName);
         for (const segment of rest) {
             const ownerQualifiedName: string = resolvedQualifiedName;
             const members: ResolvedMember[] | undefined = this.getResolvedMembers(ownerQualifiedName, indexes).get(segment);
             const visibleMember: ResolvedMember | undefined = members?.find(
                 (m: ResolvedMember) => m.visibility === 'public'
                     || isWithinStart(ownerQualifiedName)
-                    || (m.visibility === 'protected' && this.isProtectedVisibleFrom(startQualifiedName, ownerQualifiedName, indexes)),
+                    || (m.visibility === 'protected' && this.isProtectedVisibleFrom(start, ownerQualifiedName, indexes)),
             );
             if (!visibleMember) return undefined;
             resolvedQualifiedName = visibleMember.symbol.qualifiedName;
@@ -396,7 +396,7 @@ export class NamespaceResolver {
      * inheritance)." `ownerQualifiedName` is the namespace that owns the
      * protected membership (where the `protected import` was declared);
      * this is true when `ownerQualifiedName` is itself a definition or
-     * usage, and `startQualifiedName` (or one of its own enclosing
+     * usage, and namespace `start` (or one of its own enclosing
      * namespaces) is a specialization of it.
      *
      * Only covers a *qualified* reference reaching into a specialization's
@@ -407,11 +407,11 @@ export class NamespaceResolver {
      * otherwise model (it deliberately covers only §7.5's own namespace/
      * import mechanics), so that case isn't covered here.
      */
-    private isProtectedVisibleFrom(startQualifiedName: NamespaceKey, ownerQualifiedName: string, indexes: SymbolIndexes): boolean {
+    private isProtectedVisibleFrom(start: NamespaceKey, ownerQualifiedName: string, indexes: SymbolIndexes): boolean {
         const owner = indexes.byQualifiedName.get(ownerQualifiedName);
         if (!owner || !(isDefinition(owner.kind) || isUsage(owner.kind))) return false;
 
-        for (const ancestor of this.namespaceAncestorsOf(startQualifiedName, indexes)) {
+        for (const ancestor of this.namespaceAncestorsOf(start, indexes)) {
             const candidate = typeof ancestor === 'string' ? indexes.byQualifiedName.get(ancestor) : ancestor;
             if (candidate && this.isSpecializationOf(candidate, ownerQualifiedName, indexes)) return true;
         }
@@ -501,29 +501,29 @@ export class NamespaceResolver {
         let guard = 0;
         while (current !== undefined && current !== '' && guard++ < MAX_NAMESPACE_NESTING_DEPTH) {
             ancestors.add(current);
-            const namespace: SysMLSymbol | undefined = typeof current === 'string' ? indexes.byQualifiedName.get(current) : current;
-            current = namespace ? ownerKeyOf(namespace, indexes.byElementId) : undefined;
+            const namespaceSymbol: SysMLSymbol | undefined = typeof current === 'string' ? indexes.byQualifiedName.get(current) : current;
+            current = namespaceSymbol ? ownerKeyOf(namespaceSymbol, indexes.byElementId) : undefined;
         }
         ancestors.add('');
         return ancestors;
     }
 
     /**
-     * The resolved member table of namespace `qualifiedName` (a `NamespaceKey`,
+     * The resolved member table of `namespace` (a `NamespaceKey`,
      * `''` for the implicit root): its own owned members, plus everything brought in by
      * its `import` statements — including, transitively, a further namespace's
      * own already-imported (and non-privately-imported) members, matching
      * §7.5.3's "imported memberships become members of the importing
      * namespace" and its P2/Q re-import example. Cached per `indexes`.
      */
-    getResolvedMembers(qualifiedName: NamespaceKey, indexes: SymbolIndexes): Map<string, ResolvedMember[]> {
+    getResolvedMembers(namespace: NamespaceKey, indexes: SymbolIndexes): Map<string, ResolvedMember[]> {
         if (!this.resolvedMembersByIndexes) this.resolvedMembersByIndexes = new WeakMap();
         let perIndexesCache = this.resolvedMembersByIndexes.get(indexes);
         if (!perIndexesCache) {
             perIndexesCache = new Map();
             this.resolvedMembersByIndexes.set(indexes, perIndexesCache);
         }
-        const cached = perIndexesCache.get(qualifiedName);
+        const cached = perIndexesCache.get(namespace);
         if (cached) return cached;
 
         const members = new Map<string, ResolvedMember[]>();
@@ -547,14 +547,14 @@ export class NamespaceResolver {
             members.set(name, list);
         };
 
-        for (const owned of indexes.byParent.get(qualifiedName) ?? []) {
+        for (const owned of indexes.byParent.get(namespace) ?? []) {
             addMember(owned.name, { symbol: owned, visibility: owned.visibility ?? 'public' });
         }
 
         // Cycle guard: seed the cache with `members` itself -- the *same live
         // object*, not a snapshot copy -- before processing imports, rather
         // than an empty table. An import target is itself resolved relative
-        // to *this* namespace (see `applyImport`'s `fromQualifiedName`),
+        // to *this* namespace (see `applyImport`'s `importingNamespace`),
         // which means resolving it can recurse back into this same
         // `getResolvedMembers` call: for a directly-owned sibling (e.g.
         // `public import Inner::X;` where `Inner` is a package declared
@@ -576,9 +576,9 @@ export class NamespaceResolver {
         // recursing forever; owned members are computed with no recursion at
         // all, so exposing them (and each import's incremental contribution)
         // here doesn't reopen that.
-        perIndexesCache.set(qualifiedName, members);
+        perIndexesCache.set(namespace, members);
 
-        const owner = typeof qualifiedName === 'string' ? indexes.byQualifiedName.get(qualifiedName) : qualifiedName;
+        const owner = typeof namespace === 'string' ? indexes.byQualifiedName.get(namespace) : namespace;
         const importTargets = owner?.importTargets ?? [];
         // §7.5.4: a package-level `filter` applies to every import of that package,
         // combined (AND) with any filter on the specific import itself.
@@ -590,7 +590,7 @@ export class NamespaceResolver {
                     if (evaluateFilter(effectiveFilter, entry.symbol)) addMember(name, entry);
                 }
                 : addMember;
-            this.applyImport(imp, qualifiedName, indexes, filteredAddMember);
+            this.applyImport(imp, namespace, indexes, filteredAddMember);
         }
 
         return members;
@@ -601,7 +601,7 @@ export class NamespaceResolver {
      * membership vs. namespace / shallow vs. `::**` deep distinctions in
      * ImportTarget (§7.5.3, including the P4/P5/P6 recursive-import example).
      *
-     * `imp.target` is resolved relative to `fromQualifiedName` (the importing
+     * `imp.target` is resolved relative to `importingNamespace` (the importing
      * namespace itself, per §7.5.1's generic name-resolution rule: begin in the
      * namespace containing the reference, then walk outward through its
      * enclosing namespaces), not as an absolute/global name. This covers both:
@@ -615,18 +615,18 @@ export class NamespaceResolver {
      */
     private applyImport(
         imp: ImportTarget,
-        fromQualifiedName: NamespaceKey,
+        importingNamespace: NamespaceKey,
         indexes: SymbolIndexes,
         addMember: (name: string, entry: ResolvedMember) => void,
     ): void {
         switch (imp.kind) {
             case 'membership': {
-                const target = this.resolveQualifiedNameFrom(fromQualifiedName, imp.target, indexes);
+                const target = this.resolveQualifiedNameFrom(importingNamespace, imp.target, indexes);
                 if (target) addMember(target.name, { symbol: target, visibility: imp.visibility });
                 break;
             }
             case 'membership-deep': {
-                const target = this.resolveQualifiedNameFrom(fromQualifiedName, imp.target, indexes);
+                const target = this.resolveQualifiedNameFrom(importingNamespace, imp.target, indexes);
                 if (target) {
                     addMember(target.name, { symbol: target, visibility: imp.visibility });
                     this.importVisibleMembers(target.qualifiedName, imp.visibility, indexes, addMember, true);
@@ -634,12 +634,12 @@ export class NamespaceResolver {
                 break;
             }
             case 'namespace-shallow': {
-                const owner = this.resolveQualifiedNameFrom(fromQualifiedName, imp.target, indexes);
+                const owner = this.resolveQualifiedNameFrom(importingNamespace, imp.target, indexes);
                 if (owner) this.importVisibleMembers(owner.qualifiedName, imp.visibility, indexes, addMember, false);
                 break;
             }
             case 'namespace-deep': {
-                const owner = this.resolveQualifiedNameFrom(fromQualifiedName, imp.target, indexes);
+                const owner = this.resolveQualifiedNameFrom(importingNamespace, imp.target, indexes);
                 if (owner) this.importVisibleMembers(owner.qualifiedName, imp.visibility, indexes, addMember, true);
                 break;
             }

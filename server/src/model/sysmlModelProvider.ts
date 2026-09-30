@@ -352,15 +352,15 @@ export class SysMLModelProvider {
         const childrenOf = new Map<NamespaceKey, SysMLSymbol[]>();
         const roots: SysMLSymbol[] = [];
         for (const sym of symbols) {
-            const owner = ownerKeyOf(sym, anonymousById);
-            if (typeof owner === 'string' && !declaredQualifiedNames.has(owner)) {
+            const ownerKey = ownerKeyOf(sym, anonymousById);
+            if (typeof ownerKey === 'string' && !declaredQualifiedNames.has(ownerKey)) {
                 // No parent, or a parent not in this URI
                 roots.push(sym);
                 continue;
             }
-            const list = childrenOf.get(owner) ?? [];
+            const list = childrenOf.get(ownerKey) ?? [];
             list.push(sym);
-            childrenOf.set(owner, list);
+            childrenOf.set(ownerKey, list);
         }
 
         return roots.map(s => this.symbolToElementDTO(s, childrenOf, lines));
