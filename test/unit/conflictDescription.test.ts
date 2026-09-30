@@ -27,6 +27,20 @@ describe('describeDocumentLocation', () => {
         expect(describeDocumentLocation('not a uri', 'file:///ws/a.sysml')).toBe('not a uri');
     });
 
+    it('is "this document" for another spelling of the diagnosed document', () => {
+        expect(describeDocumentLocation('file:///C:/ws/a.sysml', 'file:///c%3A/ws/a.sysml')).toBe('this document');
+    });
+
+    it('does not climb to the root when the two URIs spell the same drive differently', () => {
+        // The client's `c%3A` vs the scan's `C:` on Windows.
+        expect(describeDocumentLocation('file:///C:/ws/lib/b.sysml', 'file:///c%3A/ws/sub/a.sysml')).toBe('../lib/b.sysml');
+    });
+
+    it('treats paths differing only in case as different documents and folders', () => {
+        expect(describeDocumentLocation('file:///ws/A.sysml', 'file:///ws/a.sysml')).toBe('A.sysml');
+        expect(describeDocumentLocation('file:///WS/lib/b.sysml', 'file:///ws/a.sysml')).toBe('../WS/lib/b.sysml');
+    });
+
     it('preserves malformed percent escapes instead of throwing', () => {
         expect(describeDocumentLocation(
             'test://workspace/models/%ZZ.sysml',

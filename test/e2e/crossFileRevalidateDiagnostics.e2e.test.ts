@@ -204,15 +204,42 @@ describe('cross-file diagnostics revalidation (real server, over LSP)', () => {
         received = [];
         disabledCodes = ['missing-doc'];
         await connection.sendNotification('workspace/didChangeConfiguration', { settings: {} });
-        const filtered = await waitForDiagnostics(params => params.uri === uri
+        // Wait for the semantic pass (it reports `unresolved-type`): a revalidation scheduled by an
+        // earlier test's close can first publish an empty, syntax-only result.
+        await waitForDiagnostics(params => params.uri === uri
+            && params.diagnostics.some(diagnostic => diagnostic.code === 'unresolved-type')
             && !params.diagnostics.some(diagnostic => diagnostic.code === 'missing-doc'));
-        expect(filtered.diagnostics.some(diagnostic => diagnostic.code === 'unresolved-type')).toBe(true);
 
         received = [];
         disabledCodes = [];
         await connection.sendNotification('workspace/didChangeConfiguration', { settings: {} });
         await waitForDiagnostics(params => params.uri === uri
             && params.diagnostics.some(diagnostic => diagnostic.code === 'missing-doc'));
+    }, 15_000);
+
+    it('clears a sibling document\'s conflict when the conflicting document is closed', async () => {
+        // In-memory URIs with no file on disk, so closing removes the document's symbols entirely.
+        const uriA = 'file:///close-engine.sysml';
+        const uriB = 'file:///close-duplicate-engine.sysml';
+        const text = '\npart def Engine;\n';
+        await connection.sendNotification('textDocument/didOpen', {
+            textDocument: { uri: uriA, languageId: 'sysml', version: 1, text },
+        });
+        await connection.sendNotification('textDocument/didOpen', {
+            textDocument: { uri: uriB, languageId: 'sysml', version: 1, text },
+        });
+        await waitForDiagnostics(p => p.uri === uriA
+            && p.diagnostics.some(d => d.code === 'ambiguous-namespace-name' && d.message.includes("'Engine'")));
+        // Let opening B's own cross-file revalidation fire first, or it could clear A's
+        // conflict after the close below even without the close scheduling one.
+        await new Promise(resolve => setTimeout(resolve, 700));
+
+        received = [];
+        await connection.sendNotification('textDocument/didClose', { textDocument: { uri: uriB } });
+        await waitForDiagnostics(p => p.uri === uriA
+            && !p.diagnostics.some(d => d.code === 'ambiguous-namespace-name'));
+
+        await connection.sendNotification('textDocument/didClose', { textDocument: { uri: uriA } });
     }, 15_000);
 
     it(

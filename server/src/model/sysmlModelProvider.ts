@@ -12,7 +12,7 @@ import { analyseComplexity } from '../analysis/complexityAnalyzer.js';
 import { DocumentManager } from '../documentManager.js';
 import { getLibraryPackageNames } from '../library/libraryIndex.js';
 import { ParseResult } from '../parser/parseDocument.js';
-import { NamespaceResolver, buildSymbolIndexes, describeConflictingDeclarations, findConflictedQualifiedNames, otherDeclarations } from '../symbols/namespaceResolver.js';
+import { NamespaceKey, NamespaceResolver, buildSymbolIndexes, describeConflictingDeclarations, findConflictedQualifiedNames, namespaceKeyOf, otherDeclarations, ownerKeyOf } from '../symbols/namespaceResolver.js';
 import { SymbolTable } from '../symbols/symbolTable.js';
 import {
     SysMLElementKind,
@@ -184,6 +184,11 @@ function readCommaSeparatedIdents(text: string, pos: number): string[] {
     return names;
 }
 
+/** The anonymous symbols (`SysMLSymbol.isAnonymous`) among `symbols`, by `elementId`. */
+function anonymousSymbolsById(symbols: SysMLSymbol[]): Map<string, SysMLSymbol> {
+    return new Map(symbols.filter(s => s.isAnonymous).map(s => [s.elementId!, s]));
+}
+
 /**
  * Provides the full semantic model for a document by converting the
  * server's internal ANTLR parse tree and symbol table into serializable DTOs.
@@ -340,26 +345,23 @@ export class SysMLModelProvider {
     ): SysMLElementDTO[] {
         const symbols = symbolTable.getSymbolsForUri(uri);
 
-        // Index symbols by qualified name
-        const byQualifiedName = new Map<string, SysMLSymbol>();
-        for (const sym of symbols) {
-            byQualifiedName.set(sym.qualifiedName, sym);
-        }
+        const anonymousById = anonymousSymbolsById(symbols);
+        const declaredQualifiedNames = new Set(symbols.filter(s => !s.isAnonymous).map(s => s.qualifiedName));
 
-        // Build parent → children index from parentQualifiedName
-        const childrenOf = new Map<string, SysMLSymbol[]>();
+        // Build parent → children index, keyed by each symbol's owning namespace
+        const childrenOf = new Map<NamespaceKey, SysMLSymbol[]>();
+        const roots: SysMLSymbol[] = [];
         for (const sym of symbols) {
-            if (sym.parentQualifiedName && byQualifiedName.has(sym.parentQualifiedName)) {
-                const list = childrenOf.get(sym.parentQualifiedName) ?? [];
-                list.push(sym);
-                childrenOf.set(sym.parentQualifiedName, list);
+            const owner = ownerKeyOf(sym, anonymousById);
+            if (typeof owner === 'string' && !declaredQualifiedNames.has(owner)) {
+                // No parent, or a parent not in this URI
+                roots.push(sym);
+                continue;
             }
+            const list = childrenOf.get(owner) ?? [];
+            list.push(sym);
+            childrenOf.set(owner, list);
         }
-
-        // Find roots: symbols with no parent or whose parent is not in this URI
-        const roots = symbols.filter(
-            s => !s.parentQualifiedName || !byQualifiedName.has(s.parentQualifiedName),
-        );
 
         return roots.map(s => this.symbolToElementDTO(s, childrenOf, lines));
     }
@@ -370,11 +372,11 @@ export class SysMLModelProvider {
      */
     private symbolToElementDTO(
         symbol: SysMLSymbol,
-        childrenOf: Map<string, SysMLSymbol[]>,
+        childrenOf: Map<NamespaceKey, SysMLSymbol[]>,
         lines: string[],
     ): SysMLElementDTO {
         // Build children recursively from the parent→children index
-        const childSymbols = (childrenOf.get(symbol.qualifiedName) ?? [])
+        const childSymbols = (childrenOf.get(namespaceKeyOf(symbol)) ?? [])
             // B1: Filter phantom self-referencing package children
             .filter(c => c.qualifiedName !== symbol.qualifiedName);
         const children: SysMLElementDTO[] = childSymbols.map(c =>
@@ -1301,9 +1303,11 @@ export class SysMLModelProvider {
     /** Get child symbols for a given parent symbol. */
     private getChildSymbols(parent: SysMLSymbol, symbolTable: SymbolTable): SysMLSymbol[] {
         // The symbol table's children array may not be populated; use the
-        // symbolsByUri list and filter by parentQualifiedName instead.
+        // symbolsByUri list and filter by owning namespace instead.
         const allSymbols = symbolTable.getSymbolsForUri(parent.uri);
-        return allSymbols.filter(s => s.parentQualifiedName === parent.qualifiedName);
+        const anonymousById = anonymousSymbolsById(allSymbols);
+        const parentKey = namespaceKeyOf(parent);
+        return allSymbols.filter(s => ownerKeyOf(s, anonymousById) === parentKey);
     }
 
     /**

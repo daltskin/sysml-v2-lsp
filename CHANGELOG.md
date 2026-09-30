@@ -4,8 +4,10 @@
 
 ### Fixed
 
+- Fixed false positive on `ambiguous-namespace-name` diagnosis: match a Windows document's URI spellings (`file:///c%3A/...` and `file:///C:/...`) as one document, so a document no longer reports each of its declarations as an conflict with itself.
+- Revalidate other open documents when a document is closed, so an `ambiguous-namespace-name` conflict it caused (e.g. after deleting it or dropping an unsaved edit) no longer stays visible.
 - fixed false positive on `ambiguous-namespace-name`: an anonymous interface usage (e.g., `interface a.p to b.p;`, no declared name) no longer takes the name of its first endpoint reference.
-- anonymous connections, interfaces, allocations and transitions get a generated name (`a.p-b.q`), are marked `isAnonymous`, get an `elementId` (their declaration site, `uri:line:col`) and a qualified name ending in it (`…#uri:line:col`), and are excluded from name lookup and duplicate checks.
+- anonymous connections, interfaces, allocations and transitions get a generated name (`a.p-b.q`), are marked `isAnonymous`, get an `elementId` (their declaration site, `uri:line:col`) and a qualified name ending in it (`…#uri:line:col`), and are excluded from name lookup and duplicate checks. Their members link to them by `parentElementId`, and each is its own namespace for name resolution, so neither `sysml/model` nor name lookup merges their members with those of a declared element quoted like their qualified name.
 
 ## [0.31.0]
 

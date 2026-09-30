@@ -54,6 +54,7 @@ import { RenameProvider } from './providers/renameProvider.js';
 import { SemanticTokensProvider, tokenModifiers, tokenTypes } from './providers/semanticTokensProvider.js';
 import { SemanticValidator } from './providers/semanticValidator.js';
 import { DEFAULT_SKIP_DIRS, findSysMLFilesAsync, readFilesBatch } from './utils/fileDiscovery.js';
+import { isSameDocumentUri } from './utils/documentUri.js';
 
 /** Convert a file:// URI to a filesystem path, returning undefined for non-file URIs. */
 function toFsPath(uri: string): string | undefined {
@@ -493,14 +494,37 @@ connection.onDidChangeConfiguration((_change) => {
 // --------------------------------------------------------------------------
 
 /**
+ * The open editor document for `uri`, matched by document identity rather
+ * than spelling: a client may send `file:///c%3A/...` for a file the server
+ * itself spells `file:///C:/...` (see `isSameDocumentUri`).
+ */
+function openDocumentFor(uri: string): TextDocument | undefined {
+    return documents.get(uri) ?? documents.all().find(d => isSameDocumentUri(d.uri, uri));
+}
+
+/**
+ * Evict entries parsed under another spelling of `uri`'s file, so one file
+ * never contributes its symbols twice (e.g. once scanned from disk, once
+ * opened by the client).
+ */
+function dropOtherSpellings(uri: string): void {
+    for (const other of documentManager.getUris()) {
+        if (other !== uri && isSameDocumentUri(other, uri)) {
+            documentManager.remove(other);
+            modelProvider.removeUri(other);
+        }
+    }
+}
+
+/**
  * Pre-parse a .sysml file from disk into the document manager
  * so its symbols are available for cross-file resolution.
  * Skips files already managed by the TextDocuments sync (i.e. open in the editor).
+ * `uri` defaults to the path's own `file://` URI; pass the client's URI when known.
  */
-function parseWorkspaceFile(filePath: string): boolean {
-    const uri = pathToFileURL(filePath).toString();
+function parseWorkspaceFile(filePath: string, uri: string = pathToFileURL(filePath).toString()): boolean {
     // Don't overwrite documents the editor has open — those are authoritative.
-    if (documents.get(uri)) return false;
+    if (openDocumentFor(uri)) return false;
 
     let content: string;
     try {
@@ -509,6 +533,7 @@ function parseWorkspaceFile(filePath: string): boolean {
         return false;
     }
 
+    dropOtherSpellings(uri);
     const doc = TextDocument.create(uri, 'sysml', 0, content);
     documentManager.parse(doc);
     return true;
@@ -540,7 +565,7 @@ async function scanWorkspaceFoldersAsync(
         const filePath = allFiles[i];
         const uri = pathToFileURL(filePath).toString();
         // Don't overwrite documents the editor has open
-        if (documents.get(uri)) continue;
+        if (openDocumentFor(uri)) continue;
         const content = fileContents.get(filePath);
         if (content === undefined) continue;
 
@@ -599,6 +624,9 @@ function scheduleCrossFileRevalidate(): void {
 }
 
 documents.onDidOpen((event) => {
+    // The file may already be parsed from disk under another URI spelling.
+    dropOtherSpellings(event.document.uri);
+
     if (!serverReady) {
         // Server not fully initialized (DFA not loaded yet).  Queue
         // the URI for re-validation after onInitialized completes.
@@ -673,8 +701,12 @@ documents.onDidClose((event) => {
     // remain available for cross-file resolution.
     const fsPath = toFsPath(event.document.uri);
     if (fsPath && (fsPath.endsWith('.sysml') || fsPath.endsWith('.kerml'))) {
-        parseWorkspaceFile(fsPath);
+        parseWorkspaceFile(fsPath, uri);
     }
+
+    // Closing can change the file's symbols (unsaved edits dropped, or the
+    // file gone from disk), so other open documents' conflicts may change too.
+    scheduleCrossFileRevalidate();
 });
 
 // --------------------------------------------------------------------------
@@ -689,15 +721,17 @@ connection.onDidChangeWatchedFiles((params) => {
 
         // 1 = Created, 2 = Changed, 3 = Deleted
         if (change.type === 3) {
-            // File deleted — remove from document manager
-            if (documentManager.get(change.uri)) {
-                documentManager.remove(change.uri);
-                changed = true;
+            // File deleted — remove from document manager, under any spelling
+            for (const uri of documentManager.getUris()) {
+                if (isSameDocumentUri(uri, change.uri)) {
+                    documentManager.remove(uri);
+                    changed = true;
+                }
             }
         } else {
             // Created or changed — re-parse from disk (if not open in editor)
-            if (!documents.get(change.uri) && (fsPath.endsWith('.sysml') || fsPath.endsWith('.kerml'))) {
-                if (parseWorkspaceFile(fsPath)) {
+            if (!openDocumentFor(change.uri) && (fsPath.endsWith('.sysml') || fsPath.endsWith('.kerml'))) {
+                if (parseWorkspaceFile(fsPath, change.uri)) {
                     changed = true;
                 }
             }

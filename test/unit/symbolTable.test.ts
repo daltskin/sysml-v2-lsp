@@ -1159,7 +1159,6 @@ describe('anonymous elements indexed by elementId', () => {
         expect(declared.kind).toBe('part');
         expect(st.getSymbol(qualifiedName)).toBe(declared);
         expect(st.getSymbolByElementId(iface.elementId!)).toBe(iface);
-        expect(st.getOwner(qualifiedName)).toBe(declared);
 
         const { buildSymbolIndexes, findConflictedQualifiedNames } = await import('../../server/src/symbols/namespaceResolver.js');
         const indexes = buildSymbolIndexes(st.getAllSymbols());
@@ -1173,13 +1172,75 @@ describe('anonymous elements indexed by elementId', () => {
         const iface = anonymousInterface(st);
         const member = st.findByName('w')[0];
         expect(member.parentQualifiedName).toBe(iface.qualifiedName);
-        expect(st.getOwner(member.parentQualifiedName!)).toBe(iface);
+        expect(member.parentElementId).toBe(iface.elementId);
+        expect(st.getOwner(member)).toBe(iface);
+        expect(st.getOwner(iface)).toBe(st.getSymbol('Demo'));
 
         const { buildSymbolIndexes, ownerOf, NamespaceResolver } = await import('../../server/src/symbols/namespaceResolver.js');
         const indexes = buildSymbolIndexes(st.getAllSymbols());
-        expect(ownerOf(member.parentQualifiedName!, indexes)).toBe(iface);
+        expect(ownerOf(member, indexes)).toBe(iface);
         // The member still sees the enclosing package, through its anonymous owner.
-        expect([...new NamespaceResolver().namespaceAncestors(member, indexes)]).toEqual([iface.qualifiedName, 'Demo', '']);
+        expect([...new NamespaceResolver().namespaceAncestors(member, indexes)]).toEqual([iface, 'Demo', '']);
+    });
+
+    it('links each member to its own owner when a declared name is quoted like an anonymous qualified name', async () => {
+        const { st, qualifiedName } = await buildCollision();
+        const iface = anonymousInterface(st);
+        const declared = st.getSymbol(qualifiedName)!;
+        const w = st.findByName('w')[0];
+        const inner = st.findByName('inner')[0];
+        // Both members carry the same parentQualifiedName; only the anonymous owner's is marked by elementId.
+        expect([w.parentQualifiedName, inner.parentQualifiedName]).toEqual([qualifiedName, qualifiedName]);
+        expect([w.parentElementId, inner.parentElementId]).toEqual([iface.elementId, undefined]);
+        expect(st.getOwner(w)).toBe(iface);
+        expect(st.getOwner(inner)).toBe(declared);
+
+        const { buildSymbolIndexes, ownerOf, NamespaceResolver } = await import('../../server/src/symbols/namespaceResolver.js');
+        const indexes = buildSymbolIndexes(st.getAllSymbols());
+        expect(ownerOf(w, indexes)).toBe(iface);
+        expect(ownerOf(inner, indexes)).toBe(declared);
+        expect([...new NamespaceResolver().namespaceAncestors(w, indexes)]).toEqual([iface, 'Demo', '']);
+        expect([...new NamespaceResolver().namespaceAncestors(inner, indexes)]).toEqual([qualifiedName, 'Demo', '']);
+    });
+
+    it('marks only an anonymous element\'s direct members with its elementId', async () => {
+        const { st } = await buildST(`package Demo {
+    part a { port p; }
+    part b { port p; }
+    interface a.p to b.p { part x { part y; } }
+}
+`);
+        const iface = anonymousInterface(st);
+        const x = st.findByName('x')[0];
+        const y = st.findByName('y')[0];
+        expect(x.parentElementId).toBe(iface.elementId);
+        expect(y.parentElementId).toBeUndefined();
+        expect(st.getOwner(y)).toBe(x);
+        expect(st.getOwner(x)).toBe(iface);
+    });
+
+    it('keeps an anonymous namespace\'s members apart from a declared one quoted like its qualified name', async () => {
+        const { st, qualifiedName } = await buildCollision();
+        const iface = anonymousInterface(st);
+        const w = st.findByName('w')[0];
+        const inner = st.findByName('inner')[0];
+
+        const { buildSymbolIndexes, NamespaceResolver } = await import('../../server/src/symbols/namespaceResolver.js');
+        const indexes = buildSymbolIndexes(st.getAllSymbols());
+        expect(indexes.byParent.get(iface)).toEqual([w]);
+        expect(indexes.byParent.get(qualifiedName)).toEqual([inner]);
+
+        const resolver = new NamespaceResolver();
+        expect([...resolver.getResolvedMembers(iface, indexes).keys()]).toEqual(['w']);
+        expect([...resolver.getResolvedMembers(qualifiedName, indexes).keys()]).toEqual(['inner']);
+        // Each member sees its own namespace's members, not the other's.
+        expect(resolver.isLocallyVisible(w, 'w', indexes)).toBe(true);
+        expect(resolver.isLocallyVisible(w, 'inner', indexes)).toBe(false);
+        expect(resolver.isLocallyVisible(inner, 'inner', indexes)).toBe(true);
+        expect(resolver.isLocallyVisible(inner, 'w', indexes)).toBe(false);
+        // Both still see the enclosing package's members.
+        expect(resolver.isLocallyVisible(w, 'c', indexes)).toBe(true);
+        expect(resolver.isLocallyVisible(inner, 'c', indexes)).toBe(true);
     });
 
     // Anonymous interface and allocation usages next to declared elements quoted like their generated
@@ -1218,7 +1279,7 @@ describe('anonymous elements indexed by elementId', () => {
         const elementId = anonymousInterface(st).elementId!;
         st.build('test://test.sysml', parseDocument(text.replace('interface a.p to b.p { attribute w; }', '')));
         expect(st.getSymbolByElementId(elementId)).toBeUndefined();
-        expect(st.getOwner(qualifiedName)?.kind).toBe('part');
+        expect(st.getSymbol(qualifiedName)?.kind).toBe('part');
         expect(st.getAllSymbols().some((s) => s.isAnonymous)).toBe(false);
     });
 });

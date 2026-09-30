@@ -2,7 +2,7 @@ import { Diagnostic, DiagnosticSeverity } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
 import { getLibraryPackageNames, resolveLibraryType } from '../library/libraryIndex.js';
 import { SysMLModelProvider } from '../model/sysmlModelProvider.js';
-import { NamespaceResolver, SymbolIndexes, buildSymbolIndexes, describeConflictingDeclarations, findConflictedQualifiedNames, otherDeclarations, ownerOf } from '../symbols/namespaceResolver.js';
+import { NamespaceResolver, SymbolIndexes, buildSymbolIndexes, describeConflictingDeclarations, findConflictedQualifiedNames, namespaceKeyOf, otherDeclarations, ownerOf } from '../symbols/namespaceResolver.js';
 import { SysMLElementKind, SysMLSymbol, isDefinition } from '../symbols/sysmlElements.js';
 import { resolveTypeName } from '../symbols/typeResolution.js';
 import { stripComments } from '../utils/identUtils.js';
@@ -1028,7 +1028,7 @@ export class SemanticValidator {
             const parent = this.findConstraintScopeSymbol(symbolsInUri, indexes, b.startLine);
             if (!parent) continue;
 
-            const parentMembers = indexes.byParent.get(parent.qualifiedName) ?? [];
+            const parentMembers = indexes.byParent.get(namespaceKeyOf(parent)) ?? [];
             if (parentMembers.length === 0) continue;
 
             const ignoredRanges = this.getIgnoredBodyRanges(b.body);
@@ -1137,10 +1137,10 @@ export class SemanticValidator {
     ): SysMLSymbol | undefined {
         let scope = this.findContainingSymbolByLine(symbolsInUri, line);
         while (scope) {
-            const members = indexes.byParent.get(scope.qualifiedName) ?? [];
+            const members = indexes.byParent.get(namespaceKeyOf(scope)) ?? [];
             if (members.length > 0) return scope;
             if (!scope.parentQualifiedName) return scope;
-            scope = ownerOf(scope.parentQualifiedName, indexes);
+            scope = ownerOf(scope, indexes);
         }
         return undefined;
     }

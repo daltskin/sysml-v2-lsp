@@ -468,12 +468,10 @@ export function handleGetHierarchy(
     }
 
     const ancestors: Array<{ name: string; kind: string; qualifiedName: string }> = [];
-    let current = target.parentQualifiedName;
-    while (current) {
-        const parent = ctx.symbolTable.getOwner(current);
-        if (!parent) break;
+    let parent = ctx.symbolTable.getOwner(target);
+    while (parent) {
         ancestors.unshift({ name: parent.name, kind: parent.kind, qualifiedName: parent.qualifiedName });
-        current = parent.parentQualifiedName;
+        parent = ctx.symbolTable.getOwner(parent);
     }
 
     const children = target.children

@@ -116,6 +116,8 @@ export interface SysMLSymbol {
     controlFlows?: { source: string; target: string; guard?: string }[];
     /** Parent symbol's qualified name */
     parentQualifiedName?: string;
+    /** Parent's `elementId`, set when the parent is anonymous */
+    parentElementId?: string;
     /** Child symbol qualified names */
     children: string[];
     /** Multiplicity as a string (e.g., "1", "0..*", "2..5") */

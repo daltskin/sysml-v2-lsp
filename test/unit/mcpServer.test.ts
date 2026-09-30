@@ -309,6 +309,22 @@ describe('MCP Server Core', () => {
             expect(result.ancestors.length).toBe(0);
         });
 
+        it('should list an anonymous owner among the ancestors of its member', () => {
+            const code = `package Demo {
+    part a { port p; }
+    part b { port p; }
+    interface a.p to b.p { part x { part y; } }
+}`;
+            const result = handleGetHierarchy(ctx, 'y', code, 'anonymous.sysml') as {
+                ancestors: Array<{ name: string; kind: string }>;
+            };
+            expect(result.ancestors.map(a => [a.name, a.kind])).toEqual([
+                ['Demo', 'package'],
+                ['a.p-b.p', 'interface'],
+                ['x', 'part'],
+            ]);
+        });
+
         it('should return not-found for unknown name', () => {
             const result = handleGetHierarchy(ctx, 'NonExistent') as { found: boolean };
             expect(result.found).toBe(false);

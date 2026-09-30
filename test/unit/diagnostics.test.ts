@@ -377,6 +377,29 @@ package Test {
             expect(constraintDiags.length).toBeGreaterThanOrEqual(1);
         });
 
+        it('should resolve constraint references from an anonymous interface\'s own members', async () => {
+            const text = `
+package Test {
+    part def X { attribute v; }
+    part a { port p; }
+    part b { port p; }
+    interface a.p to b.p {
+        part x : X;
+        // \`z\` has no members of its own: the check climbs to the anonymous interface.
+        part z {
+            assert constraint { x.v > 0 }
+            assert constraint { x.nope > 0 }
+        }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unresolved = diags.filter(d => d.code === 'unresolved-constraint-reference');
+            expect(unresolved.map(d => d.message)).toEqual([
+                "Unresolved constraint reference 'x.nope' in scope 'a.p-b.p'",
+            ]);
+        });
+
         it('should emit targeted invalid-constraint-body for documentation text', async () => {
             const text = `
 package Test {
@@ -1963,6 +1986,81 @@ part def Container :> Container::Child {
             const diags = await getSemanticDiagnostics(text);
             const unresolvedDiags = diags.filter(d => d.code === 'unresolved-type');
             expect(unresolvedDiags.filter(d => d.message.includes('Vehicle::Engine')).length).toBe(2);
+        });
+
+        describe('anonymous elements as namespaces', () => {
+            const unresolvedElements = async (text: string) =>
+                (await getSemanticDiagnostics(text))
+                    .filter(d => d.code === 'unresolved-type')
+                    .map(d => (d.data as { elementName?: string } | undefined)?.elementName);
+
+            it('should resolve a name imported by an anonymous connection for its own members', async () => {
+                const text = `
+package Lib {
+    part def Engine;
+}
+package User {
+    part a { port p; }
+    part b { port p; }
+    connect a.p to b.p {
+        private import Lib::Engine;
+        part engine : Engine;
+    }
+    part outside : Engine;
+}
+`;
+                const unresolved = await unresolvedElements(text);
+                expect(unresolved).toEqual(['outside']);
+            });
+
+            it('should let a typed anonymous connection see its type\'s protected-imported members', async () => {
+                const text = `
+package Lib {
+    part def Engine;
+}
+package User {
+    connection def C {
+        end e1;
+        end e2;
+        protected import Lib::Engine;
+    }
+    part a { port p; }
+    part b { port p; }
+    connection : C connect a.p to b.p {
+        part engine : C::Engine;
+    }
+    part unrelated : C::Engine;
+}
+`;
+                const unresolved = await unresolvedElements(text);
+                expect(unresolved).toEqual(['unrelated']);
+            });
+
+            it('should resolve a specialization\'s supertype from inside its anonymous owner', async () => {
+                // \`Local\` is only visible inside the anonymous interface, where \`x\` specializes it.
+                const text = `
+package Lib {
+    part def Engine;
+}
+package User {
+    part a { port p; }
+    part b { port p; }
+    interface a.p to b.p {
+        part def Local {
+            protected import Lib::Engine;
+        }
+        part x : Local {
+            part engine : Local::Engine;
+        }
+        part y {
+            part engine : Local::Engine;
+        }
+    }
+}
+`;
+                const unresolved = await unresolvedElements(text);
+                expect(unresolved).toEqual(['engine']);
+            });
         });
 
         describe('incremental visibility changes are reassessed on re-parse', () => {

@@ -208,8 +208,6 @@ export class SymbolTable {
     private symbols = new Map<string, SysMLSymbol>();
     /** Anonymous symbols (`SysMLSymbol.isAnonymous`) by `elementId` -- never in `symbols` */
     private anonymousSymbols = new Map<string, SysMLSymbol>();
-    /** Anonymous symbols by `qualifiedName`, only to follow their members' parent links */
-    private anonymousSymbolsByPath = new Map<string, SysMLSymbol>();
     /** All symbols indexed by URI for cross-file lookup */
     private symbolsByUri = new Map<string, SysMLSymbol[]>();
     /** All symbols indexed by simple name for O(1) lookup */
@@ -263,11 +261,12 @@ export class SymbolTable {
     }
 
     /**
-     * Get the symbol a `parentQualifiedName` link points to: a declared symbol
-     * first, else an anonymous one whose members carry its qualifiedName.
+     * Get `symbol`'s owner: its anonymous parent by `parentElementId`, else the
+     * declared symbol named by its `parentQualifiedName`.
      */
-    getOwner(qualifiedName: string): SysMLSymbol | undefined {
-        return this.symbols.get(qualifiedName) ?? this.anonymousSymbolsByPath.get(qualifiedName);
+    getOwner(symbol: SysMLSymbol): SysMLSymbol | undefined {
+        if (symbol.parentElementId) return this.anonymousSymbols.get(symbol.parentElementId);
+        return symbol.parentQualifiedName ? this.symbols.get(symbol.parentQualifiedName) : undefined;
     }
 
     /**
@@ -560,6 +559,7 @@ export class SymbolTable {
         uri: string,
         currentScope: Scope,
         parentQualifiedName: string,
+        parentElementId?: string,
     ): void {
         const ruleName = this.getRuleName(ctx);
 
@@ -569,6 +569,7 @@ export class SymbolTable {
         let childScope = currentScope;
 
         if (symbol) {
+            if (parentElementId) symbol.parentElementId = parentElementId;
             this.registerSymbol(symbol, uri, currentScope);
             // Create a child scope for definitions and packages
             childScope = new Scope(symbol.qualifiedName, currentScope);
@@ -588,6 +589,7 @@ export class SymbolTable {
                     uri,
                     childScope,
                     symbol?.qualifiedName ?? parentQualifiedName,
+                    symbol ? symbol.elementId : parentElementId,
                 );
             }
         }
@@ -769,7 +771,6 @@ export class SymbolTable {
     /** Remove an anonymous symbol (on document edit/close) from its own indexes. */
     private unregisterAnonymousSymbol(sym: SysMLSymbol): void {
         if (this.anonymousSymbols.get(sym.elementId!) === sym) this.anonymousSymbols.delete(sym.elementId!);
-        if (this.anonymousSymbolsByPath.get(sym.qualifiedName) === sym) this.anonymousSymbolsByPath.delete(sym.qualifiedName);
     }
 
     private registerSymbol(symbol: SysMLSymbol, uri: string, scope: Scope): void {
@@ -777,7 +778,6 @@ export class SymbolTable {
         // so a declared name quoted like its qualifiedName is never shadowed.
         if (symbol.isAnonymous) {
             this.anonymousSymbols.set(symbol.elementId!, symbol);
-            this.anonymousSymbolsByPath.set(symbol.qualifiedName, symbol);
         } else {
             this.registerNamedSymbol(symbol, uri);
         }

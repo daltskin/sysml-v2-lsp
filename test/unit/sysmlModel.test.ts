@@ -666,6 +666,33 @@ package Test {
             }
         });
 
+        it('should take an anonymous interface\'s participants from its own members only', async () => {
+            const base = `package Demo {
+    part a { port p; }
+    part b { port p; }
+    interface a.p to b.p {
+        part x;
+        part y;
+        message m from x to y;
+    }
+}
+`;
+            const findInterface = (els: any[]): any => {
+                for (const el of els) {
+                    if (el.type === 'interface') return el;
+                    const found = findInterface(el.children ?? []);
+                    if (found) return found;
+                }
+            };
+            const { start } = findInterface((await getModelForText(base, ['elements'])).elements ?? []).range;
+            const segment = `a.p-b.p#test://model-test.sysml:${start.line + 1}:${start.character + 1}`;
+
+            // A declared part quoted like the interface's qualified name, with a member of its own.
+            const model = await getModelForText(base.replace('\n}\n', `\n    part '${segment}' { part inner; }\n}\n`), ['sequenceDiagrams']);
+            const diagram = model.sequenceDiagrams!.find(d => d.messages.some(m => m.name === 'm'))!;
+            expect(diagram.participants.map(p => p.name).sort()).toEqual(['x', 'y']);
+        });
+
         it('should extract send/accept message patterns', async () => {
             const model = await getModelForText(`
 package Test {
@@ -1034,6 +1061,54 @@ package Demo {
                 ['a.p-b.p', undefined],
                 ['a.p-b.p', true],
             ]);
+        });
+
+        it('should keep an anonymous interface\'s members apart from a declared part quoted like its qualified name', async () => {
+            const base = `package Demo {
+    part a { port p; }
+    part b { port p; }
+    interface a.p to b.p { attribute w; }
+}
+`;
+            const findAll = (els: any[], pred: (el: any) => boolean, out: any[] = []): any[] => {
+                els.forEach(el => { if (pred(el)) out.push(el); findAll(el.children ?? [], pred, out); });
+                return out;
+            };
+            // The anonymous interface's qualified name segment: its label, then its elementId (declaration site).
+            const [baseInterface] = findAll((await getModelForText(base, ['elements'])).elements ?? [], el => el.type === 'interface');
+            const segment = `a.p-b.p#test://model-test.sysml:${baseInterface.range.start.line + 1}:${baseInterface.range.start.character + 1}`;
+
+            const model = await getModelForText(base.replace('\n}\n', `\n    part '${segment}' { part inner; }\n}\n`), ['elements']);
+            const [anonymous] = findAll(model.elements ?? [], el => el.type === 'interface');
+            const [declared] = findAll(model.elements ?? [], el => el.type === 'part' && el.name === segment);
+            expect(anonymous.attributes.isAnonymous).toBe(true);
+            expect(declared).toBeDefined();
+            expect(anonymous.children.map((c: { name: string }) => c.name)).toEqual(['w']);
+            expect(declared.children.map((c: { name: string }) => c.name)).toEqual(['inner']);
+        });
+
+        it('should resolve names in an anonymous interface\'s own namespace, not in a declared part quoted like its qualified name', async () => {
+            const base = `package Demo {
+    part a { port p; }
+    part b { port p; }
+    interface a.p to b.p { part def W; part w : W; }
+}
+`;
+            const baseModel = await getModelForText(base, ['elements', 'diagnostics']);
+            expect(baseModel.diagnostics).toEqual([]);
+            const findInterface = (els: any[]): any => {
+                for (const el of els) {
+                    if (el.type === 'interface') return el;
+                    const found = findInterface(el.children ?? []);
+                    if (found) return found;
+                }
+            };
+            const { start } = findInterface(baseModel.elements ?? []).range;
+            const segment = `a.p-b.p#test://model-test.sysml:${start.line + 1}:${start.character + 1}`;
+
+            // `W` is a member of the anonymous interface only: `inner` can't see it.
+            const model = await getModelForText(base.replace('\n}\n', `\n    part '${segment}' { part inner : W; }\n}\n`), ['diagnostics']);
+            expect(model.diagnostics!.map(d => [d.code, d.elementName])).toEqual([['unresolved-type', 'inner']]);
         });
 
         it('should report unresolved type references', async () => {
