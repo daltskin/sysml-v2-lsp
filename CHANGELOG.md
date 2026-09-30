@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Fixed false positive on `ambiguous-namespace-name` diagnosis: match a Windows document's URI spellings (`file:///c%3A/...` and `file:///C:/...`) as one document, so a document no longer reports each of its declarations as an conflict with itself.
+- Fix false positive diagnostic `ambiguous-namespace-name`: normalize a `file:` URI's drive letter (lower-case letter and `%3A`/`%3a` decoded to `:`), so `file:///c%3A/...` and `file:///C:/...` identify the same document and it no longer reports each of its declarations as a conflict with itself. The rest of the URI stays case-sensitive.
 - Revalidate other open documents when a document is closed, so an `ambiguous-namespace-name` conflict it caused (e.g. after deleting it or dropping an unsaved edit) no longer stays visible.
 
 ## [0.31.0]
