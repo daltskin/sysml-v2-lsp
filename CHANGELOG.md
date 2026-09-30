@@ -8,6 +8,7 @@
 - Revalidate other open documents when a document is closed, so an `ambiguous-namespace-name` conflict it caused (e.g. after deleting it or dropping an unsaved edit) no longer stays visible.
 - fixed false positive on `ambiguous-namespace-name`: an anonymous interface usage (e.g., `interface a.p to b.p;`, no declared name) no longer takes the name of its first endpoint reference.
 - anonymous connections, interfaces, allocations and transitions get a generated name (`a.p-b.q`), are marked `isAnonymous`, get an `elementId` (their declaration site, `uri:line:col`) and a qualified name ending in it (`…#uri:line:col`), and are excluded from name lookup and duplicate checks. Their members link to them by `parentElementId`, and each is its own namespace for name resolution, so neither `sysml/model` nor name lookup merges their members with those of a declared element quoted like their qualified name.
+- Updated transitive dependencies to patched releases for `brace-expansion`, `fast-uri`, and `ip-address` security advisories.
 
 ## [0.31.0]
 
