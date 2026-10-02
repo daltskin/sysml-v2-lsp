@@ -1514,6 +1514,81 @@ package Test {
             }
         });
 
+        it('should project item flow elements and endpoint relationships with unresolved payload types', async () => {
+            const model = await getModelForText(`
+package Test {
+    interface def Interface {
+        flow of Payload[1..*] from source.output to target.input;
+        flow namedFlow of OtherPayload[1..*] from source.other to target.other;
+    }
+}
+`, ['elements', 'relationships', 'sequenceDiagrams']);
+
+            const flows: any[] = [];
+            const visit = (elements: any[]) => elements.forEach(element => {
+                if (element.type === 'flow') flows.push(element);
+                visit(element.children ?? []);
+            });
+            visit(model.elements ?? []);
+
+            expect(flows).toHaveLength(2);
+            expect(flows.map(flow => [
+                flow.name,
+                flow.attributes.itemType,
+                flow.attributes.flowSource,
+                flow.attributes.flowTarget,
+                flow.relationships.find((rel: any) => rel.type === 'flow'),
+            ])).toEqual([
+                [
+                    '<flow source.output to target.input>',
+                    'Payload',
+                    'source.output',
+                    'target.input',
+                    {
+                        type: 'flow',
+                        source: 'source.output',
+                        target: 'target.input',
+                        name: 'Payload',
+                    },
+                ],
+                [
+                    'namedFlow',
+                    'OtherPayload',
+                    'source.other',
+                    'target.other',
+                    {
+                        type: 'flow',
+                        source: 'source.other',
+                        target: 'target.other',
+                        name: 'OtherPayload',
+                    },
+                ],
+            ]);
+            expect(model.relationships!.filter(rel => rel.type === 'flow')).toEqual([
+                {
+                    type: 'flow',
+                    source: 'source.output',
+                    target: 'target.input',
+                    name: 'Payload',
+                },
+                {
+                    type: 'flow',
+                    source: 'source.other',
+                    target: 'target.other',
+                    name: 'OtherPayload',
+                },
+            ]);
+            expect(model.sequenceDiagrams).toHaveLength(1);
+            expect(model.sequenceDiagrams![0].messages.map(message => [
+                message.from,
+                message.to,
+                message.payload,
+            ])).toEqual([
+                ['source', 'target', 'Payload'],
+                ['source', 'target', 'OtherPayload'],
+            ]);
+        });
+
         it('should extract subsets relationship', async () => {
             const model = await getModelForText(`
 package Test {

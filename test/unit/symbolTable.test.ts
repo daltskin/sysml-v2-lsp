@@ -145,6 +145,45 @@ package Demo {
         expect(connection[0].kind).toBe('connection');
     });
 
+    it('should extract item flows without mistaking payloads or endpoints for declared names', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    interface def Link {
+        flow of Payload[1..*] from source.output to target.input;
+        flow outgoing of OtherPayload[1..*] from source.other to target.other;
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        const flows = st.getSymbolsForUri('test://test.sysml').filter(s => s.kind === 'flow');
+        expect(flows).toHaveLength(2);
+        expect(flows.map(flow => [flow.name, flow.isAnonymous, flow.typeNames, flow.flowDetails])).toEqual([
+            [
+                '<flow source.output to target.input>',
+                true,
+                ['Payload'],
+                {
+                    itemType: 'Payload',
+                    source: 'source.output',
+                    target: 'target.input',
+                },
+            ],
+            [
+                'outgoing',
+                undefined,
+                ['OtherPayload'],
+                {
+                    itemType: 'OtherPayload',
+                    source: 'source.other',
+                    target: 'target.other',
+                },
+            ],
+        ]);
+        expect(st.findByName('Payload')).toEqual([]);
+        expect(st.findByName('source')).toEqual([]);
+    });
+
     it('should name an anonymous interface usage after its ends\' reference paths', async () => {
         const { st, result } = await buildST(`
 package Demo {

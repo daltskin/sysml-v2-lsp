@@ -390,11 +390,22 @@ export class SysMLModelProvider {
             // Determine correct attribute key based on kind
             // Store all type names as comma-separated string
             const typeLabel = symbol.typeNames.join(', ');
-            if (symbol.kind === SysMLElementKind.PortUsage || symbol.kind === SysMLElementKind.PortDef) {
+            if (symbol.kind === SysMLElementKind.FlowUsage) {
+                if (symbol.flowDetails?.itemType) {
+                    attributes['itemType'] = symbol.flowDetails.itemType;
+                }
+            } else if (symbol.kind === SysMLElementKind.PortUsage || symbol.kind === SysMLElementKind.PortDef) {
                 attributes['portType'] = typeLabel;
             } else {
                 attributes['partType'] = typeLabel;
             }
+        }
+
+        if (symbol.flowDetails?.source) {
+            attributes['flowSource'] = symbol.flowDetails.source;
+        }
+        if (symbol.flowDetails?.target) {
+            attributes['flowTarget'] = symbol.flowDetails.target;
         }
 
         if (symbol.documentation) {
@@ -459,11 +470,22 @@ export class SysMLModelProvider {
         const relationships: RelationshipDTO[] = [];
 
         // Typing relationships (part x : Type, or defined by A, B)
-        for (const tn of symbol.typeNames) {
+        if (symbol.kind !== SysMLElementKind.FlowUsage || !symbol.flowDetails?.itemType) {
+            for (const tn of symbol.typeNames) {
+                relationships.push({
+                    type: 'typing',
+                    source: symbol.name,
+                    target: tn,
+                });
+            }
+        }
+        if (symbol.kind === SysMLElementKind.FlowUsage &&
+            symbol.flowDetails?.source && symbol.flowDetails.target) {
             relationships.push({
-                type: 'typing',
-                source: symbol.name,
-                target: tn,
+                type: 'flow',
+                source: symbol.flowDetails.source,
+                target: symbol.flowDetails.target,
+                name: symbol.flowDetails.itemType ?? symbol.name,
             });
         }
 
@@ -517,12 +539,14 @@ export class SysMLModelProvider {
             // Only for usages — definitions' typeName can be a false positive
             // from child element text captured by ctx.getText()
             if (symbol.typeNames.length > 0 && isUsage(symbol.kind)) {
-                for (const tn of symbol.typeNames) {
-                    relationships.push({
-                        type: 'typing',
-                        source: symbol.name,
-                        target: tn,
-                    });
+                if (symbol.kind !== SysMLElementKind.FlowUsage || !symbol.flowDetails?.itemType) {
+                    for (const tn of symbol.typeNames) {
+                        relationships.push({
+                            type: 'typing',
+                            source: symbol.name,
+                            target: tn,
+                        });
+                    }
                 }
             }
 
@@ -547,6 +571,18 @@ export class SysMLModelProvider {
                         name: symbol.name,
                     });
                 }
+            }
+
+            // Item flows retain their parsed endpoints and payload type even
+            // when the payload type has no declaration in the workspace.
+            if (symbol.kind === SysMLElementKind.FlowUsage &&
+                symbol.flowDetails?.source && symbol.flowDetails.target) {
+                relationships.push({
+                    type: 'flow',
+                    source: symbol.flowDetails.source,
+                    target: symbol.flowDetails.target,
+                    name: symbol.flowDetails.itemType ?? symbol.name,
+                });
             }
 
             // Transition endpoints come directly from the grammar's `first`
@@ -845,7 +881,8 @@ export class SysMLModelProvider {
             const children = this.getChildSymbols(symbol, symbolTable);
             const fullText = this.getFullElementText(symbol, lines);
 
-            // Collect flow/message statements: `<kw> <name> from <src> to <tgt>`
+            // Collect flow/message statements. Flows support both the legacy
+            // `<name> from` spelling and item payloads via `of <type> from`.
             const parsedMessages: MessageDTO[] = [];
             let occ = 1;
             for (const keyword of ['flow', 'message']) {
@@ -854,9 +891,42 @@ export class SysMLModelProvider {
                     // Also skip if the next non-ws token starts a `def` or `:`,
                     // which would indicate `flow def Foo` or a typed feature.
                     const nameStart = skipWS(fullText, afterPos);
-                    const [name, afterName] = readIdent(fullText, nameStart);
-                    if (!name || name === 'def') continue;
-                    const fromStart = skipWS(fullText, afterName);
+                    const [firstName, afterName] = readNameOrQuoted(fullText, nameStart);
+                    if (!firstName || firstName === 'def') continue;
+                    let name = firstName;
+                    let payload = firstName;
+                    let fromStart = skipWS(fullText, afterName);
+
+                    if (keyword === 'flow') {
+                        if (firstName === 'of') {
+                            const payloadStart = skipWS(fullText, afterName);
+                            const [itemType, afterPayload] = readNameOrQuoted(fullText, payloadStart, true);
+                            if (!itemType) continue;
+                            name = itemType;
+                            payload = itemType;
+                            fromStart = skipWS(fullText, afterPayload);
+                            if (fullText[fromStart] === '[') {
+                                const multiplicityEnd = fullText.indexOf(']', fromStart + 1);
+                                if (multiplicityEnd < 0) continue;
+                                fromStart = skipWS(fullText, multiplicityEnd + 1);
+                            }
+                        } else {
+                            const [afterOf, afterOfKeyword] = readIdent(fullText, fromStart);
+                            if (afterOf === 'of') {
+                                const payloadStart = skipWS(fullText, afterOfKeyword);
+                                const [itemType, afterPayload] = readNameOrQuoted(fullText, payloadStart, true);
+                                if (!itemType) continue;
+                                payload = itemType;
+                                fromStart = skipWS(fullText, afterPayload);
+                                if (fullText[fromStart] === '[') {
+                                    const multiplicityEnd = fullText.indexOf(']', fromStart + 1);
+                                    if (multiplicityEnd < 0) continue;
+                                    fromStart = skipWS(fullText, multiplicityEnd + 1);
+                                }
+                            }
+                        }
+                    }
+
                     const [fromKw, afterFromKw] = readIdent(fullText, fromStart);
                     if (fromKw !== 'from') continue;
                     const srcStart = skipWS(fullText, afterFromKw);
@@ -873,7 +943,7 @@ export class SysMLModelProvider {
                         name,
                         from: rootName(srcRaw),
                         to: rootName(tgtRaw),
-                        payload: name,
+                        payload,
                         occurrence: occ++,
                         range: this.rangeToDTO(symbol.range),
                     });

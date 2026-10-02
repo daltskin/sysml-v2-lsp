@@ -15,6 +15,7 @@ export enum SysMLElementKind {
     ConnectionUsage = 'connection',
     InterfaceDef = 'interface def',
     InterfaceUsage = 'interface',
+    FlowUsage = 'flow',
     ActionDef = 'action def',
     ActionUsage = 'action',
     PerformActionUsage = 'perform action',
@@ -110,6 +111,8 @@ export interface SysMLSymbol {
     source?: string;
     /** Target reference for a transition usage. */
     target?: string;
+    /** Payload and endpoints declared by a flow usage. */
+    flowDetails?: { itemType?: string; source?: string; target?: string };
     /** Accepter text used to trigger a transition usage. */
     transitionTrigger?: string;
     /** Explicit succession edges owned by an action definition or usage. */
@@ -224,6 +227,7 @@ export function toMetaclassName(kind: SysMLElementKind): string {
         case SysMLElementKind.ConnectionUsage: return 'ConnectionUsage';
         case SysMLElementKind.InterfaceDef: return 'InterfaceDefinition';
         case SysMLElementKind.InterfaceUsage: return 'InterfaceUsage';
+        case SysMLElementKind.FlowUsage: return 'FlowUsage';
         case SysMLElementKind.ActionDef: return 'ActionDefinition';
         case SysMLElementKind.ActionUsage: return 'ActionUsage';
         case SysMLElementKind.PerformActionUsage: return 'PerformActionUsage';

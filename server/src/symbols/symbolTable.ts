@@ -40,6 +40,8 @@ const RULE_INDEX_TO_KIND = new Map<number, SysMLElementKind>([
     [SysMLv2Parser.RULE_attributeUsage, SysMLElementKind.AttributeUsage],         // 224
     [SysMLv2Parser.RULE_portUsage, SysMLElementKind.PortUsage],                   // 251
     [SysMLv2Parser.RULE_connectionUsage, SysMLElementKind.ConnectionUsage],       // 254
+    [SysMLv2Parser.RULE_flow, SysMLElementKind.FlowUsage],                         // 152
+    [SysMLv2Parser.RULE_flowUsage, SysMLElementKind.FlowUsage],                    // 284
     [SysMLv2Parser.RULE_actionUsage, SysMLElementKind.ActionUsage],               // 296
     [SysMLv2Parser.RULE_mergeNode, SysMLElementKind.MergeNode],                   // 305
     [SysMLv2Parser.RULE_decisionNode, SysMLElementKind.DecisionNode],             // 306
@@ -975,26 +977,40 @@ export class SymbolTable {
         const transition = kind === SysMLElementKind.TransitionUsage
             ? this.extractTransitionDetails(ctx)
             : undefined;
+        const flowDetails = kind === SysMLElementKind.FlowUsage
+            ? this.extractFlowDetails(ctx)
+            : undefined;
 
-        const declaredName = transition ? transition.declaredName : this.extractName(ctx);
-        // An anonymous transition, connection, interface or allocation usage still gets a
+        const declaredName = transition
+            ? transition.declaredName
+            : kind === SysMLElementKind.FlowUsage
+                ? this.extractFlowName(ctx)
+                : this.extractName(ctx);
+        // An anonymous transition, flow, connection, interface or allocation usage still gets a
         // symbol (`generateAnonymousName`).
-        const anonymous = declaredName ? undefined : this.generateAnonymousName(ctx, transition, parentQualifiedName, uri, range);
+        const anonymous = declaredName
+            ? undefined
+            : this.generateAnonymousName(ctx, transition, flowDetails, parentQualifiedName, uri, range);
         const name = declaredName ?? anonymous?.name;
         if (!name) {
             return undefined;
         }
         // Transitions never carry a declared <shortName> alias.
-        const shortName = transition ? undefined : this.extractShortName(ctx);
+        const shortName = transition || (kind === SysMLElementKind.FlowUsage && !declaredName)
+            ? undefined
+            : this.extractShortName(ctx);
 
         const qualifiedName = anonymous?.qualifiedName
             ?? (parentQualifiedName ? `${parentQualifiedName}::${name}` : name);
 
-        const selectionRange = transition && !transition.declaredName
+        const selectionRange = (transition && !transition.declaredName) ||
+            (kind === SysMLElementKind.FlowUsage && !declaredName)
             ? range
             : this.extractNameRange(ctx) ?? range;
         // Extract type names for both usages (typing) and definitions (specialization)
-        const typeNames = this.extractTypeNames(ctx);
+        const typeNames = flowDetails?.itemType
+            ? [flowDetails.itemType]
+            : this.extractTypeNames(ctx);
         const specializationNames = this.extractSpecializationNames(ctx);
         const typeName = typeNames[0];
         const documentation = this.extractDocumentation(ctx);
@@ -1036,6 +1052,7 @@ export class SymbolTable {
             visibility,
             source: transition?.source,
             target: transition?.target,
+            flowDetails,
             transitionTrigger: transition?.trigger,
             controlFlows: controlFlows && controlFlows.length > 0 ? controlFlows : undefined,
             parentQualifiedName: parentQualifiedName || undefined,
@@ -1099,6 +1116,71 @@ export class SymbolTable {
         }
 
         return { declaredName, source, target, trigger };
+    }
+
+    /** Extract the payload type and both endpoint paths from a flow declaration. */
+    private extractFlowDetails(ctx: ParserRuleContext): SysMLSymbol['flowDetails'] {
+        const declaration = this.findChildRule(ctx, SysMLv2Parser.RULE_flowDeclaration);
+        if (!declaration) return undefined;
+
+        const flowEnds: ParserRuleContext[] = [];
+        this.collectDescendantRules(declaration, SysMLv2Parser.RULE_flowEndMember, flowEnds);
+        const endpoints = flowEnds.map((end) => {
+            const flowEnd = this.findChildRule(end, SysMLv2Parser.RULE_flowEnd);
+            return flowEnd ? this.cleanTransitionText(flowEnd.getText()) : undefined;
+        });
+
+        const payload = this.findChildRule(declaration, SysMLv2Parser.RULE_payloadFeatureMember)
+            ?? this.findChildRule(declaration, SysMLv2Parser.RULE_flowPayloadFeatureMember);
+        const payloadTypes = payload ? this.extractTypeNames(payload) : [];
+        const identification = payload
+            ? this.findRuleContext(payload, SysMLv2Parser.RULE_identification)
+            : undefined;
+        const qualifiedName = payload
+            ? this.findRuleContext(payload, SysMLv2Parser.RULE_qualifiedName)
+            : undefined;
+        const itemType = payloadTypes[0]
+            ?? (!identification && qualifiedName ? this.cleanTransitionText(qualifiedName.getText()) : undefined)
+            ?? (identification ? this.parseIdentification(identification).name : undefined);
+
+        return {
+            itemType,
+            source: endpoints[0],
+            target: endpoints[1],
+        };
+    }
+
+    /** A flow name must come from its own declaration, never its payload or endpoints. */
+    private extractFlowName(ctx: ParserRuleContext): string | undefined {
+        const declaration = this.findChildRule(ctx, SysMLv2Parser.RULE_flowDeclaration);
+        if (!declaration) return undefined;
+
+        const usageDeclaration = this.findChildRule(declaration, SysMLv2Parser.RULE_usageDeclaration);
+        if (usageDeclaration) return this.extractDeclaredUsageName(declaration);
+
+        const featureDeclaration = this.findChildRule(declaration, SysMLv2Parser.RULE_featureDeclaration);
+        if (!featureDeclaration) return undefined;
+        const featureIdentification = this.findRuleContext(
+            featureDeclaration,
+            SysMLv2Parser.RULE_featureIdentification,
+        );
+        if (!featureIdentification) return undefined;
+        const declaredNames: string[] = [];
+        for (let i = 0; i < featureIdentification.getChildCount(); i++) {
+            const child = featureIdentification.getChild(i);
+            if (child instanceof ParserRuleContext && child.ruleIndex === SysMLv2Parser.RULE_name) {
+                const name = this.extractTextFromSubtree(child);
+                if (name) declaredNames.push(name);
+            }
+        }
+        return declaredNames[declaredNames.length - 1];
+    }
+
+    /** Find the first descendant of `ctx` with rule `ruleIndex`, in source order. */
+    private findRuleContext(ctx: ParserRuleContext, ruleIndex: number): ParserRuleContext | undefined {
+        const matches: ParserRuleContext[] = [];
+        this.collectDescendantRules(ctx, ruleIndex, matches);
+        return matches[0];
     }
 
     /** Find and clean the text of the first descendant with a given rule. */
@@ -1266,21 +1348,27 @@ export class SymbolTable {
 
     /**
      * The name, qualified name and elementId of an element without a declared
-     * name: an anonymous transition (`<transition s1 to s2>`), or connection,
-     * interface or allocation usage (its ends, `a.p-b.q`). The elementId is its
+     * name: an anonymous transition (`<transition s1 to s2>`), flow
+     * (`<flow a.p to b.q>`), connection, interface or allocation usage
+     * (its ends, `a.p-b.q`). The elementId is its
      * declaration site (`file:///a.sysml:12:5`), which the qualified name
      * appends (`Demo::a.p-b.q#file:///a.sysml:12:5`). Undefined for any other element.
      */
     private generateAnonymousName(
         ctx: ParserRuleContext,
         transition: { source?: string; target?: string } | undefined,
+        flowDetails: SysMLSymbol['flowDetails'],
         parentQualifiedName: string,
         uri: string,
         range: Range,
     ): { name: string; qualifiedName: string; elementId: string } | undefined {
         const name = transition
             ? (transition.source && transition.target ? `<transition ${transition.source} to ${transition.target}>` : undefined)
-            : this.connectorEndsLabel(ctx);
+            : flowDetails
+                ? (flowDetails.source && flowDetails.target
+                    ? `<flow ${flowDetails.source} to ${flowDetails.target}>`
+                    : `<flow at ${range.start.line + 1}>`)
+                : this.connectorEndsLabel(ctx);
         if (!name) return undefined;
         const elementId = `${uri}:${range.start.line + 1}:${range.start.character + 1}`;
         const segment = `${name}#${elementId}`;
