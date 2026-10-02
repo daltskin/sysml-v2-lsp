@@ -68,28 +68,45 @@ export enum SysMLElementKind {
  * A symbol entry in the symbol table.
  */
 export interface SysMLSymbol {
-    /** The symbol's name */
+    /** The symbol's name; empty for an anonymous element (see `isAnonymous`). */
     name: string;
     /**
-     * True for an anonymous element (KerML: no `declaredName`): its `name` is generated for
-     * display (`a.p-b.q`, `<transition s1 to s2>`), and its `qualifiedName` has the declaration
-     * site appended (`Demo::a.p-b.q#file:///a.sysml:12:5`), the namespace path of its own
-     * members. It declares no member name, so it is never found by name lookup, never takes part
-     * in duplicate-name checks, and is identified by its `elementId`, not its `qualifiedName`.
+     * For an anonymous element only: its declaration as written, without its
+     * body and with whitespace collapsed (`connect a.p to b.p`, `connection :
+     * Conn`, `transition first s1 then s2`) -- not a name. Part of its
+     * `elementId`; never looked up or shown as a name (see `displayName`).
      */
-    isAnonymous?: boolean;
+    label?: string;
     /**
-     * Unique identifier, independent of any name (KerML `Element::elementId`). For now set only
-     * on an anonymous element, which is indexed by it instead of by `qualifiedName`: a quoted
-     * declared name can spell out any qualified name, but never take over an elementId.
+     * For an anonymous element only: its specialization part as written
+     * (`: Engine`, `:> p0`, `: Wheel[4]`) -- what the standard's graphical
+     * notation shows in place of a name (8.2.3.6). Absent when it has none.
      */
-    elementId?: string;
+    specialization?: string;
+    /**
+     * For a connection, interface or allocation usage: the reference paths of
+     * its ends, in declaration order (`['a.p', 'b.p']` for `connect a.p to b.p;`;
+     * an end with its own name, `e ::> d.p`, gives `d.p`).
+     */
+    ends?: string[];
+    /**
+     * Unique, stable identifier (KerML `Element::elementId`): a version 5 UUID
+     * derived from the workspace's text (see `ElementIdRegistry`), so it survives
+     * edits elsewhere and reloads. Empty only while its document is being built;
+     * an empty elementId after `SymbolTable.build` is invalid.
+     */
+    elementId: string;
     /** Declared `<shortName>` alias (`identification: LT name GT name | LT name GT`), if any. */
     shortName?: string;
     /** The kind of SysML element */
     kind: SysMLElementKind;
-    /** The fully qualified name (e.g., "VehicleModel::Chassis::wheel") */
-    qualifiedName: string;
+    /**
+     * The fully qualified name (e.g., "VehicleModel::Chassis::wheel"); undefined
+     * for an element without one (KerML): an anonymous element, or any member of one.
+     * A name, for resolving and comparing what a model writes -- an element is
+     * identified by its `elementId`, and its owner by `parentId`.
+     */
+    qualifiedName?: string;
     /** The range where the symbol is defined */
     range: Range;
     /** The range of just the symbol's name (for rename, hover) */
@@ -114,10 +131,8 @@ export interface SysMLSymbol {
     transitionTrigger?: string;
     /** Explicit succession edges owned by an action definition or usage. */
     controlFlows?: { source: string; target: string; guard?: string }[];
-    /** Parent symbol's qualified name */
-    parentQualifiedName?: string;
-    /** Parent's `elementId`, set when the parent is anonymous */
-    parentElementId?: string;
+    /** Owner's `elementId`; unset for an element owned by no other (a root package). */
+    parentId?: string;
     /** Child symbol qualified names */
     children: string[];
     /** Multiplicity as a string (e.g., "1", "0..*", "2..5") */
@@ -186,6 +201,32 @@ export type FilterExpr =
     | { kind: 'or'; left: FilterExpr; right: FilterExpr }
     | { kind: 'not'; expr: FilterExpr }
     | { kind: 'unsupported' };
+
+/**
+ * Whether `symbol` is anonymous (KerML: no declared name or short name). It is
+ * never found by name lookup, never takes part in duplicate-name checks, has no
+ * qualified name, and is identified by its `elementId` only.
+ */
+export function isAnonymous(symbol: SysMLSymbol): boolean {
+    return !symbol.name && !symbol.shortName;
+}
+
+/**
+ * Text naming `symbol` where some text is required (document outline,
+ * workspace symbols, hierarchies, messages): its name; for an anonymous
+ * element its declaration without a name, as the standard's graphical
+ * notation shows it (8.2.3.6) -- its specialization part (`: Engine`); else
+ * what it connects: a transition's states or a binary connector's ends with
+ * an arrow for `to` (`s1→s2`, `a.p→b.p`), an n-ary connector's ends joined by
+ * `-`; else its declaration as written.
+ */
+export function displayName(symbol: SysMLSymbol): string {
+    if (symbol.name) return symbol.name;
+    if (symbol.specialization) return symbol.specialization;
+    if (symbol.source && symbol.target) return `${symbol.source}→${symbol.target}`;
+    if (symbol.ends) return symbol.ends.join(symbol.ends.length === 2 ? '→' : '-');
+    return symbol.label || symbol.kind;
+}
 
 /**
  * Whether an element kind is a definition (type) or usage (instance).

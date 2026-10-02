@@ -172,6 +172,21 @@ describe('MCP Server Core', () => {
     // -----------------------------------------------------------------------
 
     describe('handleGetSymbols', () => {
+        it('should refer to each owner by its elementId as parentId, never by a name', () => {
+            const code = 'package Demo {\n    part a { port p; }\n    part b { port p; }\n    connect a.p to b.p { attribute flowRate; }\n}\n';
+            const { symbols } = handleGetSymbols(ctx, { code, uri: 'owners.sysml' }) as { symbols: Array<Record<string, unknown>> };
+            const byElementId = new Map(symbols.map(s => [s.elementId, s]));
+            const ownerOf = (name: string) => byElementId.get(symbols.find(s => s.name === name)!.parentId);
+            expect(symbols.some(s => 'parent' in s)).toBe(false);
+            // A client finds an owner, and its name or its absence, through parentId.
+            expect(ownerOf('a')!.name).toBe('Demo');
+            expect(ownerOf('flowRate')).toMatchObject({ name: '', kind: 'connection', label: 'connect a.p to b.p' });
+            // The qualified name is always reported: null without one, as in the SysML v2 API.
+            expect(symbols.map(s => [s.name, s.qualifiedName])).toContainEqual(['flowRate', null]);
+            expect(symbols.map(s => [s.name, s.qualifiedName])).toContainEqual(['', null]);
+            expect(symbols.map(s => [s.name, s.qualifiedName])).toContainEqual(['a', 'Demo::a']);
+        });
+
         beforeEach(() => {
             handleParse(ctx, VALID_MODEL, 'test.sysml');
         });
@@ -316,12 +331,13 @@ describe('MCP Server Core', () => {
     interface a.p to b.p { part x { part y; } }
 }`;
             const result = handleGetHierarchy(ctx, 'y', code, 'anonymous.sysml') as {
-                ancestors: Array<{ name: string; kind: string }>;
+                ancestors: Array<{ name: string; label?: string; kind: string }>;
             };
-            expect(result.ancestors.map(a => [a.name, a.kind])).toEqual([
-                ['Demo', 'package'],
-                ['a.p-b.p', 'interface'],
-                ['x', 'part'],
+            // The anonymous interface has no name, only its declaration as a label.
+            expect(result.ancestors.map(a => [a.name, a.label, a.kind])).toEqual([
+                ['Demo', undefined, 'package'],
+                ['', 'interface a.p to b.p', 'interface'],
+                ['x', undefined, 'part'],
             ]);
         });
 
@@ -719,6 +735,145 @@ describe('MCP Server Core', () => {
             expect(result.diagram).toContain('classDiagram');
             expect(result.elementCount).toBeGreaterThan(0);
             expect(result.errors).toHaveLength(0);
+        });
+
+        it('should give each anonymous connection in a General View its own node', () => {
+            const code = `package Demo {
+    part a { port p; }
+    part b { port p; }
+    connect a.p to b.p;
+    connect a.p to b.p;
+}`;
+            const result = handlePreview(ctx, { code, diagramType: 'general', uri: 'anonymous-general.sysml' });
+            // Each is its elementId, with the dashes Mermaid can't take as underscores.
+            const ids = ctx.symbolTable.getSymbolsForUri('anonymous-general.sysml').filter(s => s.kind === 'connection').map(s => s.elementId);
+            const nodes = [...result.diagram.matchAll(/class ([0-9a-f]{8}_\w+)/g)].map(m => m[1]);
+            expect(nodes.sort()).toEqual(ids.map(id => id.replace(/-/g, '_')).sort());
+            expect(new Set(nodes).size).toBe(2);
+            expect(result.diagram).not.toMatch(/class\s*$/m);
+        });
+
+        it('should label an anonymous element with the same text as the outline', () => {
+            const code = `package Demo {
+    part def Engine { port p; }
+    part : Engine { port q; }
+    part a { port p; }
+    part b { port p; }
+    connect a.p to b.p;
+}`;
+            const general = handlePreview(ctx, { code, diagramType: 'general', uri: 'anonymous-labels.sysml' }).diagram;
+            expect(general).toMatch(/class [0-9a-f]{8}_\w+\[": Engine"\]/);
+            expect(general).toMatch(/class [0-9a-f]{8}_\w+\["a\.p→b\.p"\]/);
+            // The type is the label itself, so it is not repeated below it.
+            const interconnection = handlePreview(ctx, { code, diagramType: 'interconnection', uri: 'anonymous-labels.sysml' }).diagram;
+            expect(interconnection).toMatch(/[0-9a-f]{8}_\w+\["■ : Engine"\]/);
+            expect(interconnection).not.toContain(': Engine\\n: Engine');
+            expect(interconnection).not.toContain('anonymous');
+        });
+
+        it('should give each anonymous participant of a Sequence View its own lifeline', () => {
+            const code = `package Demo {
+    part def Server;
+    part client;
+    part : Server;
+    part : Server;
+    action request;
+    action reply;
+}`;
+            const { diagram } = handlePreview(ctx, { code, diagramType: 'sequence', uri: 'anonymous-sequence.sysml' });
+            const participants = [...diagram.matchAll(/participant (\w+) as (.+)/g)].map(m => [m[1], m[2]]);
+            expect(participants.map(p => p[1])).toEqual(['client', ': Server', ': Server']);
+            expect(new Set(participants.map(p => p[0])).size).toBe(3);
+            // Messages run between declared lifelines only.
+            const ids = new Set(participants.map(p => p[0]));
+            for (const [, from, to] of diagram.matchAll(/(\w+)->>\+(\w+):/g)) {
+                expect(ids.has(from) && ids.has(to)).toBe(true);
+            }
+        });
+
+        it('should show an anonymous actor in a Use Case View by its type, once for all use cases', () => {
+            const code = `package Shop {
+    part def User;
+    use case def Buy { actor : User; actor clerk; }
+    use case def Pay { actor : User; }
+    package Inner { use case def Return; }
+}`;
+            const { diagram } = handlePreview(ctx, { code, diagramType: 'usecase', uri: 'anonymous-usecase.sysml' });
+            expect(diagram.match(/actor_\w+\{\{"🧑 : User"\}\}/g)).toHaveLength(1);
+            const user = /(actor_\w+)\{\{"🧑 : User"\}\}/.exec(diagram)![1];
+            expect(diagram).toContain(`${user} --> Shop__Buy`);
+            expect(diagram).toContain(`${user} --> Shop__Pay`);
+            expect(diagram).toContain('actor_clerk --> Shop__Buy');
+            // A use case is drawn in the package that owns it, directly or nested.
+            const inner = diagram.slice(diagram.indexOf('subgraph Shop__Inner'));
+            expect(inner.slice(0, inner.indexOf('end'))).toContain('Shop__Inner__Return(["Return"])');
+        });
+
+        it('should show subjects, stakeholders and use cases outside a package in a Use Case View', () => {
+            const code = `part def Vehicle;
+part def Owner;
+use case def Drive { subject : Vehicle; actor driver; }
+requirement def Safety { stakeholder : Owner; stakeholder regulator; }`;
+            const { diagram } = handlePreview(ctx, { code, diagramType: 'usecase', uri: 'usecase-subjects.sysml' });
+            expect(diagram).toContain('Drive(["Drive"])');
+            expect(diagram).toMatch(/[0-9a-f]{8}_\w+\["📋 : Vehicle"\]/);
+            const owner = /([0-9a-f]{8}_\w+)\{\{"👤 : Owner"\}\}/.exec(diagram)![1];
+            expect(diagram).toContain(`${owner} -.->|"«stakeholder»"| Safety`);
+            expect(diagram).toContain('Safety__regulator{{"👤 regulator"}}');
+        });
+
+        it('should note the interactions of a Sequence View with fewer than two participants', () => {
+            // Without definitions to fall back on, the one anonymous part is the only participant.
+            const code = `package Demo {
+    part : Server;
+    action request;
+}`;
+            const { diagram } = handlePreview(ctx, { code, diagramType: 'sequence', uri: 'sequence-notes.sysml' });
+            expect(diagram).toMatch(/Note over [0-9a-f]{8}_\w+: request/);
+        });
+
+        it('should label an anonymous state inside a state definition as in the outline', () => {
+            const code = `package Demo {
+    state def Mode;
+    state def Machine {
+        state idle;
+        state : Mode;
+    }
+    state running;
+}`;
+            const { diagram } = handlePreview(ctx, { code, diagramType: 'state', uri: 'anonymous-state.sysml' });
+            const machine = diagram.slice(diagram.indexOf('state "Machine" as Demo__Machine {'));
+            const body = machine.slice(0, machine.indexOf('}'));
+            expect(body).toContain('Demo__Machine__idle : idle');
+            expect(body).toMatch(/[0-9a-f]{8}_\w+ : : Mode/);
+            expect(diagram).toContain('Demo__running : running');
+        });
+
+        it('should include the type of a focused element, and the type\'s members', () => {
+            const code = `package Demo {
+    part def Engine { attribute power; }
+    part def Wheel;
+    part car : Engine;
+}`;
+            const { diagram } = handlePreview(ctx, { code, diagramType: 'general', uri: 'focus-type.sysml', focus: 'car' });
+            expect(diagram).toContain('class Engine');
+            expect(diagram).toContain('+power');
+            expect(diagram).not.toContain('Wheel');
+        });
+
+        it('should list changed named elements by qualified name, added anonymous ones by their display text', () => {
+            const originalCode = 'package Demo { part def A; part def B; part a : A; }';
+            const code = 'package Demo { part def A; part def B; part a : B; part : A; }';
+            const result = handlePreview(ctx, { code, originalCode, uri: 'diff-changed.sysml' }) as unknown as { diff: { added: string[]; changed: string[] } };
+            expect(result.diff.added).toEqual(['part : A']);
+            expect(result.diff.changed).toEqual(['part Demo::a']);
+        });
+
+        it('should list an added anonymous element in a diff, never as `undefined`', () => {
+            const originalCode = 'package Demo { part a { port p; } part b { port p; } }';
+            const code = 'package Demo { part a { port p; } part b { port p; } connect a.p to b.p; }';
+            const result = handlePreview(ctx, { code, originalCode, uri: 'anonymous-diff.sysml' }) as unknown as { diff: { added: string[] } };
+            expect(result.diff.added).toEqual(['connection a.p→b.p']);
         });
 
         it('should return syntax errors for invalid code', () => {

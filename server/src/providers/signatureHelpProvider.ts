@@ -62,7 +62,7 @@ export class SignatureHelpProvider {
         // Extract parameters from the definition's children
         const allSymbols = symbolTable.getAllSymbols();
         const params_list = allSymbols.filter(s =>
-            s.parentQualifiedName === def.qualifiedName &&
+            s.parentId === def.elementId &&
             (s.kind === SysMLElementKind.AttributeUsage ||
                 s.kind === SysMLElementKind.PartUsage ||
                 s.kind === SysMLElementKind.ItemUsage ||

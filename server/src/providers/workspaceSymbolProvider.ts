@@ -3,6 +3,7 @@ import {
     WorkspaceSymbolParams,
 } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
+import { displayName } from '../symbols/sysmlElements.js';
 import { toSysMLSymbolKind } from './symbolKindMapping.js';
 
 /**
@@ -25,18 +26,18 @@ export class WorkspaceSymbolProvider {
         for (const sym of allSymbols) {
             // Filter by query (empty query returns all)
             if (query && !sym.name.toLowerCase().includes(query) &&
-                !sym.qualifiedName.toLowerCase().includes(query)) {
+                !sym.qualifiedName?.toLowerCase().includes(query)) {
                 continue;
             }
 
             results.push({
-                name: sym.name,
+                name: displayName(sym),
                 kind: toSysMLSymbolKind(sym.kind),
                 location: {
                     uri: sym.uri,
                     range: sym.selectionRange,
                 },
-                containerName: sym.parentQualifiedName,
+                containerName: symbolTable.getOwner(sym)?.qualifiedName,
             });
 
             // Limit results to avoid overwhelming the UI

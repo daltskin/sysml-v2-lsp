@@ -7,7 +7,7 @@
  */
 
 import type { SysMLSymbol } from '../symbols/sysmlElements.js';
-import { SysMLElementKind, isDefinition } from '../symbols/sysmlElements.js';
+import { SysMLElementKind, displayName, isDefinition } from '../symbols/sysmlElements.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -50,6 +50,38 @@ function safeId(name: string): string {
     return result.substring(start, end) || 'node';
 }
 
+/** Lookups over all symbols: by name (qualified, or simple for type references), and by elementId. */
+interface SymbolLookup {
+    byName: Map<string, SysMLSymbol>;
+    byElementId: Map<string, SysMLSymbol>;
+}
+
+/**
+ * What a node ID is made from: the qualified name when there is one (readable),
+ * else the elementId (`safeId` turns its dashes into underscores).
+ */
+function nodeKey(sym: SysMLSymbol): string {
+    return sym.qualifiedName ?? sym.elementId;
+}
+
+/** The Mermaid node ID of `sym`. */
+function nodeId(sym: SysMLSymbol): string {
+    return safeId(nodeKey(sym));
+}
+
+/** `sym`'s owner, by its parentId. */
+function ownerOf(sym: SysMLSymbol, lookup: SymbolLookup): SysMLSymbol | undefined {
+    return sym.parentId ? lookup.byElementId.get(sym.parentId) : undefined;
+}
+
+/** Whether `sym` is owned by `ancestor`, directly or through its owners. */
+function isOwnedBy(sym: SysMLSymbol, ancestor: SysMLSymbol, lookup: SymbolLookup): boolean {
+    for (let owner = ownerOf(sym, lookup); owner; owner = ownerOf(owner, lookup)) {
+        if (owner.elementId === ancestor.elementId) return true;
+    }
+    return false;
+}
+
 /** Escape label text for Mermaid (quotes and angle brackets, no regex). */
 function escapeLabel(text: string): string {
     let result = '';
@@ -66,7 +98,7 @@ function escapeLabel(text: string): string {
 
 // ---------------------------------------------------------------------------
 // Children index — SysMLSymbol.children[] is not populated by the parser,
-// so we build a parent→children lookup from parentQualifiedName instead.
+// so we build an owner→members lookup from parentId instead.
 // ---------------------------------------------------------------------------
 
 function buildChildrenIndex(allSymbols: SysMLSymbol[]): Map<string, SysMLSymbol[]> {
@@ -75,13 +107,13 @@ function buildChildrenIndex(allSymbols: SysMLSymbol[]): Map<string, SysMLSymbol[
     for (const s of allSymbols) {
         // Deduplicate — the symbol table may contain the same symbol
         // under both its qualified name and simple name keys.
-        if (seen.has(s.qualifiedName)) continue;
-        seen.add(s.qualifiedName);
+        if (seen.has(s.elementId)) continue;
+        seen.add(s.elementId);
 
-        if (s.parentQualifiedName) {
-            const list = index.get(s.parentQualifiedName) ?? [];
+        if (s.parentId) {
+            const list = index.get(s.parentId) ?? [];
             list.push(s);
-            index.set(s.parentQualifiedName, list);
+            index.set(s.parentId, list);
         }
     }
     return index;
@@ -273,10 +305,10 @@ export function inferDiagramType(symbols: SysMLSymbol[]): DiagramType {
 // ---------------------------------------------------------------------------
 
 /**
- * Build a map from qualified name → short display ID.
+ * Build a map from elementId → short display ID.
  * Uses simple names where unambiguous, otherwise disambiguates with parent prefix.
  */
-function buildDisplayIds(symbols: SysMLSymbol[]): Map<string, string> {
+function buildDisplayIds(symbols: SysMLSymbol[], lookup: SymbolLookup): Map<string, string> {
     const nameCount = new Map<string, number>();
     for (const s of symbols) {
         nameCount.set(s.name, (nameCount.get(s.name) ?? 0) + 1);
@@ -284,20 +316,25 @@ function buildDisplayIds(symbols: SysMLSymbol[]): Map<string, string> {
 
     const ids = new Map<string, string>();
     for (const s of symbols) {
+        // An anonymous element has no name to show: identified by its elementId.
+        if (!s.name) {
+            ids.set(s.elementId, nodeId(s));
+            continue;
+        }
         let displayId: string;
-        if (nameCount.get(s.name)! > 1 && s.parentQualifiedName) {
+        const owner = ownerOf(s, lookup);
+        if (nameCount.get(s.name)! > 1 && owner) {
             // Disambiguate with parent name
-            const parentName = s.parentQualifiedName.split('::').pop() ?? s.parentQualifiedName;
-            displayId = safeId(`${parentName}_${s.name}`);
+            displayId = safeId(`${owner.name}_${s.name}`);
         } else {
             displayId = safeId(s.name);
         }
-        ids.set(s.qualifiedName, displayId);
+        ids.set(s.elementId, displayId);
     }
     return ids;
 }
 
-function generateGeneralView(symbols: SysMLSymbol[], symbolTable: Map<string, SysMLSymbol>): MermaidResult {
+function generateGeneralView(symbols: SysMLSymbol[], lookup: SymbolLookup): MermaidResult {
     const lines: string[] = [
         '%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#e8f5e9", "lineColor": "#546E7A"}}}%%',
         'classDiagram',
@@ -307,7 +344,7 @@ function generateGeneralView(symbols: SysMLSymbol[], symbolTable: Map<string, Sy
     let elementCount = 0;
 
     // Build parent→children index (sym.children is not populated by the parser)
-    const childrenOf = buildChildrenIndex([...symbolTable.values()]);
+    const childrenOf = buildChildrenIndex([...lookup.byElementId.values()]);
 
     // Only render definitions and structural usages (skip attributes, docs, etc.)
     const meaningful = symbols.filter(s =>
@@ -321,16 +358,16 @@ function generateGeneralView(symbols: SysMLSymbol[], symbolTable: Map<string, Sy
         && s.kind !== SysMLElementKind.PortUsage
     );
 
-    const displayIds = buildDisplayIds(meaningful);
+    const displayIds = buildDisplayIds(meaningful, lookup);
 
     for (const sym of meaningful) {
-        const id = displayIds.get(sym.qualifiedName) ?? safeId(sym.qualifiedName);
+        const id = displayIds.get(sym.elementId) ?? nodeId(sym);
         if (rendered.has(id)) continue;
         rendered.add(id);
         elementCount++;
 
         // Collect members: attributes, ports, nested parts
-        const childSymbols = (childrenOf.get(sym.qualifiedName) ?? [])
+        const childSymbols = (childrenOf.get(sym.elementId) ?? [])
             .filter(c =>
                 c.kind === SysMLElementKind.AttributeUsage
                 || c.kind === SysMLElementKind.PortUsage
@@ -347,8 +384,10 @@ function generateGeneralView(symbols: SysMLSymbol[], symbolTable: Map<string, Sy
         // Track for styling
         nodeStyles.set(id, kindLabel);
 
+        // A named class is shown by its ID; an anonymous one by its display name as label.
+        const classDecl = sym.name ? `class ${id}` : `class ${id}["${escapeLabel(displayName(sym))}"]`;
         if (childSymbols.length > 0) {
-            lines.push(`    class ${id} {`);
+            lines.push(`    ${classDecl} {`);
             lines.push(`        <<${kindLabel}>>`)
             for (const child of childSymbols) {
                 const typeStr = child.typeNames.length > 0 ? ` : ${child.typeNames[0]}` : '';
@@ -357,28 +396,29 @@ function generateGeneralView(symbols: SysMLSymbol[], symbolTable: Map<string, Sy
             }
             lines.push('    }');
         } else {
-            lines.push(`    class ${id}`);
+            lines.push(`    ${classDecl}`);
             lines.push(`    <<${kindLabel}>> ${id}`);
         }
     }
 
     // Relationships: specialisation and containment
     for (const sym of meaningful) {
-        const id = displayIds.get(sym.qualifiedName) ?? safeId(sym.qualifiedName);
+        const id = displayIds.get(sym.elementId) ?? nodeId(sym);
 
         for (const typeName of sym.typeNames) {
-            const target = symbolTable.get(typeName)
-                ?? [...symbolTable.values()].find(s => s.name === typeName);
+            const target = lookup.byName.get(typeName)
+                ?? [...lookup.byName.values()].find(s => s.name === typeName);
             if (target) {
-                const targetId = displayIds.get(target.qualifiedName) ?? safeId(target.qualifiedName);
+                const targetId = displayIds.get(target.elementId) ?? nodeId(target);
                 if (rendered.has(targetId)) {
                     lines.push(`    ${targetId} <|-- ${id} : specializes`);
                 }
             }
         }
 
-        if (sym.parentQualifiedName) {
-            const parentId = displayIds.get(sym.parentQualifiedName) ?? safeId(sym.parentQualifiedName);
+        const owner = ownerOf(sym, lookup);
+        if (owner) {
+            const parentId = displayIds.get(owner.elementId) ?? nodeId(owner);
             if (rendered.has(parentId) && rendered.has(id)
                 && (isDefinition(sym.kind) || sym.kind === SysMLElementKind.PartUsage)) {
                 lines.push(`    ${parentId} *-- ${id} : contains`);
@@ -430,7 +470,7 @@ function actionNodeDecl(
     indent: string,
     typeSuffix = '',
 ): { line: string; styleKind: string } {
-    const label = escapeLabel(sym.name);
+    const label = escapeLabel(displayName(sym));
     switch (sym.kind) {
         case SysMLElementKind.ForkNode:
             return { line: `${indent}${id}["▬ fork ${label}"]`, styleKind: 'ForkNode' };
@@ -445,7 +485,7 @@ function actionNodeDecl(
     }
 }
 
-function generateActivityView(symbols: SysMLSymbol[], symbolTable: Map<string, SysMLSymbol>): MermaidResult {
+function generateActivityView(symbols: SysMLSymbol[], lookup: SymbolLookup): MermaidResult {
     const lines: string[] = [
         '%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#e3f2fd", "lineColor": "#546E7A"}}}%%',
         'flowchart TD',
@@ -460,19 +500,19 @@ function generateActivityView(symbols: SysMLSymbol[], symbolTable: Map<string, S
     const actions = symbols.filter(s => isActionLike(s.kind));
 
     // Build parent→children index (sym.children is not populated by the parser)
-    const childrenOf = buildChildrenIndex([...symbolTable.values()]);
+    const childrenOf = buildChildrenIndex([...lookup.byElementId.values()]);
 
     // Render action definitions as subgraphs with their child actions
     for (const def of actionDefs) {
-        const defId = safeId(def.qualifiedName);
-        lines.push(`    subgraph ${defId}["${escapeLabel(def.name)}"]`);
+        const defId = nodeId(def);
+        lines.push(`    subgraph ${defId}["${escapeLabel(displayName(def))}"]`);
         elementCount++;
 
-        const childActions = (childrenOf.get(def.qualifiedName) ?? [])
+        const childActions = (childrenOf.get(def.elementId) ?? [])
             .filter(c => isActionLike(c.kind));
 
         for (const action of childActions) {
-            const actionId = safeId(action.qualifiedName);
+            const actionId = nodeId(action);
             const { line, styleKind } = actionNodeDecl(actionId, action, '        ');
             lines.push(line);
             nodeStyles.set(actionId, styleKind);
@@ -484,7 +524,7 @@ function generateActivityView(symbols: SysMLSymbol[], symbolTable: Map<string, S
         for (const flow of def.controlFlows ?? []) {
             for (const endpoint of [flow.source, flow.target]) {
                 if (declaredEndpoints.has(endpoint)) continue;
-                const endpointId = safeId(`${def.qualifiedName}::${endpoint}`);
+                const endpointId = safeId(`${nodeKey(def)}::${endpoint}`);
                 const shape = endpoint === 'start'
                     ? `((${escapeLabel(endpoint)}))`
                     : endpoint === 'done'
@@ -498,8 +538,8 @@ function generateActivityView(symbols: SysMLSymbol[], symbolTable: Map<string, S
 
             const source = childByName.get(flow.source);
             const target = childByName.get(flow.target);
-            const sourceId = safeId(source?.qualifiedName ?? `${def.qualifiedName}::${flow.source}`);
-            const targetId = safeId(target?.qualifiedName ?? `${def.qualifiedName}::${flow.target}`);
+            const sourceId = source ? nodeId(source) : safeId(`${nodeKey(def)}::${flow.source}`);
+            const targetId = target ? nodeId(target) : safeId(`${nodeKey(def)}::${flow.target}`);
             const guard = flow.guard ? `|"${escapeLabel(flow.guard)}"|` : '';
             lines.push(`        ${sourceId} -->${guard} ${targetId}`);
         }
@@ -509,11 +549,11 @@ function generateActivityView(symbols: SysMLSymbol[], symbolTable: Map<string, S
 
     // Standalone actions (not part of a def)
     for (const action of actions) {
-        if (action.parentQualifiedName && actionDefs.some(d => d.qualifiedName === action.parentQualifiedName)) {
+        if (actionDefs.some(d => d.elementId === action.parentId)) {
             continue; // Already rendered inside a subgraph
         }
-        const actionId = safeId(action.qualifiedName);
-        const typeStr = action.typeNames.length > 0 ? `\\n: ${action.typeNames[0]}` : '';
+        const actionId = nodeId(action);
+        const typeStr = action.name && action.typeNames.length > 0 ? `\\n: ${action.typeNames[0]}` : '';
         const { line, styleKind } = actionNodeDecl(actionId, action, '    ', typeStr);
         lines.push(line);
         nodeStyles.set(actionId, styleKind);
@@ -521,7 +561,7 @@ function generateActivityView(symbols: SysMLSymbol[], symbolTable: Map<string, S
     }
 
     if (elementCount === 0) {
-        return generateGeneralView(symbols, symbolTable);
+        return generateGeneralView(symbols, lookup);
     }
 
     // Styling
@@ -539,7 +579,7 @@ function generateActivityView(symbols: SysMLSymbol[], symbolTable: Map<string, S
 // State → Mermaid stateDiagram-v2
 // ---------------------------------------------------------------------------
 
-function generateStateView(symbols: SysMLSymbol[], symbolTable: Map<string, SysMLSymbol>): MermaidResult {
+function generateStateView(symbols: SysMLSymbol[], lookup: SymbolLookup): MermaidResult {
     const lines: string[] = [
         '%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#f3e5f5", "lineColor": "#546E7A"}}}%%',
         'stateDiagram-v2',
@@ -555,21 +595,21 @@ function generateStateView(symbols: SysMLSymbol[], symbolTable: Map<string, SysM
     const transitions = symbols.filter(s => s.kind === SysMLElementKind.TransitionUsage);
 
     // Build parent→children index (sym.children is not populated by the parser)
-    const childrenOf = buildChildrenIndex([...symbolTable.values()]);
+    const childrenOf = buildChildrenIndex([...lookup.byElementId.values()]);
 
     // State definitions as composite states
     for (const def of stateDefs) {
-        const defId = safeId(def.qualifiedName);
-        lines.push(`    state "${escapeLabel(def.name)}" as ${defId} {`);
+        const defId = nodeId(def);
+        lines.push(`    state "${escapeLabel(displayName(def))}" as ${defId} {`);
         nodeStyles.set(defId, 'StateDef');
         elementCount++;
 
-        const childStates = (childrenOf.get(def.qualifiedName) ?? [])
+        const childStates = (childrenOf.get(def.elementId) ?? [])
             .filter(c => c.kind === SysMLElementKind.StateUsage || c.kind === SysMLElementKind.ExhibitStateUsage);
 
         for (const child of childStates) {
-            const childId = safeId(child.qualifiedName);
-            lines.push(`        ${childId} : ${escapeLabel(child.name)}`);
+            const childId = nodeId(child);
+            lines.push(`        ${childId} : ${escapeLabel(displayName(child))}`);
             nodeStyles.set(childId, 'StateUsage');
             elementCount++;
         }
@@ -579,11 +619,11 @@ function generateStateView(symbols: SysMLSymbol[], symbolTable: Map<string, SysM
 
     // Standalone states
     for (const state of states) {
-        if (state.parentQualifiedName && stateDefs.some(d => d.qualifiedName === state.parentQualifiedName)) {
+        if (stateDefs.some(d => d.elementId === state.parentId)) {
             continue;
         }
-        const stateId = safeId(state.qualifiedName);
-        lines.push(`    ${stateId} : ${escapeLabel(state.name)}`);
+        const stateId = nodeId(state);
+        lines.push(`    ${stateId} : ${escapeLabel(displayName(state))}`);
         nodeStyles.set(stateId, 'StateUsage');
         elementCount++;
     }
@@ -594,13 +634,14 @@ function generateStateView(symbols: SysMLSymbol[], symbolTable: Map<string, SysM
 
         const resolveEndpointId = (reference: string): string => {
             const qualifiedReference = reference.replace(/\./g, '::');
-            const relativeName = trans.parentQualifiedName
-                ? `${trans.parentQualifiedName}::${qualifiedReference}`
+            const ownerName = ownerOf(trans, lookup)?.qualifiedName;
+            const relativeName = ownerName
+                ? `${ownerName}::${qualifiedReference}`
                 : qualifiedReference;
-            const endpoint = symbolTable.get(relativeName)
-                ?? symbolTable.get(qualifiedReference)
-                ?? symbolTable.get(reference);
-            return safeId(endpoint?.qualifiedName ?? reference);
+            const endpoint = lookup.byName.get(relativeName)
+                ?? lookup.byName.get(qualifiedReference)
+                ?? lookup.byName.get(reference);
+            return endpoint ? nodeId(endpoint) : safeId(reference);
         };
 
         const srcId = resolveEndpointId(trans.source);
@@ -612,7 +653,7 @@ function generateStateView(symbols: SysMLSymbol[], symbolTable: Map<string, SysM
     }
 
     if (elementCount === 0) {
-        return generateGeneralView(symbols, symbolTable);
+        return generateGeneralView(symbols, lookup);
     }
 
     // Styling
@@ -630,7 +671,7 @@ function generateStateView(symbols: SysMLSymbol[], symbolTable: Map<string, SysM
 // Interconnection → Mermaid flowchart (parts + ports + connections)
 // ---------------------------------------------------------------------------
 
-function generateInterconnectionView(symbols: SysMLSymbol[], symbolTable: Map<string, SysMLSymbol>): MermaidResult {
+function generateInterconnectionView(symbols: SysMLSymbol[], lookup: SymbolLookup): MermaidResult {
     const lines: string[] = [
         '%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#f1f8e9", "lineColor": "#546E7A"}}}%%',
         'flowchart LR',
@@ -647,22 +688,22 @@ function generateInterconnectionView(symbols: SysMLSymbol[], symbolTable: Map<st
     );
 
     // Build parent→children index (sym.children is not populated by the parser)
-    const childrenOf = buildChildrenIndex([...symbolTable.values()]);
+    const childrenOf = buildChildrenIndex([...lookup.byElementId.values()]);
 
     for (const part of parts) {
-        const id = safeId(part.qualifiedName);
-        const label = escapeLabel(part.name);
-        const typeStr = part.typeNames.length > 0 ? `\\n: ${part.typeNames[0]}` : '';
+        const id = nodeId(part);
+        const label = escapeLabel(displayName(part));
+        const typeStr = part.name && part.typeNames.length > 0 ? `\\n: ${part.typeNames[0]}` : '';
 
         // Parts with ports get rendered as subgraphs
-        const ports = (childrenOf.get(part.qualifiedName) ?? [])
+        const ports = (childrenOf.get(part.elementId) ?? [])
             .filter(c => c.kind === SysMLElementKind.PortUsage);
 
         if (ports.length > 0) {
             lines.push(`    subgraph ${id}["■ ${label}${typeStr}"]`);
             for (const port of ports) {
-                const portId = safeId(port.qualifiedName);
-                const portLabel = escapeLabel(port.name);
+                const portId = nodeId(port);
+                const portLabel = escapeLabel(displayName(port));
                 const portType = port.typeNames.length > 0 ? ` : ${port.typeNames[0]}` : '';
                 lines.push(`        ${portId}(("${portLabel}${portType}"))`);
                 nodeStyles.set(portId, 'Port');
@@ -681,13 +722,14 @@ function generateInterconnectionView(symbols: SysMLSymbol[], symbolTable: Map<st
         if (conn.typeNames.length >= 2) {
             const srcId = safeId(conn.typeNames[0]);
             const tgtId = safeId(conn.typeNames[1]);
-            const label = conn.name ? ` |${escapeLabel(conn.name)}|` : '';
+            const edgeLabel = conn.name || conn.specialization;
+            const label = edgeLabel ? ` |${escapeLabel(edgeLabel)}|` : '';
             lines.push(`    ${srcId} <-->${label} ${tgtId}`);
         }
     }
 
     if (elementCount === 0) {
-        return generateGeneralView(symbols, symbolTable);
+        return generateGeneralView(symbols, lookup);
     }
 
     // Styling
@@ -705,7 +747,7 @@ function generateInterconnectionView(symbols: SysMLSymbol[], symbolTable: Map<st
 // Sequence → Mermaid sequenceDiagram
 // ---------------------------------------------------------------------------
 
-function generateSequenceView(symbols: SysMLSymbol[], symbolTable: Map<string, SysMLSymbol>): MermaidResult {
+function generateSequenceView(symbols: SysMLSymbol[], lookup: SymbolLookup): MermaidResult {
     const lines: string[] = [
         '%%{init: {"theme": "base", "themeVariables": {"actorBkg": "#e0f7fa", "actorTextColor": "#006064", "signalColor": "#546E7A", "labelBoxBkgColor": "#e8f5e9"}}}%%',
         'sequenceDiagram',
@@ -736,11 +778,11 @@ function generateSequenceView(symbols: SysMLSymbol[], symbolTable: Map<string, S
 
     // Declare participants
     for (const p of participants) {
-        const label = escapeLabel(p.name);
+        const label = escapeLabel(displayName(p));
         if (p.kind === SysMLElementKind.ActorUsage) {
-            lines.push(`    actor ${safeId(p.name)} as ${label}`);
+            lines.push(`    actor ${nodeId(p)} as ${label}`);
         } else {
-            lines.push(`    participant ${safeId(p.name)} as ${label}`);
+            lines.push(`    participant ${nodeId(p)} as ${label}`);
         }
         elementCount++;
     }
@@ -753,20 +795,20 @@ function generateSequenceView(symbols: SysMLSymbol[], symbolTable: Map<string, S
     //      second half return Pn→…→P1→P0.
     //      This models a natural request-response chain.
     if (messages.length > 0 && participants.length >= 2) {
-        const pIds = participants.map(p => safeId(p.name));
+        const pIds = participants.map(p => nodeId(p));
         const n = pIds.length;
 
         for (let i = 0; i < messages.length; i++) {
             const msg = messages[i];
-            const label = escapeLabel(msg.name);
+            const label = escapeLabel(displayName(msg));
 
             let srcIdx: number;
             let tgtIdx: number;
 
             if (msg.typeNames.length >= 2) {
                 // Explicit source/target from type annotations
-                srcIdx = pIds.indexOf(safeId(msg.typeNames[0]));
-                tgtIdx = pIds.indexOf(safeId(msg.typeNames[1]));
+                srcIdx = participants.findIndex(p => p.name === msg.typeNames[0]);
+                tgtIdx = participants.findIndex(p => p.name === msg.typeNames[1]);
                 if (srcIdx < 0) srcIdx = 0;
                 if (tgtIdx < 0) tgtIdx = Math.min(1, n - 1);
             } else {
@@ -790,13 +832,13 @@ function generateSequenceView(symbols: SysMLSymbol[], symbolTable: Map<string, S
     } else if (messages.length > 0) {
         // Not enough participants — render as notes
         for (const msg of messages) {
-            lines.push(`    Note over ${participants.length > 0 ? safeId(participants[0].name) : 'System'}: ${escapeLabel(msg.name)}`);
+            lines.push(`    Note over ${participants.length > 0 ? nodeId(participants[0]) : 'System'}: ${escapeLabel(displayName(msg))}`);
             elementCount++;
         }
     }
 
     if (elementCount === 0) {
-        return generateGeneralView(symbols, symbolTable);
+        return generateGeneralView(symbols, lookup);
     }
 
     return {
@@ -811,7 +853,7 @@ function generateSequenceView(symbols: SysMLSymbol[], symbolTable: Map<string, S
 // Use Case → Mermaid flowchart (actors + use cases + relationships)
 // ---------------------------------------------------------------------------
 
-function generateUseCaseView(symbols: SysMLSymbol[], symbolTable: Map<string, SysMLSymbol>): MermaidResult {
+function generateUseCaseView(symbols: SysMLSymbol[], lookup: SymbolLookup): MermaidResult {
     const lines: string[] = [
         '%%{init: {"theme": "base", "themeVariables": {"primaryColor": "#e1f5fe", "lineColor": "#546E7A"}}}%%',
         'flowchart LR',
@@ -830,8 +872,8 @@ function generateUseCaseView(symbols: SysMLSymbol[], symbolTable: Map<string, Sy
     // ── De-duplicate: keep defs; drop usages whose type matches a def ───
     const untypedUsages = allUseCaseUsages.filter(u =>
         !u.typeNames.some(t => {
-            const resolved = symbolTable.get(t)
-                ?? [...symbolTable.values()].find(s => s.name === t);
+            const resolved = lookup.byName.get(t)
+                ?? [...lookup.byName.values()].find(s => s.name === t);
             return resolved && resolved.kind === SysMLElementKind.UseCaseDef;
         }),
     );
@@ -841,10 +883,11 @@ function generateUseCaseView(symbols: SysMLSymbol[], symbolTable: Map<string, Sy
     // In SysML v2, actor usages live inside use case def bodies (not at
     // package level).  The same actor name may appear in multiple use case
     // defs, so we de-duplicate by name for node rendering and keep every
-    // occurrence for association arrows.
-    const uniqueActorNames = new Map<string, SysMLSymbol>(); // name → first occurrence
+    // occurrence for association arrows. An anonymous actor goes by its
+    // display text, so `actor : User;` in several use cases is one node.
+    const uniqueActorNames = new Map<string, SysMLSymbol>(); // display text → first occurrence
     for (const a of actors) {
-        if (!uniqueActorNames.has(a.name)) uniqueActorNames.set(a.name, a);
+        if (!uniqueActorNames.has(displayName(a))) uniqueActorNames.set(displayName(a), a);
     }
 
     lines.push('    %% Actors');
@@ -860,23 +903,20 @@ function generateUseCaseView(symbols: SysMLSymbol[], symbolTable: Map<string, Sy
     const renderedUCs = new Set<string>();
 
     for (const pkg of packages) {
-        const pkgId = safeId(pkg.qualifiedName);
+        const pkgId = nodeId(pkg);
         // Gather canonical use cases that are direct or nested children of
         // this package (but NOT actors — they live outside the boundary).
-        const childUCs = canonicalUseCases.filter(uc =>
-            uc.parentQualifiedName === pkg.qualifiedName
-            || uc.parentQualifiedName?.startsWith(pkg.qualifiedName + '::'),
-        );
+        const childUCs = canonicalUseCases.filter(uc => isOwnedBy(uc, pkg, lookup));
 
         if (childUCs.length > 0) {
-            lines.push(`    subgraph ${pkgId}["📦 ${escapeLabel(pkg.name)}"]`);
+            lines.push(`    subgraph ${pkgId}["📦 ${escapeLabel(displayName(pkg))}"]`);
             nodeStyles.set(pkgId, 'Package');
 
             for (const uc of childUCs) {
-                const ucId = safeId(uc.qualifiedName);
-                lines.push(`        ${ucId}(["${escapeLabel(uc.name)}"])`);
+                const ucId = nodeId(uc);
+                lines.push(`        ${ucId}(["${escapeLabel(displayName(uc))}"])`);
                 nodeStyles.set(ucId, 'UseCaseDef');
-                renderedUCs.add(uc.qualifiedName);
+                renderedUCs.add(uc.elementId);
                 elementCount++;
             }
 
@@ -887,11 +927,11 @@ function generateUseCaseView(symbols: SysMLSymbol[], symbolTable: Map<string, Sy
 
     // Render use cases not inside any package
     for (const uc of canonicalUseCases) {
-        if (renderedUCs.has(uc.qualifiedName)) continue;
-        const ucId = safeId(uc.qualifiedName);
-        lines.push(`    ${ucId}(["${escapeLabel(uc.name)}"])`);
+        if (renderedUCs.has(uc.elementId)) continue;
+        const ucId = nodeId(uc);
+        lines.push(`    ${ucId}(["${escapeLabel(displayName(uc))}"])`);
         nodeStyles.set(ucId, 'UseCaseDef');
-        renderedUCs.add(uc.qualifiedName);
+        renderedUCs.add(uc.elementId);
         elementCount++;
     }
 
@@ -901,14 +941,12 @@ function generateUseCaseView(symbols: SysMLSymbol[], symbolTable: Map<string, Sy
     const emittedEdges = new Set<string>();
     lines.push('    %% Associations');
     for (const actor of actors) {
-        const actorId = `actor_${safeId(actor.name)}`;
+        const actorId = `actor_${safeId(displayName(actor))}`;
 
         // Case A: Actor is nested inside a UseCaseDef → explicit participation
-        const parentSym = actor.parentQualifiedName
-            ? symbolTable.get(actor.parentQualifiedName)
-            : undefined;
+        const parentSym = ownerOf(actor, lookup);
         if (parentSym && parentSym.kind === SysMLElementKind.UseCaseDef) {
-            const ucId = safeId(parentSym.qualifiedName);
+            const ucId = nodeId(parentSym);
             const edgeKey = `${actorId}-->${ucId}`;
             if (!emittedEdges.has(edgeKey)) {
                 lines.push(`    ${actorId} --> ${ucId}`);
@@ -920,10 +958,10 @@ function generateUseCaseView(symbols: SysMLSymbol[], symbolTable: Map<string, Sy
         // Case B: Actor at package/root level → connect to all sibling
         // canonical use cases (standard UML heuristic).
         const siblings = canonicalUseCases.filter(uc =>
-            uc.parentQualifiedName === actor.parentQualifiedName,
+            uc.parentId === actor.parentId,
         );
         for (const uc of siblings) {
-            const ucId = safeId(uc.qualifiedName);
+            const ucId = nodeId(uc);
             const edgeKey = `${actorId}-->${ucId}`;
             if (!emittedEdges.has(edgeKey)) {
                 lines.push(`    ${actorId} --> ${ucId}`);
@@ -936,16 +974,15 @@ function generateUseCaseView(symbols: SysMLSymbol[], symbolTable: Map<string, Sy
     for (const inc of includes) {
         if (inc.typeNames.length === 0) continue;
         const targetName = inc.typeNames[0];
-        const target = symbolTable.get(targetName)
-            ?? [...symbolTable.values()].find(s => s.name === targetName);
+        const target = lookup.byName.get(targetName)
+            ?? [...lookup.byName.values()].find(s => s.name === targetName);
         if (!target) continue;
 
         // Source is the parent element (ideally a UseCaseDef).
-        const srcQName = inc.parentQualifiedName;
-        const src = srcQName ? symbolTable.get(srcQName) : undefined;
+        const src = ownerOf(inc, lookup);
         if (src && (src.kind === SysMLElementKind.UseCaseDef
             || src.kind === SysMLElementKind.UseCaseUsage)) {
-            lines.push(`    ${safeId(src.qualifiedName)} -.->|"«include»"| ${safeId(target.qualifiedName)}`);
+            lines.push(`    ${nodeId(src)} -.->|"«include»"| ${nodeId(target)}`);
         }
         // If the include lives at package level we can't determine a source
         // use case, so we omit the arrow rather than draw a misleading one.
@@ -953,32 +990,30 @@ function generateUseCaseView(symbols: SysMLSymbol[], symbolTable: Map<string, Sy
 
     // ── Subject nodes ───────────────────────────────────────────────────
     for (const subj of subjects) {
-        const subjId = safeId(subj.qualifiedName);
-        lines.push(`    ${subjId}["📋 ${escapeLabel(subj.name)}"]`);
+        const subjId = nodeId(subj);
+        lines.push(`    ${subjId}["📋 ${escapeLabel(displayName(subj))}"]`);
         nodeStyles.set(subjId, 'SubjectUsage');
         elementCount++;
     }
 
     // ── Stakeholder nodes ───────────────────────────────────────────────
     for (const sh of stakeholders) {
-        const shId = safeId(sh.qualifiedName);
-        lines.push(`    ${shId}{{"👤 ${escapeLabel(sh.name)}"}}`);
+        const shId = nodeId(sh);
+        lines.push(`    ${shId}{{"👤 ${escapeLabel(displayName(sh))}"}}`);
         nodeStyles.set(shId, 'StakeholderUsage');
         elementCount++;
 
         // Connect stakeholder to its parent requirement
-        const parentSym = sh.parentQualifiedName
-            ? symbolTable.get(sh.parentQualifiedName)
-            : undefined;
+        const parentSym = ownerOf(sh, lookup);
         if (parentSym && (parentSym.kind === SysMLElementKind.RequirementDef
             || parentSym.kind === SysMLElementKind.RequirementUsage)) {
-            const reqId = safeId(parentSym.qualifiedName);
+            const reqId = nodeId(parentSym);
             lines.push(`    ${shId} -.->|"«stakeholder»"| ${reqId}`);
         }
     }
 
     if (elementCount === 0) {
-        return generateGeneralView(symbols, symbolTable);
+        return generateGeneralView(symbols, lookup);
     }
 
     // Styling
@@ -1008,32 +1043,33 @@ export function generateMermaidDiagram(
     allSymbols: SysMLSymbol[],
     diagramType?: DiagramType,
 ): MermaidResult {
-    // Build a lookup map for cross-references
-    const symbolTable = new Map<string, SysMLSymbol>();
+    // Build lookups for cross-references: by name, and by elementId for owners
+    const lookup: SymbolLookup = { byName: new Map(), byElementId: new Map() };
     for (const s of allSymbols) {
-        symbolTable.set(s.qualifiedName, s);
+        if (s.qualifiedName !== undefined) lookup.byName.set(s.qualifiedName, s);
         // Also index by simple name for type lookups
-        if (!symbolTable.has(s.name)) {
-            symbolTable.set(s.name, s);
+        if (!lookup.byName.has(s.name)) {
+            lookup.byName.set(s.name, s);
         }
+        lookup.byElementId.set(s.elementId, s);
     }
 
     const type = diagramType ?? inferDiagramType(symbols);
 
     switch (type) {
         case 'activity':
-            return generateActivityView(symbols, symbolTable);
+            return generateActivityView(symbols, lookup);
         case 'state':
-            return generateStateView(symbols, symbolTable);
+            return generateStateView(symbols, lookup);
         case 'sequence':
-            return generateSequenceView(symbols, symbolTable);
+            return generateSequenceView(symbols, lookup);
         case 'usecase':
-            return generateUseCaseView(symbols, symbolTable);
+            return generateUseCaseView(symbols, lookup);
         case 'interconnection':
-            return generateInterconnectionView(symbols, symbolTable);
+            return generateInterconnectionView(symbols, lookup);
         case 'general':
         default:
-            return generateGeneralView(symbols, symbolTable);
+            return generateGeneralView(symbols, lookup);
     }
 }
 
@@ -1044,16 +1080,17 @@ export function diffSymbols(
     originalSymbols: SysMLSymbol[],
     modifiedSymbols: SysMLSymbol[],
 ): { added: SysMLSymbol[]; changed: SysMLSymbol[]; removed: string[]; unchanged: SysMLSymbol[] } {
-    const origMap = new Map(originalSymbols.map(s => [s.qualifiedName, s]));
-    const modMap = new Map(modifiedSymbols.map(s => [s.qualifiedName, s]));
+    // Matched by elementId: stable across edits, for anonymous elements too
+    const origMap = new Map(originalSymbols.map(s => [s.elementId, s]));
+    const modMap = new Map(modifiedSymbols.map(s => [s.elementId, s]));
 
     const added: SysMLSymbol[] = [];
     const changed: SysMLSymbol[] = [];
     const unchanged: SysMLSymbol[] = [];
     const removed: string[] = [];
 
-    for (const [qn, sym] of modMap) {
-        const orig = origMap.get(qn);
+    for (const [elementId, sym] of modMap) {
+        const orig = origMap.get(elementId);
         if (!orig) {
             added.push(sym);
         } else if (
@@ -1073,9 +1110,9 @@ export function diffSymbols(
         }
     }
 
-    for (const [qn] of origMap) {
-        if (!modMap.has(qn)) {
-            removed.push(qn);
+    for (const [elementId, orig] of origMap) {
+        if (!modMap.has(elementId)) {
+            removed.push(orig.qualifiedName ?? orig.name);
         }
     }
 

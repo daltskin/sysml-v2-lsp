@@ -67,11 +67,13 @@ export class HoverProvider {
 
         // Header: metaclass name and symbol name
         const metaclass = toMetaclassName(symbol.kind);
-        lines.push(`**${metaclass}** \`${symbol.name}\``);
+        lines.push(symbol.name ? `**${metaclass}** \`${symbol.name}\`` : `**${metaclass}**`);
 
-        // Qualified name
-        if (symbol.qualifiedName !== symbol.name) {
-            lines.push(`\nFully qualified: \`${symbol.qualifiedName}\``);
+        // Qualified name -- an anonymous element, and any member of one, has none (KerML)
+        if (symbol.qualifiedName === undefined) {
+            lines.push('\nNo qualified name');
+        } else if (symbol.qualifiedName !== symbol.name) {
+            lines.push(`\nQualified name: \`${symbol.qualifiedName}\``);
         }
 
         // Type info — also enrich with library info when available

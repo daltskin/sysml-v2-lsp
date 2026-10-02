@@ -125,9 +125,8 @@ export class CodeActionProvider {
             if (s.name !== unresolvedType) continue;
             if (s.uri === uri) continue;
 
-            const parentQn = s.parentQualifiedName || '';
-            const qn = s.qualifiedName || '';
-            const pkg = (parentQn.split('::')[0] || qn.split('::')[0] || '').trim();
+            // The top-level namespace of its qualified name; one without can't be imported.
+            const pkg = (s.qualifiedName?.split('::')[0] ?? '').trim();
             if (!pkg || pkg === unresolvedType) continue;
             if (pkg) packageNames.add(pkg);
         }
@@ -593,7 +592,7 @@ export class CodeActionProvider {
 
         const scope = scopeName ? symbolsInUri.find((s) => s.name === scopeName) : undefined;
         const scopeMembers = scope
-            ? allSymbols.filter((s) => s.parentQualifiedName === scope.qualifiedName)
+            ? allSymbols.filter((s) => s.parentId === scope.elementId)
             : [];
         const rootUsage = scopeMembers.find((s) => s.name === root)
             ?? symbolsInUri.find((s) => s.name === root && !!(s.typeNames[0] ?? s.typeName));
@@ -604,7 +603,7 @@ export class CodeActionProvider {
             const typeDef = allSymbols.find((s) => s.name === rootType && s.kind.endsWith(' def'));
             if (typeDef) {
                 memberNames = allSymbols
-                    .filter((s) => s.parentQualifiedName === typeDef.qualifiedName)
+                    .filter((s) => s.parentId === typeDef.elementId)
                     .map((s) => s.name);
             }
         }

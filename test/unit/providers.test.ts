@@ -955,6 +955,7 @@ describe('Hover Provider', () => {
 
         expect(hover).not.toBeNull();
         expect((hover!.contents as unknown as { value: string }).value).toContain('Vehicle');
+        expect((hover!.contents as unknown as { value: string }).value).toContain(`Qualified name: \`${vehicleSym.qualifiedName}\``);
     });
 
     it('should return null for empty position', async () => {
@@ -1441,5 +1442,132 @@ describe('Diagnostics Provider', () => {
         const provider = new DiagnosticsProvider(dm);
         const diags = provider.getDiagnostics('test://test.sysml');
         expect(diags.length).toBe(0);
+    });
+});
+
+describe('Anonymous elements in the outline and workspace symbols', () => {
+    const text = `package Demo {
+    part a { port p; }
+    part b { port p; }
+    connect a.p to b.p { attribute w; }
+}
+`;
+
+    it('shows an anonymous connection in the outline by its ends, with its kind as detail and its members nested under it', async () => {
+        const { DocumentSymbolProvider } = await import('../../server/src/providers/documentSymbolProvider.js');
+        const { dm } = await setup(text);
+        const [demo] = new DocumentSymbolProvider(dm).provideDocumentSymbols({ textDocument: { uri: 'test://test.sysml' } });
+        const connection = demo.children!.find(c => c.name === 'a.p→b.p')!;
+        expect(connection).toBeDefined();
+        expect(connection.detail).toBe('ConnectionUsage');
+        expect(connection.children!.map(c => c.name)).toEqual(['w']);
+    });
+
+    it('never lists a workspace symbol without a name', async () => {
+        const { WorkspaceSymbolProvider } = await import('../../server/src/providers/workspaceSymbolProvider.js');
+        const { dm } = await setup(text);
+        const all = new WorkspaceSymbolProvider(dm).provideWorkspaceSymbols({ query: '' });
+        expect(all.every(s => s.name.length > 0)).toBe(true);
+        expect(all.map(s => s.name)).toContain('a.p→b.p');
+    });
+});
+
+describe('Hover and completion for elements without a qualified name', () => {
+    const text = `package Demo {
+    part a { port p; }
+    part b { port p; }
+    connect a.p to b.p { attribute flowRate; part def Coupling; }
+}
+`;
+
+    it('shows an anonymous element and its members without an undefined qualified name', async () => {
+        const { HoverProvider } = await import('../../server/src/providers/hoverProvider.js');
+        const { dm } = await setup(text);
+        const provider = new HoverProvider(dm);
+        // The anonymous connection (its selection range is its first token, `connect`) and its member `flowRate`.
+        const hovers = [[3, 4], [3, 36]].map(([line, character]) =>
+            (provider.provideHover({ textDocument: { uri: 'test://test.sysml' }, position: { line, character } })!.contents as unknown as { value: string }).value);
+        // No name to show for the anonymous connection: only its metaclass.
+        expect(hovers[0].split('\n')[0]).toBe('**ConnectionUsage**');
+        expect(hovers[1].split('\n')[0]).toBe('**AttributeUsage** `flowRate`');
+        for (const hover of hovers) {
+            expect(hover).toContain('No qualified name');
+            expect(hover).not.toContain('undefined');
+        }
+        // A top-level element's qualified name is its name: not repeated.
+        const packageHover = (provider.provideHover({ textDocument: { uri: 'test://test.sysml' }, position: { line: 0, character: 9 } })!.contents as unknown as { value: string }).value;
+        expect(packageHover).toContain('**Package** `Demo`');
+        expect(packageHover).not.toMatch(/qualified name/i);
+    });
+
+    it('offers a definition inside an anonymous element without an undefined qualified name', async () => {
+        const { CompletionProvider } = await import('../../server/src/providers/completionProvider.js');
+        const { dm } = await setup(text);
+        const items = new CompletionProvider(dm).provideCompletions({
+            textDocument: { uri: 'test://test.sysml' },
+            position: { line: 4, character: 0 },
+        });
+        const coupling = items.find(i => i.label === 'Coupling');
+        expect(coupling).toBeDefined();
+        expect(coupling!.detail).toBe('part def');
+    });
+});
+
+describe('Position-based features on an anonymous element', () => {
+    const text = `package Demo {
+    part a { port p; }
+    part b { port p; }
+    connect a.p to b.p { attribute flowRate; }
+}
+`;
+    const uri = 'test://test.sysml';
+
+    it('selects an anonymous connection by its first token, not by a name in its ends', async () => {
+        const { SymbolTable } = await import('../../server/src/symbols/symbolTable.js');
+        const { dm } = await setup(text);
+        const st = new SymbolTable();
+        st.build(uri, dm.get(uri)!);
+        const connection = st.getSymbolsForUri(uri).find(s => s.kind === 'connection')!;
+        expect(connection.selectionRange).toEqual({ start: { line: 3, character: 4 }, end: { line: 3, character: 11 } });
+    });
+
+    it('goes to the part from its name in an anonymous connection\'s ends', async () => {
+        const { DefinitionProvider } = await import('../../server/src/providers/definitionProvider.js');
+        const { dm } = await setup(text);
+        const location = new DefinitionProvider(dm).provideDefinition({ textDocument: { uri }, position: { line: 3, character: 12 } });
+        expect(location?.range.start).toEqual({ line: 1, character: 9 });
+    });
+
+    it('finds no references to, and no linked editing ranges for, an anonymous element', async () => {
+        const { ReferencesProvider } = await import('../../server/src/providers/referencesProvider.js');
+        const { LinkedEditingRangeProvider } = await import('../../server/src/providers/linkedEditingRangeProvider.js');
+        const { dm } = await setup(text);
+        const onKeyword = { textDocument: { uri }, position: { line: 3, character: 4 } };
+        expect(new ReferencesProvider(dm).provideReferences({ ...onKeyword, context: { includeDeclaration: true } })).toEqual([]);
+        expect(new LinkedEditingRangeProvider(dm).provideLinkedEditingRanges(onKeyword)).toBeNull();
+    });
+
+    it('never renames an anonymous element, and never edits at an empty name', async () => {
+        const { RenameProvider } = await import('../../server/src/providers/renameProvider.js');
+        const { dm } = await setup(text);
+        const provider = new RenameProvider(dm);
+        // On the `connect` keyword: the anonymous connection, which has no name to rename.
+        expect(provider.prepareRename({ textDocument: { uri }, position: { line: 3, character: 4 } })).toBeNull();
+        expect(provider.provideRename({ textDocument: { uri }, position: { line: 3, character: 4 }, newName: 'z' })).toBeNull();
+        // On `a` in its ends: never the anonymous connection, and no zero-width edits.
+        const edit = provider.provideRename({ textDocument: { uri }, position: { line: 3, character: 12 }, newName: 'z' });
+        const edits = Object.values(edit?.changes ?? {}).flat();
+        expect(edits.every(e => e.range.start.character !== e.range.end.character || e.range.start.line !== e.range.end.line)).toBe(true);
+    });
+});
+
+describe('Hover on an anonymous typed usage', () => {
+    it('shows its metaclass, no qualified name and its type, never the type as its name', async () => {
+        const { HoverProvider } = await import('../../server/src/providers/hoverProvider.js');
+        const { dm } = await setup('package Demo {\n    port def Q;\n    part a {\n        port : Q;\n    }\n}\n');
+        const hover = new HoverProvider(dm).provideHover({ textDocument: { uri: 'test://test.sysml' }, position: { line: 3, character: 8 } });
+        expect((hover!.contents as unknown as { value: string }).value.split('\n').filter(l => l)).toEqual([
+            '**PortUsage**', 'No qualified name', 'Type: `Q`',
+        ]);
     });
 });

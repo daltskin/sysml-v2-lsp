@@ -34,11 +34,12 @@ export class ElementLookupProvider {
         for (const query of params?.queries ?? []) {
             const kind = query.kind ?? (query.name.includes('::') ? 'qualifiedName' : 'name');
             const matches = this.resolveMatches(allSymbols, query.name, kind, query.scope);
+            // A package declared in several documents is one element, reported once.
             const matchedPackages = new Set<string>();
             results[query.name] = matches.filter(sym => {
                 if (sym.kind !== SysMLElementKind.Package) return true;
-                if (matchedPackages.has(sym.qualifiedName)) return false;
-                matchedPackages.add(sym.qualifiedName);
+                if (matchedPackages.has(sym.elementId)) return false;
+                matchedPackages.add(sym.elementId);
                 return true;
             }).map(sym => this.toElementMatch(sym));
         }
@@ -62,7 +63,8 @@ export class ElementLookupProvider {
                 return allSymbols.filter(sym => sym.qualifiedName === target);
             }
             const suffix = `::${name}`;
-            return allSymbols.filter(sym => sym.qualifiedName === name || sym.qualifiedName.endsWith(suffix));
+            return allSymbols.filter(sym => sym.qualifiedName !== undefined
+                && (sym.qualifiedName === name || sym.qualifiedName.endsWith(suffix)));
         }
         if (kind === 'shortName') {
             return this.withinScope(allSymbols, scope).filter(sym => sym.shortName === name);
@@ -78,14 +80,24 @@ export class ElementLookupProvider {
     private withinScope(symbols: SysMLSymbol[], scope: string | undefined): SysMLSymbol[] {
         if (!scope) return symbols;
         const prefix = `${scope}::`;
-        return symbols.filter(sym => sym.qualifiedName.startsWith(prefix));
+        const byElementId = new Map(symbols.map(sym => [sym.elementId, sym]));
+        return symbols.filter(sym => {
+            if (sym.qualifiedName !== undefined) return sym.qualifiedName.startsWith(prefix);
+            // Without a qualified name (inside an anonymous element): placed by its nearest owner that has one.
+            let owner = sym.parentId ? byElementId.get(sym.parentId) : undefined;
+            while (owner && owner.qualifiedName === undefined) {
+                owner = owner.parentId ? byElementId.get(owner.parentId) : undefined;
+            }
+            return owner?.qualifiedName !== undefined && `${owner.qualifiedName}::`.startsWith(prefix);
+        });
     }
 
     private toElementMatch(sym: SysMLSymbol): ElementMatch {
         return {
             name: sym.name,
             shortName: sym.shortName,
-            qualifiedName: sym.qualifiedName,
+            qualifiedName: sym.qualifiedName ?? null,
+            elementId: sym.elementId,
             type: sym.kind,
             uri: sym.uri,
             range: sym.range,

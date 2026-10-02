@@ -2,6 +2,7 @@ import { Token } from 'antlr4ng';
 import { Diagnostic, DiagnosticSeverity } from 'vscode-languageserver/node';
 import { SysMLv2Lexer } from '../generated/SysMLv2Lexer.js';
 import { ParseResult } from '../parser/parseDocument.js';
+import { EMPTY_NAME_MESSAGE, isEmptyName } from '../utils/emptyNames.js';
 
 /**
  * SysML definition/usage keywords — tokens that can appear at the start
@@ -269,6 +270,19 @@ export function validateKeywords(result: ParseResult): Diagnostic[] {
 
     for (let i = 0; i < visibleTokens.length; i++) {
         const token = visibleTokens[i];
+
+        if (isEmptyName(token)) {
+            const line = (token.line ?? 1) - 1;
+            const char = token.column ?? 0;
+            diagnostics.push({
+                severity: DiagnosticSeverity.Error,
+                range: { start: { line, character: char }, end: { line, character: char + 2 } },
+                message: EMPTY_NAME_MESSAGE,
+                source: 'sysml',
+                code: 'empty-name',
+            });
+            continue;
+        }
 
         // Only check IDENTIFIER tokens
         if (token.type !== SysMLv2Lexer.IDENTIFIER) continue;

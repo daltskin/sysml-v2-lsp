@@ -6,7 +6,7 @@ import {
     TypeHierarchySupertypesParams,
 } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
-import { isDefinition, SysMLElementKind, SysMLSymbol } from '../symbols/sysmlElements.js';
+import { displayName, isDefinition, SysMLElementKind, SysMLSymbol } from '../symbols/sysmlElements.js';
 
 /**
  * Provides type hierarchy for SysML definitions.
@@ -78,7 +78,7 @@ export class TypeHierarchyProvider {
 
     private toTypeHierarchyItem(sym: SysMLSymbol): TypeHierarchyItem {
         return {
-            name: sym.name,
+            name: displayName(sym),
             kind: this.toSymbolKind(sym.kind),
             uri: sym.uri,
             range: sym.range,

@@ -10,7 +10,7 @@ import {
     Position,
 } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
-import { SysMLElementKind, SysMLSymbol } from '../symbols/sysmlElements.js';
+import { displayName, SysMLElementKind, SysMLSymbol } from '../symbols/sysmlElements.js';
 import { isIdentPart as isWordChar } from '../utils/identUtils.js';
 
 /**
@@ -326,7 +326,7 @@ export class CallHierarchyProvider {
 
     private toCallHierarchyItem(sym: SysMLSymbol): CallHierarchyItem {
         return {
-            name: sym.name,
+            name: displayName(sym),
             kind: sym.kind.includes('action') ? SymbolKind.Method
                 : sym.kind.includes('state') ? SymbolKind.Enum
                     : sym.kind.includes('calc') ? SymbolKind.Function

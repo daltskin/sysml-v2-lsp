@@ -118,6 +118,43 @@ describe('ElementLookupProvider', () => {
         return dm;
     }
 
+    it('reports a null qualified name, and the elementId, for a member of an anonymous element', async () => {
+        const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+        const text = `
+package Demo {
+    part a { port p; }
+    part b { port p; }
+    connect a.p to b.p { attribute flowRate; }
+}`;
+        const dm = await setupMulti([{ uri: 'test://a.sysml', text }]);
+        const { results } = new ElementLookupProvider(dm).elementLookup({ queries: [{ name: 'flowRate' }, { name: 'a' }] });
+        expect(results.flowRate.map(m => [m.qualifiedName, typeof m.elementId])).toEqual([[null, 'string']]);
+        expect(results.a.map(m => m.qualifiedName)).toEqual(['Demo::a']);
+    });
+
+    it('finds a member of an anonymous element within the scope of its nearest named owner', async () => {
+        const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+        const text = `
+package Demo {
+    part def Engine;
+    part car {
+        part : Engine {
+            part : Engine { attribute rpm; }
+        }
+    }
+}
+package Other;`;
+        const dm = await setupMulti([{ uri: 'test://a.sysml', text }]);
+        const provider = new ElementLookupProvider(dm);
+        // rpm is two anonymous levels below car: placed by car, its nearest owner with a qualified name.
+        for (const scope of ['Demo', 'Demo::car']) {
+            const { results } = provider.elementLookup({ queries: [{ name: 'rpm', scope }] });
+            expect(results.rpm.map(m => m.qualifiedName)).toEqual([null]);
+        }
+        const { results } = provider.elementLookup({ queries: [{ name: 'rpm', scope: 'Other' }] });
+        expect(results.rpm).toEqual([]);
+    });
+
     it('returns an empty array for a name that does not exist', async () => {
         const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
 

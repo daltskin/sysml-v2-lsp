@@ -24,6 +24,7 @@ import { SysMLv2Lexer } from '../generated/SysMLv2Lexer.js';
 import { SysMLv2Parser } from '../generated/SysMLv2Parser.js';
 import { clearAllDFAStates, hasStaleDfaStates, isDfaPreSeeded, loadDFASnapshot, markDfaNotPreSeeded } from './dfaLoader.js';
 import { SysMLErrorListener } from './errorListener.js';
+import { EMPTY_NAME_MESSAGE, isEmptyName } from '../utils/emptyNames.js';
 import { WARMUP_TEXT } from './warmupText.js';
 
 // ---------------------------------------------------------------------------
@@ -242,6 +243,7 @@ interface SerializedDiagnostic {
     range: { start: { line: number; character: number }; end: { line: number; character: number } };
     message: string;
     source: string;
+    code?: string;
     data?: Record<string, unknown>;
 }
 
@@ -263,6 +265,18 @@ export function validateKeywordsFromTokens(tokenStream: CommonTokenStream, prebu
 
     for (let i = 0; i < visible.length; i++) {
         const tok = visible[i];
+        if (isEmptyName(tok)) {
+            const line = (tok.line ?? 1) - 1;
+            const char = tok.column ?? 0;
+            diagnostics.push({
+                severity: 1, // DiagnosticSeverity.Error
+                range: { start: { line, character: char }, end: { line, character: char + 2 } },
+                message: EMPTY_NAME_MESSAGE,
+                source: 'sysml',
+                code: 'empty-name',
+            });
+            continue;
+        }
         if (tok.type !== SysMLv2Lexer.IDENTIFIER || !tok.text) continue;
 
         // Check previous token — if it's a definition keyword, this is a name

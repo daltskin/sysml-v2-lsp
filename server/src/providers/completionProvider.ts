@@ -121,7 +121,7 @@ export class CompletionProvider {
                 defItems.push({
                     label: sym.name,
                     kind: this.mapSymbolKindToCompletionKind(sym.kind),
-                    detail: `${sym.kind}${sym.qualifiedName !== sym.name ? ` (${sym.qualifiedName})` : ''}`,
+                    detail: `${sym.kind}${sym.qualifiedName !== undefined && sym.qualifiedName !== sym.name ? ` (${sym.qualifiedName})` : ''}`,
                     documentation: sym.documentation,
                     data: sym.qualifiedName,
                     sortText: `1_${sym.name}`,

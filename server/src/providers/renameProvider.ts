@@ -6,6 +6,7 @@ import {
     Range,
 } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
+import { isAnonymous } from '../symbols/sysmlElements.js';
 import { isIdentPart as isWordChar } from '../utils/identUtils.js';
 
 /** Find all positions where `word` appears at word boundaries in `line`. */
@@ -45,7 +46,8 @@ export class RenameProvider {
             params.position.character,
         );
 
-        if (!symbol) return null;
+        // An anonymous element has no name to rename.
+        if (!symbol || isAnonymous(symbol)) return null;
 
         return symbol.selectionRange;
     }
@@ -63,7 +65,8 @@ export class RenameProvider {
             params.position.character,
         );
 
-        if (!symbol) return null;
+        // An anonymous element has no name to rename.
+        if (!symbol || isAnonymous(symbol)) return null;
 
         // Find all occurrences of this symbol name in the document text
         const text = this.documentManager.getText(params.textDocument.uri);

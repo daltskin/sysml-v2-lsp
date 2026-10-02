@@ -2,6 +2,22 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- A definition or usage without a declared name (`part : P;`, `port :> p0;`, `connect a.p to b.p;`, `decide;`) is anonymous: it has no name or qualified name, instead of one taken from its type, a subsetted feature or its first end. A redefinition or `perform`/`exhibit`/`include` keeps the referenced name (7.6.5).
+- Anonymous elements are shown by their declaration without a name, as in the standard's graphical notation (`: Engine`, `:> p0`), else by what they connect (`a.p→b.p`, `s1→s2`), in the outline, workspace symbols, hierarchies, messages and MCP previews. `sysml/model` reports an empty `name` and `isAnonymous: true`.
+- An anonymous element is selected by its first token (`connect`): hover, go to definition and rename on `a` in `connect a.p to b.p;` now apply to `a`, not to the connection. Rename, find references and linked editing do nothing on an anonymous element, which has no name.
+- `sysml/model` reports the `if ... then`/`else` statements following a decision node as its branches, for a named decision too. Diagnostics no longer report an anonymous requirement as unsatisfied or unverified, or anonymous definitions as duplicates.
+- MCP preview diagrams give each anonymous element its own node, identified by its `elementId`, so anonymous parts of one type no longer share a sequence lifeline; named participants are identified by qualified name, as in the other views. An anonymous actor is labelled by its type (`: User`).
+- A typed transition without a source state (`transition : T then s2;`) is an anonymous element like any other, owned by and listed among the members of its owner.
+- Report an empty quoted name (`''`) as an error (`empty-name`): SysML v2 requires a name in single quotes to contain at least one character (7.2.2). An element declared with it is treated as anonymous.
+
+### Changed
+
+- Every element has an `elementId`: a version 5 UUID derived from the workspace's text, stable across reloads, moved documents and edits elsewhere. It derives from the qualified name, or from the owner's `elementId` and the declaration; clashing declarations are numbered by document and position.
+- Every element links to its owner by `SysMLSymbol.parentId`; `SysMLSymbol.parentQualifiedName` is removed, and `SysMLSymbol.qualifiedName` is optional (absent for an anonymous element and its members).
+- `sysml/model`, element lookup, the complexity report and MCP symbols report `elementId`, and `qualifiedName: null` where an element has none (as in the SysML v2 API); relationships report `sourceElementId` or `elementId`. Breaking for MCP: symbols report `parentId` (the owner's `elementId`) instead of `parent`.
+
 ## [0.32.0]
 
 ### Fixed

@@ -14,9 +14,16 @@ import { SysMLElementKind } from '../../server/src/symbols/sysmlElements.js';
 // Helpers
 // ---------------------------------------------------------------------------
 
-function sym(overrides: Partial<SysMLSymbol> & { name: string; kind: SysMLElementKind }): SysMLSymbol {
+/**
+ * A hand-made symbol. Its elementId defaults to its qualified name, so a
+ * member names its owner by that (`parent`).
+ */
+function sym({ parent, ...overrides }: Partial<SysMLSymbol> & { name: string; kind: SysMLElementKind; parent?: string }): SysMLSymbol {
+    const qualifiedName = overrides.qualifiedName ?? overrides.name;
     return {
-        qualifiedName: overrides.qualifiedName ?? overrides.name,
+        qualifiedName,
+        elementId: overrides.elementId ?? qualifiedName,
+        parentId: overrides.parentId ?? parent,
         range: overrides.range ?? { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
         selectionRange: overrides.selectionRange ?? { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
         uri: overrides.uri ?? 'test://test.sysml',
@@ -53,9 +60,9 @@ describe('Model Complexity Analyser', () => {
         it('should count definitions and usages', async () => {
             const symbols: SysMLSymbol[] = [
                 sym({ name: 'Pkg', kind: SysMLElementKind.Package, qualifiedName: 'Pkg' }),
-                sym({ name: 'Vehicle', kind: SysMLElementKind.PartDef, qualifiedName: 'Pkg::Vehicle', parentQualifiedName: 'Pkg' }),
-                sym({ name: 'engine', kind: SysMLElementKind.PartUsage, qualifiedName: 'Pkg::Vehicle::engine', parentQualifiedName: 'Pkg::Vehicle', typeName: 'Engine' }),
-                sym({ name: 'Engine', kind: SysMLElementKind.PartDef, qualifiedName: 'Pkg::Engine', parentQualifiedName: 'Pkg' }),
+                sym({ name: 'Vehicle', kind: SysMLElementKind.PartDef, qualifiedName: 'Pkg::Vehicle', parent: 'Pkg' }),
+                sym({ name: 'engine', kind: SysMLElementKind.PartUsage, qualifiedName: 'Pkg::Vehicle::engine', parent: 'Pkg::Vehicle', typeName: 'Engine' }),
+                sym({ name: 'Engine', kind: SysMLElementKind.PartDef, qualifiedName: 'Pkg::Engine', parent: 'Pkg' }),
             ];
             const r = await analyse(symbols);
             expect(r.totalElements).toBe(4);
@@ -69,9 +76,9 @@ describe('Model Complexity Analyser', () => {
         it('should compute max depth correctly', async () => {
             const symbols: SysMLSymbol[] = [
                 sym({ name: 'A', kind: SysMLElementKind.Package, qualifiedName: 'A' }),
-                sym({ name: 'B', kind: SysMLElementKind.PartDef, qualifiedName: 'A::B', parentQualifiedName: 'A' }),
-                sym({ name: 'c', kind: SysMLElementKind.PartUsage, qualifiedName: 'A::B::c', parentQualifiedName: 'A::B' }),
-                sym({ name: 'd', kind: SysMLElementKind.AttributeUsage, qualifiedName: 'A::B::c::d', parentQualifiedName: 'A::B::c' }),
+                sym({ name: 'B', kind: SysMLElementKind.PartDef, qualifiedName: 'A::B', parent: 'A' }),
+                sym({ name: 'c', kind: SysMLElementKind.PartUsage, qualifiedName: 'A::B::c', parent: 'A::B' }),
+                sym({ name: 'd', kind: SysMLElementKind.AttributeUsage, qualifiedName: 'A::B::c::d', parent: 'A::B::c' }),
             ];
             const r = await analyse(symbols);
             expect(r.maxDepth).toBe(3); // A(0) → B(1) → c(2) → d(3)
@@ -92,11 +99,11 @@ describe('Model Complexity Analyser', () => {
             // DefA has 3 children, DefB has 1 child → avg = 2.0
             const symbols: SysMLSymbol[] = [
                 sym({ name: 'DefA', kind: SysMLElementKind.PartDef, qualifiedName: 'DefA' }),
-                sym({ name: 'a1', kind: SysMLElementKind.PartUsage, qualifiedName: 'DefA::a1', parentQualifiedName: 'DefA' }),
-                sym({ name: 'a2', kind: SysMLElementKind.PartUsage, qualifiedName: 'DefA::a2', parentQualifiedName: 'DefA' }),
-                sym({ name: 'a3', kind: SysMLElementKind.AttributeUsage, qualifiedName: 'DefA::a3', parentQualifiedName: 'DefA' }),
+                sym({ name: 'a1', kind: SysMLElementKind.PartUsage, qualifiedName: 'DefA::a1', parent: 'DefA' }),
+                sym({ name: 'a2', kind: SysMLElementKind.PartUsage, qualifiedName: 'DefA::a2', parent: 'DefA' }),
+                sym({ name: 'a3', kind: SysMLElementKind.AttributeUsage, qualifiedName: 'DefA::a3', parent: 'DefA' }),
                 sym({ name: 'DefB', kind: SysMLElementKind.PartDef, qualifiedName: 'DefB' }),
-                sym({ name: 'b1', kind: SysMLElementKind.PartUsage, qualifiedName: 'DefB::b1', parentQualifiedName: 'DefB' }),
+                sym({ name: 'b1', kind: SysMLElementKind.PartUsage, qualifiedName: 'DefB::b1', parent: 'DefB' }),
             ];
             const r = await analyse(symbols);
             expect(r.avgChildrenPerDef).toBe(2);
@@ -117,8 +124,8 @@ describe('Model Complexity Analyser', () => {
                 sym({ name: 'Engine', kind: SysMLElementKind.PartDef, qualifiedName: 'Engine' }),
                 sym({ name: 'Wheel', kind: SysMLElementKind.PartDef, qualifiedName: 'Wheel' }),
                 sym({ name: 'Vehicle', kind: SysMLElementKind.PartDef, qualifiedName: 'Vehicle' }),
-                sym({ name: 'e', kind: SysMLElementKind.PartUsage, qualifiedName: 'Vehicle::e', parentQualifiedName: 'Vehicle', typeName: 'Engine' }),
-                sym({ name: 'w', kind: SysMLElementKind.PartUsage, qualifiedName: 'Vehicle::w', parentQualifiedName: 'Vehicle', typeName: 'Wheel' }),
+                sym({ name: 'e', kind: SysMLElementKind.PartUsage, qualifiedName: 'Vehicle::e', parent: 'Vehicle', typeName: 'Engine' }),
+                sym({ name: 'w', kind: SysMLElementKind.PartUsage, qualifiedName: 'Vehicle::w', parent: 'Vehicle', typeName: 'Wheel' }),
             ];
             const r = await analyse(symbols);
             expect(r.couplingCount).toBe(2);
@@ -127,7 +134,7 @@ describe('Model Complexity Analyser', () => {
         it('should not count references to types not in the model', async () => {
             const symbols: SysMLSymbol[] = [
                 sym({ name: 'Vehicle', kind: SysMLElementKind.PartDef, qualifiedName: 'Vehicle' }),
-                sym({ name: 'e', kind: SysMLElementKind.PartUsage, qualifiedName: 'Vehicle::e', parentQualifiedName: 'Vehicle', typeName: 'ExternalType' }),
+                sym({ name: 'e', kind: SysMLElementKind.PartUsage, qualifiedName: 'Vehicle::e', parent: 'Vehicle', typeName: 'ExternalType' }),
             ];
             const r = await analyse(symbols);
             expect(r.couplingCount).toBe(0);
@@ -188,7 +195,7 @@ describe('Model Complexity Analyser', () => {
             // Small model
             const small: SysMLSymbol[] = [
                 sym({ name: 'A', kind: SysMLElementKind.PartDef, qualifiedName: 'A', documentation: 'doc' }),
-                sym({ name: 'a', kind: SysMLElementKind.PartUsage, qualifiedName: 'A::a', parentQualifiedName: 'A', typeName: 'A' }),
+                sym({ name: 'a', kind: SysMLElementKind.PartUsage, qualifiedName: 'A::a', parent: 'A', typeName: 'A' }),
             ];
             // Larger model with more nesting
             const large: SysMLSymbol[] = [];
@@ -197,13 +204,13 @@ describe('Model Complexity Analyser', () => {
             for (let i = 0; i < 10; i++) {
                 const def = sym({
                     name: `Def${i}`, kind: SysMLElementKind.PartDef,
-                    qualifiedName: `Pkg::Def${i}`, parentQualifiedName: 'Pkg',
+                    qualifiedName: `Pkg::Def${i}`, parent: 'Pkg',
                 });
                 large.push(def);
                 for (let j = 0; j < 5; j++) {
                     large.push(sym({
                         name: `u${j}`, kind: SysMLElementKind.PartUsage,
-                        qualifiedName: `Pkg::Def${i}::u${j}`, parentQualifiedName: `Pkg::Def${i}`,
+                        qualifiedName: `Pkg::Def${i}::u${j}`, parent: `Pkg::Def${i}`,
                         typeName: `Def${(i + 1) % 10}`,
                     }));
                 }
@@ -223,7 +230,7 @@ describe('Model Complexity Analyser', () => {
                 // Give Complex many children
                 ...Array.from({ length: 8 }, (_, i) => sym({
                     name: `c${i}`, kind: SysMLElementKind.PartUsage,
-                    qualifiedName: `Complex::c${i}`, parentQualifiedName: 'Complex',
+                    qualifiedName: `Complex::c${i}`, parent: 'Complex',
                     typeName: 'Simple',
                 })),
             ];

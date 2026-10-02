@@ -114,7 +114,9 @@ export interface SysMLModelResult {
             unusedDefinitions: number;
             documentationCoverage: number;
             hotspots: {
-                qualifiedName: string;
+                /** null for a definition without a qualified name (inside an anonymous element). */
+                qualifiedName: string | null;
+                elementId: string;
                 kind: string;
                 childCount: number;
                 depth: number;
@@ -174,8 +176,15 @@ export interface SysMLElementDTO {
      */
     type: string;
 
-    /** Element name. Use 'unnamed' for anonymous elements. */
+    /** Element name; empty for an anonymous element, flagged by `attributes.isAnonymous`. */
     name: string;
+
+    /**
+     * Unique identifier of the element (KerML `elementId`): a version 5 UUID
+     * derived from the workspace's text, the same after a reload and while
+     * other parts of the model are edited.
+     */
+    elementId: string;
 
     /** Source location. */
     range: RangeDTO;
@@ -196,6 +205,7 @@ export interface SysMLElementDTO {
      *   modifier      – Element modifiers (abstract, etc.)
      *   value         – Default/assigned value
      *   visibility    – 'public' | 'private' | 'protected'
+     *   isAnonymous   – true for an element without a name (its `name` is empty)
      */
     attributes: Record<string, string | number | boolean>;
 
@@ -226,6 +236,12 @@ export interface RelationshipDTO {
 
     /** Source element name (absent for shorthand satisfy/verify without `by`). */
     source?: string;
+
+    /** `elementId` of the source element, when the source is the element declaring the relationship. */
+    sourceElementId?: string;
+
+    /** `elementId` of the element that is the relationship itself (a connection, allocation or transition usage). */
+    elementId?: string;
 
     /** Target element name. */
     target: string;

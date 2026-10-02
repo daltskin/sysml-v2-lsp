@@ -2,8 +2,8 @@ import { Diagnostic, DiagnosticSeverity } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
 import { getLibraryPackageNames, resolveLibraryType } from '../library/libraryIndex.js';
 import { SysMLModelProvider } from '../model/sysmlModelProvider.js';
-import { NamespaceResolver, SymbolIndexes, buildSymbolIndexes, describeConflictingDeclarations, findConflictedQualifiedNames, namespaceKeyOf, otherDeclarations, ownerOf } from '../symbols/namespaceResolver.js';
-import { SysMLElementKind, SysMLSymbol, isDefinition } from '../symbols/sysmlElements.js';
+import { NamespaceResolver, SymbolIndexes, buildSymbolIndexes, describeConflictingDeclarations, findConflictingDeclarations, NamespaceKey, namespaceKeyOf, otherDeclarations, ownerKeyOf, ownerOf } from '../symbols/namespaceResolver.js';
+import { SysMLElementKind, SysMLSymbol, displayName, isAnonymous, isDefinition } from '../symbols/sysmlElements.js';
 import { resolveTypeName } from '../symbols/typeResolution.js';
 import { stripComments } from '../utils/identUtils.js';
 
@@ -167,7 +167,7 @@ export class SemanticValidator {
         let message = `Type '${typeName}' is not defined in the current document or standard library`;
         if (isMandatory) {
             const multStr = symbol.multiplicity ?? '1';
-            message += ` (feature '${symbol.name}' requires multiplicity [${multStr}])`;
+            message += ` (feature '${displayName(symbol)}' requires multiplicity [${multStr}])`;
         }
 
         return [{
@@ -222,7 +222,7 @@ export class SemanticValidator {
         if (symbol.kind !== SysMLElementKind.EnumDef) return [];
 
         const children = allSymbols.filter(s =>
-            s.parentQualifiedName === symbol.qualifiedName
+            s.parentId === symbol.elementId
         );
         const hasEnumValues = children.some(c =>
             c.kind === SysMLElementKind.EnumUsage ||
@@ -233,7 +233,7 @@ export class SemanticValidator {
             return [{
                 severity: DiagnosticSeverity.Information,
                 range: symbol.selectionRange,
-                message: `Enumeration '${symbol.name}' has no enum values defined`,
+                message: `Enumeration '${displayName(symbol)}' has no enum values defined`,
                 source: 'sysml',
                 code: 'empty-enum',
             }];
@@ -299,7 +299,7 @@ export class SemanticValidator {
         return [{
             severity: DiagnosticSeverity.Information,
             range: symbol.selectionRange,
-            message: `Definition '${symbol.name}' has no documentation`,
+            message: `Definition '${displayName(symbol)}' has no documentation`,
             source: 'sysml',
             code: 'missing-doc',
             data: { name: symbol.name },
@@ -530,16 +530,14 @@ export class SemanticValidator {
 
         // Find all top-level requirement usages (not defs, not nested inside satisfy blocks).
         const requirementUsages = allSymbols.filter(s =>
-            s.kind === SysMLElementKind.RequirementUsage,
+            // An anonymous one can't be named in a `satisfy` or `verify`, so it isn't reported.
+            s.kind === SysMLElementKind.RequirementUsage && !isAnonymous(s),
         );
 
         for (const req of requirementUsages) {
             // Skip requirements whose parent is also a requirement usage —
             // they are nested sub-requirements, not independently satisfiable.
-            if (req.parentQualifiedName) {
-                const parent = indexes.byQualifiedName.get(req.parentQualifiedName);
-                if (parent?.kind === SysMLElementKind.RequirementUsage) continue;
-            }
+            if (ownerOf(req, indexes)?.kind === SysMLElementKind.RequirementUsage) continue;
 
             // Skip requirements that appear inside a satisfy block — they are
             // redefinitions of sub-requirements, not independent requirements.
@@ -550,7 +548,7 @@ export class SemanticValidator {
             // Check if this requirement is satisfied by name (simple or qualified).
             const isSatisfied =
                 satisfiedNames.has(req.name) ||
-                satisfiedNames.has(req.qualifiedName);
+                (req.qualifiedName !== undefined && satisfiedNames.has(req.qualifiedName));
 
             if (!isSatisfied) {
                 diagnostics.push({
@@ -706,15 +704,13 @@ export class SemanticValidator {
 
         // Check top-level requirement usages that ARE satisfied but NOT verified.
         const requirementUsages = allSymbols.filter(s =>
-            s.kind === SysMLElementKind.RequirementUsage,
+            // An anonymous one can't be named in a `satisfy` or `verify`, so it isn't reported.
+            s.kind === SysMLElementKind.RequirementUsage && !isAnonymous(s),
         );
 
         for (const req of requirementUsages) {
             // Skip nested sub-requirements.
-            if (req.parentQualifiedName) {
-                const parent = indexes.byQualifiedName.get(req.parentQualifiedName);
-                if (parent?.kind === SysMLElementKind.RequirementUsage) continue;
-            }
+            if (ownerOf(req, indexes)?.kind === SysMLElementKind.RequirementUsage) continue;
 
             // Skip requirements inside satisfy blocks.
             const uriRanges = satisfyBlockRanges.get(req.uri) ?? satisfyBlockRanges.get('__static__') ?? [];
@@ -723,11 +719,11 @@ export class SemanticValidator {
 
             const isSatisfied =
                 satisfiedNames.has(req.name) ||
-                satisfiedNames.has(req.qualifiedName);
+                (req.qualifiedName !== undefined && satisfiedNames.has(req.qualifiedName));
 
             const isVerified =
                 verifiedNames.has(req.name) ||
-                verifiedNames.has(req.qualifiedName);
+                (req.qualifiedName !== undefined && verifiedNames.has(req.qualifiedName));
 
             if (!isVerified) {
                 const message = isSatisfied
@@ -933,8 +929,8 @@ export class SemanticValidator {
             const lDef = lDefSyms.find(s => s.kind.includes('def'));
             const rDef = rDefSyms.find(s => s.kind.includes('def'));
             // Check if the definition has child symbols (features) by looking at byParent index
-            const lChildren = lDef ? (indexes.byParent.get(lDef.qualifiedName) ?? []) : [];
-            const rChildren = rDef ? (indexes.byParent.get(rDef.qualifiedName) ?? []) : [];
+            const lChildren = lDef ? (indexes.byParent.get(namespaceKeyOf(lDef)) ?? []) : [];
+            const rChildren = rDef ? (indexes.byParent.get(namespaceKeyOf(rDef)) ?? []) : [];
             if (lChildren.length === 0 && rChildren.length === 0) continue;
 
             // Skip when port types share a common feature name — this indicates
@@ -1062,7 +1058,7 @@ export class SemanticValidator {
                 diagnostics.push({
                     severity: DiagnosticSeverity.Warning,
                     range: this.indexToRange(text, absoluteStart, expr.length),
-                    message: `Unresolved constraint reference '${expr}' in scope '${parent.name}'`,
+                    message: `Unresolved constraint reference '${expr}' in scope '${displayName(parent)}'`,
                     source: 'sysml',
                     code: 'unresolved-constraint-reference',
                     data: { uri },
@@ -1111,7 +1107,7 @@ export class SemanticValidator {
             const typeDef = typeDefs[0];
             if (!typeDef) return false;
 
-            const member = (indexes.byParent.get(typeDef.qualifiedName) ?? [])
+            const member = (indexes.byParent.get(namespaceKeyOf(typeDef)) ?? [])
                 .find(s => s.name === path[i]);
             if (!member) return false;
             typeName = member.typeNames[0] ?? member.typeName;
@@ -1139,7 +1135,7 @@ export class SemanticValidator {
         while (scope) {
             const members = indexes.byParent.get(namespaceKeyOf(scope)) ?? [];
             if (members.length > 0) return scope;
-            if (!scope.parentQualifiedName) return scope;
+            if (!scope.parentId) return scope;
             scope = ownerOf(scope, indexes);
         }
         return undefined;
@@ -1279,12 +1275,15 @@ export class SemanticValidator {
 
     private checkDuplicateDefinitions(symbols: SysMLSymbol[]): Diagnostic[] {
         const diagnostics: Diagnostic[] = [];
-        const definitionsByScope = new Map<string, Map<string, SysMLSymbol[]>>();
+        const definitionsByScope = new Map<NamespaceKey, Map<string, SysMLSymbol[]>>();
+        const byElementId = new Map(symbols.map(s => [s.elementId, s]));
 
         for (const symbol of symbols) {
-            if (!isDefinition(symbol.kind)) continue;
+            // An anonymous definition declares no name, so it can't duplicate one.
+            if (!isDefinition(symbol.kind) || isAnonymous(symbol)) continue;
 
-            const scope = symbol.parentQualifiedName ?? '__root__';
+            // The namespace it is declared in: one scope however many documents declare it.
+            const scope = ownerKeyOf(symbol, byElementId);
             let scopeMap = definitionsByScope.get(scope);
             if (!scopeMap) {
                 scopeMap = new Map();
@@ -1341,11 +1340,11 @@ export class SemanticValidator {
      */
     private checkAmbiguousNamespaceName(symbols: SysMLSymbol[], allSymbols: SysMLSymbol[]): Diagnostic[] {
         const diagnostics: Diagnostic[] = [];
-        const conflicts = findConflictedQualifiedNames(allSymbols);
+        const conflicts = findConflictingDeclarations(allSymbols);
         if (conflicts.size === 0) return diagnostics;
 
         for (const symbol of symbols) {
-            const conflicting = conflicts.get(symbol.qualifiedName);
+            const conflicting = conflicts.get(symbol);
             if (!conflicting) continue;
 
             const others = otherDeclarations(conflicting, symbol);

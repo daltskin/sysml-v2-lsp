@@ -16,7 +16,7 @@ import { parseDocument } from './parser/parseDocument.js';
 import { SemanticValidator } from './providers/semanticValidator.js';
 import { SymbolTable } from './symbols/symbolTable.js';
 import type { SysMLSymbol } from './symbols/sysmlElements.js';
-import { SysMLElementKind, isDefinition, isUsage } from './symbols/sysmlElements.js';
+import { SysMLElementKind, displayName, isDefinition, isUsage } from './symbols/sysmlElements.js';
 import { SYSML_KEYWORDS_ARRAY as SYSML_KEYWORDS } from './utils/sysmlKeywords.js';
 export { SYSML_KEYWORDS_ARRAY as SYSML_KEYWORDS } from './utils/sysmlKeywords.js';
 
@@ -71,13 +71,19 @@ export function ensureParsed(ctx: McpContext, uri: string, code?: string): void 
 // Formatting helpers
 // ---------------------------------------------------------------------------
 
+/** A symbol as MCP output; its owner is referred to by `parentId`, its owner's UUID. */
 export function formatSymbol(sym: SysMLSymbol): Record<string, unknown> {
     const specSet = new Set(sym.specializationNames);
     const typingOnly = sym.typeNames.filter(n => !specSet.has(n));
     return {
         name: sym.name,
         kind: sym.kind,
-        qualifiedName: sym.qualifiedName,
+        ...(sym.label ? { label: sym.label } : {}),
+        // null without one (an anonymous element or a member of one), as in the SysML v2 API
+        qualifiedName: sym.qualifiedName ?? null,
+        elementId: sym.elementId,
+        // The owner's elementId (a UUID)
+        ...(sym.parentId ? { parentId: sym.parentId } : {}),
         ...(typingOnly.length > 0 ? { type: typingOnly.join(', ') } : {}),
         ...(sym.specializationNames.length > 0 ? { specializes: sym.specializationNames.join(', ') } : {}),
         ...(sym.documentation ? { documentation: sym.documentation } : {}),
@@ -85,7 +91,6 @@ export function formatSymbol(sym: SysMLSymbol): Record<string, unknown> {
         ...(sym.target ? { target: sym.target } : {}),
         ...(sym.transitionTrigger ? { trigger: sym.transitionTrigger } : {}),
         ...(sym.controlFlows && sym.controlFlows.length > 0 ? { controlFlows: sym.controlFlows } : {}),
-        ...(sym.parentQualifiedName ? { parent: sym.parentQualifiedName } : {}),
         ...(sym.children.length > 0 ? { children: sym.children } : {}),
         location: {
             uri: sym.uri,
@@ -161,8 +166,8 @@ export function handleParse(
 
     const allSymbols = ctx.symbolTable.getSymbolsForUri(docUri);
     const topLevel = allSymbols
-        .filter((s) => !s.parentQualifiedName)
-        .map((s) => `${s.kind} ${s.qualifiedName}`);
+        .filter((s) => !s.parentId)
+        .map((s) => `${s.kind} ${s.qualifiedName ?? s.name}`);
     if (topLevel.length > 0) {
         summary.topLevelElements = topLevel;
     }
@@ -232,15 +237,16 @@ export function handlePreview(
     // Focus mode: filter to the targeted element and its children/related types
     if (opts.focus) {
         const focusName = opts.focus;
+        // The elementIds of the elements to render
         const focusSet = new Set<string>();
 
-        // Build parent→children index (sym.children is not populated by parser)
+        // Build owner→members index by elementId (sym.children is not populated by parser)
         const childrenOf = new Map<string, SysMLSymbol[]>();
         for (const s of allSymbols) {
-            if (s.parentQualifiedName) {
-                const list = childrenOf.get(s.parentQualifiedName) ?? [];
+            if (s.parentId) {
+                const list = childrenOf.get(s.parentId) ?? [];
                 list.push(s);
-                childrenOf.set(s.parentQualifiedName, list);
+                childrenOf.set(s.parentId, list);
             }
         }
 
@@ -248,19 +254,19 @@ export function handlePreview(
         const focused = allSymbols.filter(s =>
             s.name === focusName
             || s.qualifiedName === focusName
-            || s.qualifiedName.endsWith(`::${focusName}`)
+            || s.qualifiedName?.endsWith(`::${focusName}`)
         );
 
         for (const f of focused) {
-            focusSet.add(f.qualifiedName);
-            // Include children via parentQualifiedName index
-            const children = childrenOf.get(f.qualifiedName) ?? [];
+            focusSet.add(f.elementId);
+            // Include its members
+            const children = childrenOf.get(f.elementId) ?? [];
             for (const child of children) {
-                focusSet.add(child.qualifiedName);
+                focusSet.add(child.elementId);
             }
-            // Include parent
-            if (f.parentQualifiedName) {
-                focusSet.add(f.parentQualifiedName);
+            // Include its owner
+            if (f.parentId) {
+                focusSet.add(f.parentId);
             }
             // Include typed elements referenced by the focused element or its children
             const typeSource = [...f.typeNames];
@@ -270,17 +276,17 @@ export function handlePreview(
             for (const tn of typeSource) {
                 const typed = allSymbols.find(s => s.name === tn || s.qualifiedName === tn);
                 if (typed) {
-                    focusSet.add(typed.qualifiedName);
+                    focusSet.add(typed.elementId);
                     // Include children of the type definition too
-                    for (const child of (childrenOf.get(typed.qualifiedName) ?? [])) {
-                        focusSet.add(child.qualifiedName);
+                    for (const child of (childrenOf.get(typed.elementId) ?? [])) {
+                        focusSet.add(child.elementId);
                     }
                 }
             }
         }
 
         if (focusSet.size > 0) {
-            renderSymbols = allSymbols.filter(s => focusSet.has(s.qualifiedName));
+            renderSymbols = allSymbols.filter(s => focusSet.has(s.elementId));
         }
     }
 
@@ -305,8 +311,8 @@ export function handlePreview(
 
         const diff = diffSymbols(origSymbols, allSymbols);
         result.diff = {
-            added: diff.added.map(s => `${s.kind} ${s.qualifiedName}`),
-            changed: diff.changed.map(s => `${s.kind} ${s.qualifiedName}`),
+            added: diff.added.map(s => `${s.kind} ${s.qualifiedName ?? displayName(s)}`),
+            changed: diff.changed.map(s => `${s.kind} ${s.qualifiedName ?? displayName(s)}`),
             removed: diff.removed,
             unchangedCount: diff.unchanged.length,
         };
@@ -414,7 +420,7 @@ export function handleGetSymbols(
         symbols = symbols.filter((s) => isUsage(s.kind));
     }
 
-    return { count: symbols.length, symbols: symbols.map(formatSymbol) };
+    return { count: symbols.length, symbols: symbols.map((s) => formatSymbol(s)) };
 }
 
 export function handleGetDefinition(
@@ -435,7 +441,7 @@ export function handleGetDefinition(
     if (matches.length === 0) {
         return { found: false, message: `No symbol found with name "${name}"` };
     }
-    return { found: true, count: matches.length, symbols: matches.map(formatSymbol) };
+    return { found: true, count: matches.length, symbols: matches.map((s) => formatSymbol(s)) };
 }
 
 export function handleGetReferences(
@@ -448,7 +454,7 @@ export function handleGetReferences(
         ensureParsed(ctx, uri ?? 'untitled.sysml', code);
     }
     const refs = ctx.symbolTable.findReferences(name);
-    return { name, referenceCount: refs.length, references: refs.map(formatSymbol) };
+    return { name, referenceCount: refs.length, references: refs.map((s) => formatSymbol(s)) };
 }
 
 export function handleGetHierarchy(
@@ -467,10 +473,10 @@ export function handleGetHierarchy(
         return { found: false, message: `No symbol "${name}" found` };
     }
 
-    const ancestors: Array<{ name: string; kind: string; qualifiedName: string }> = [];
+    const ancestors: Array<{ name: string; label?: string; kind: string; qualifiedName: string | null }> = [];
     let parent = ctx.symbolTable.getOwner(target);
     while (parent) {
-        ancestors.unshift({ name: parent.name, kind: parent.kind, qualifiedName: parent.qualifiedName });
+        ancestors.unshift({ name: parent.name, ...(parent.label ? { label: parent.label } : {}), kind: parent.kind, qualifiedName: parent.qualifiedName ?? null });
         parent = ctx.symbolTable.getOwner(parent);
     }
 
@@ -480,7 +486,7 @@ export function handleGetHierarchy(
         .map((s) => ({
             name: s.name,
             kind: s.kind,
-            qualifiedName: s.qualifiedName,
+            qualifiedName: s.qualifiedName ?? null,
             ...(s.typeNames.length > 0 ? { type: s.typeNames.join(', ') } : {}),
         }));
 
@@ -488,7 +494,7 @@ export function handleGetHierarchy(
         element: {
             name: target.name,
             kind: target.kind,
-            qualifiedName: target.qualifiedName,
+            qualifiedName: target.qualifiedName ?? null,
             ...(target.typeNames.length > 0 ? { type: target.typeNames.join(', ') } : {}),
         },
         ancestors,

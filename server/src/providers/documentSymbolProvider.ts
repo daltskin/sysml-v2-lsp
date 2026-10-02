@@ -3,7 +3,7 @@ import {
     DocumentSymbolParams,
 } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
-import { SysMLSymbol, toMetaclassName } from '../symbols/sysmlElements.js';
+import { SysMLSymbol, displayName, toMetaclassName } from '../symbols/sysmlElements.js';
 import { toSysMLSymbolKind } from './symbolKindMapping.js';
 
 /**
@@ -28,26 +28,25 @@ export class DocumentSymbolProvider {
     }
 
     private buildHierarchy(symbols: SysMLSymbol[]): DocumentSymbol[] {
-        // Separate top-level symbols from children
+        // Separate top-level symbols from children, linked by their owner's elementId
         const topLevel: SysMLSymbol[] = [];
-        const byQualifiedName = new Map<string, SysMLSymbol>();
+        const elementIds = new Set(symbols.map(sym => sym.elementId));
         const childrenOf = new Map<string, SysMLSymbol[]>();
 
         for (const sym of symbols) {
-            byQualifiedName.set(sym.qualifiedName, sym);
-            if (!sym.parentQualifiedName) {
+            if (!sym.parentId || !elementIds.has(sym.parentId)) {
                 topLevel.push(sym);
             } else {
-                const siblings = childrenOf.get(sym.parentQualifiedName) ?? [];
+                const siblings = childrenOf.get(sym.parentId) ?? [];
                 siblings.push(sym);
-                childrenOf.set(sym.parentQualifiedName, siblings);
+                childrenOf.set(sym.parentId, siblings);
             }
         }
 
         const buildSymbol = (sym: SysMLSymbol): DocumentSymbol => {
-            const children = childrenOf.get(sym.qualifiedName) ?? [];
+            const children = childrenOf.get(sym.elementId) ?? [];
             return {
-                name: sym.name,
+                name: displayName(sym),
                 detail: toMetaclassName(sym.kind),
                 kind: toSysMLSymbolKind(sym.kind),
                 range: sym.range,

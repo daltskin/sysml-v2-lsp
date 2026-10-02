@@ -3,6 +3,7 @@ import {
     Location,
 } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
+import { isAnonymous } from '../symbols/sysmlElements.js';
 
 /**
  * Provides find-all-references for SysML elements.
@@ -27,7 +28,8 @@ export class ReferencesProvider {
             params.position.character,
         );
 
-        if (!symbol) {
+        // An anonymous element has no name to be referenced by.
+        if (!symbol || isAnonymous(symbol)) {
             return [];
         }
 

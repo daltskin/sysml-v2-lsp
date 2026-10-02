@@ -209,6 +209,37 @@ package User {
         });
     });
 
+    describe('anonymous usages and definitions', () => {
+        const diagnosticsOf = async (body: string) => (await getSemanticDiagnostics(`
+package Demo {
+    part def P { attribute a; }
+    requirement def R;
+    ${body}
+}
+`)).map(d => `${d.code}: ${d.message}`);
+
+        it('should not report two anonymous usages of one type as ambiguous or unresolved', async () => {
+            const diags = await diagnosticsOf('part def W { part : P; part : P; }');
+            expect(diags.filter(d => /ambiguous|unresolved/.test(d))).toEqual([]);
+        });
+
+        it('should still resolve a type after an anonymous usage of it', async () => {
+            const diags = await diagnosticsOf('part def W { part : P; attribute y :> P::a; }');
+            expect(diags.filter(d => d.startsWith('unresolved-type'))).toEqual([]);
+        });
+
+        it('should not report an anonymous requirement as unsatisfied or unverified, or anonymous definitions as duplicates', async () => {
+            const diags = await diagnosticsOf('requirement : R;\n    part def :> P;\n    part def :> P;');
+            expect(diags.filter(d => /unsatisfied|unverified|duplicate-definition/.test(d))).toEqual([]);
+        });
+
+        it('should name an anonymous definition in a message by its declaration without a name', async () => {
+            const diags = await diagnosticsOf('part def :> P;');
+            expect(diags).toContain("missing-doc: Definition ':> P' has no documentation");
+            expect(diags.join('\n')).not.toContain("''");
+        });
+    });
+
     describe('unresolved type references', () => {
         it('should flag a type that does not exist in the document', async () => {
             const text = `
@@ -396,7 +427,7 @@ package Test {
             const diags = await getSemanticDiagnostics(text);
             const unresolved = diags.filter(d => d.code === 'unresolved-constraint-reference');
             expect(unresolved.map(d => d.message)).toEqual([
-                "Unresolved constraint reference 'x.nope' in scope 'a.p-b.p'",
+                "Unresolved constraint reference 'x.nope' in scope 'a.p→b.p'",
             ]);
         });
 
@@ -2948,7 +2979,7 @@ package Demo {
     });
 
     it('does not report anonymous interfaces fanning out from the same end as ambiguous', async () => {
-        // Named `a.pa-b.pb` and `a.pa-c.pc` after their ends -- synthesized, never declared.
+        // Anonymous: no name, only their declarations as labels -- never a declared name.
         const diagnostics = await getSemanticDiagnostics(`
 package Demo {
     port def P { port p1; port p2; }
@@ -2964,8 +2995,8 @@ package Demo {
         expect(diagnostics.filter((d) => d.code === 'ambiguous-namespace-name')).toEqual([]);
     });
 
-    it('reports declared duplicates across documents, but not anonymous elements sharing a synthesized name', async () => {
-        // Each file's anonymous interface and connection are both named `a.pa-b.pb`, at the same
+    it('reports declared duplicates across documents, but not anonymous elements with the same declaration', async () => {
+        // Each file's anonymous interface and connection have the same declaration, at the same
         // position in both files; both files also declare `link`.
         const fileA = `
 package Demo {
@@ -3007,10 +3038,10 @@ describe('Anonymous connectors and transitions next to declared names', () => {
             .map((d) => d.message.match(/'([^']+)'/)?.[1]);
 
     for (const [order, body] of [
-        ['declared first', `connection 'a.p-b.p';\n    connect a.p to b.p;`],
-        ['anonymous first', `connect a.p to b.p;\n    connection 'a.p-b.p';`],
+        ['declared first', `connection 'connect a.p to b.p';\n    connect a.p to b.p;`],
+        ['anonymous first', `connect a.p to b.p;\n    connection 'connect a.p to b.p';`],
     ] as const) {
-        it(`does not report a declared connection quoted like an anonymous one's name (${order})`, async () => {
+        it(`does not report a declared connection quoted like an anonymous one's label (${order})`, async () => {
             expect(await ambiguousNames(`
 package Demo {
     part a { port p; }
@@ -3020,6 +3051,42 @@ package Demo {
 `)).toEqual([]);
         });
     }
+
+    /** The name in each name-clash diagnostic (ambiguous names and duplicate definitions). */
+    const clashingNames = async (text: string) =>
+        (await getSemanticDiagnostics(text))
+            .filter((d) => d.code === 'ambiguous-namespace-name' || d.code === 'duplicate-definition')
+            .map((d) => d.message.match(/'([^']+)'/)?.[1]);
+
+    // `a.p→b.p` is how the anonymous connection is shown; `a.p-b.p` is the name formerly generated for it.
+    for (const name of ['a.p→b.p', 'a.p-b.p']) {
+        for (const [order, body] of [
+            ['declared first', `connection '${name}';\n    connect a.p to b.p;`],
+            ['anonymous first', `connect a.p to b.p;\n    connection '${name}';`],
+        ] as const) {
+            it(`does not report a declared connection named '${name}' next to an anonymous one (${order})`, async () => {
+                expect(await clashingNames(`
+package Demo {
+    part a { port p; }
+    part b { port p; }
+    ${body}
+}
+`)).toEqual([]);
+            });
+        }
+    }
+
+    it('does not report an anonymous connection and connections named like its display text and its former generated name, each with a member of the same name', async () => {
+        expect(await clashingNames(`
+package Demo {
+    part a { port p; }
+    part b { port p; }
+    connect a.p to b.p { attribute w; }
+    connection 'a.p→b.p' { attribute w; }
+    connection 'a.p-b.p' { attribute w; }
+}
+`)).toEqual([]);
+    });
 
     it('does not report anonymous duplicates: connections with identical ends, allocations from the same end, transitions on one line', async () => {
         expect(await ambiguousNames(`
