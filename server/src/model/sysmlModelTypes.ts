@@ -159,7 +159,7 @@ export interface SysMLElementDTO {
      *   'constraint', 'constraint def',
      *   'use case', 'use case def',
      *   'attribute', 'attribute def',
-     *   'connection', 'connection def',
+     *   'connection', 'connection def', 'flow',
      *   'interface', 'interface def',
      *   'item', 'item def',
      *   'enum', 'enum def',
@@ -189,6 +189,10 @@ export interface SysMLElementDTO {
      * The extension reads these specific keys:
      *   partType      – Type name for parts/items
      *   portType      – Type name for ports
+     *   flowType      – Declared type of a flow usage
+     *   itemType      – Payload type for a flow usage
+     *   flowSource    – Source feature path for a flow usage
+     *   flowTarget    – Target feature path for a flow usage
      *   direction     – Port direction: 'in' | 'out' | 'inout'
      *   multiplicity  – Multiplicity string (e.g., "0..1", "1..*")
      *   documentation – Doc comment text

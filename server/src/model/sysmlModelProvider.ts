@@ -18,6 +18,7 @@ import {
     SysMLElementKind,
     SysMLSymbol,
     isDefinition,
+    isFlowUsage,
     isUsage,
     toMetaclassName,
 } from '../symbols/sysmlElements.js';
@@ -386,15 +387,27 @@ export class SysMLModelProvider {
         // Build attributes
         const attributes: Record<string, string | number | boolean> = {};
 
-        if (symbol.typeNames.length > 0) {
-            // Determine correct attribute key based on kind
-            // Store all type names as comma-separated string
+        if (isFlowUsage(symbol.kind)) {
+            if (symbol.typeNames.length > 0) {
+                attributes['flowType'] = symbol.typeNames.join(', ');
+            }
+            if (symbol.flowDetails?.itemType) {
+                attributes['itemType'] = symbol.flowDetails.itemType;
+            }
+        } else if (symbol.typeNames.length > 0) {
             const typeLabel = symbol.typeNames.join(', ');
             if (symbol.kind === SysMLElementKind.PortUsage || symbol.kind === SysMLElementKind.PortDef) {
                 attributes['portType'] = typeLabel;
             } else {
                 attributes['partType'] = typeLabel;
             }
+        }
+
+        if (symbol.flowDetails?.source) {
+            attributes['flowSource'] = symbol.flowDetails.source;
+        }
+        if (symbol.flowDetails?.target) {
+            attributes['flowTarget'] = symbol.flowDetails.target;
         }
 
         if (symbol.documentation) {
@@ -466,6 +479,8 @@ export class SysMLModelProvider {
                 target: tn,
             });
         }
+        const flowRelationship = this.flowRelationship(symbol);
+        if (flowRelationship) relationships.push(flowRelationship);
 
         // Specialization (detected from text ":>" / "specializes" syntax)
         const specializations = this.extractSpecializations(symbol, lines);
@@ -484,6 +499,24 @@ export class SysMLModelProvider {
             children,
             attributes,
             relationships,
+        };
+    }
+
+    private flowRelationship(symbol: SysMLSymbol): RelationshipDTO | undefined {
+        const details = symbol.flowDetails;
+        if (!isFlowUsage(symbol.kind) || !details?.source || !details.target) return undefined;
+        if (symbol.kind === SysMLElementKind.SuccessionFlowUsage) {
+            return {
+                type: 'succession',
+                source: details.source,
+                target: details.target,
+            };
+        }
+        return {
+            type: 'flow',
+            source: details.source,
+            target: details.target,
+            name: details.itemType ?? symbol.name,
         };
     }
 
@@ -548,6 +581,11 @@ export class SysMLModelProvider {
                     });
                 }
             }
+
+            // Flows retain their parsed endpoints and payload type even when
+            // the payload type has no declaration in the workspace.
+            const flowRelationship = this.flowRelationship(symbol);
+            if (flowRelationship) relationships.push(flowRelationship);
 
             // Transition endpoints come directly from the grammar's `first`
             // source and `then` target references.
@@ -845,17 +883,31 @@ export class SysMLModelProvider {
             const children = this.getChildSymbols(symbol, symbolTable);
             const fullText = this.getFullElementText(symbol, lines);
 
-            // Collect flow/message statements: `<kw> <name> from <src> to <tgt>`
+            // Flow usages are available as parse-tree-derived symbols, so
+            // their payload feature names do not need to be reparsed here.
             const parsedMessages: MessageDTO[] = [];
             let occ = 1;
-            for (const keyword of ['flow', 'message']) {
+            for (const child of children) {
+                if (child.kind !== SysMLElementKind.FlowUsage) continue;
+                const details = child.flowDetails;
+                if (!details?.source || !details.target) continue;
+                parsedMessages.push({
+                    name: child.isAnonymous && details.itemType ? details.itemType : child.name,
+                    from: rootName(details.source),
+                    to: rootName(details.target),
+                    payload: details.itemType ?? (details.payloadDeclared ? '' : child.name),
+                    occurrence: occ++,
+                    range: this.rangeToDTO(child.range),
+                });
+            }
+
+            for (const keyword of ['message']) {
                 for (const { afterPos } of findWordPositionsCI(fullText, keyword)) {
-                    // Skip `succession flow` — handled as a control-flow elsewhere.
-                    // Also skip if the next non-ws token starts a `def` or `:`,
-                    // which would indicate `flow def Foo` or a typed feature.
                     const nameStart = skipWS(fullText, afterPos);
-                    const [name, afterName] = readIdent(fullText, nameStart);
-                    if (!name || name === 'def') continue;
+                    const [firstName, afterName] = readNameOrQuoted(fullText, nameStart);
+                    if (!firstName || firstName === 'def') continue;
+                    const name = firstName;
+                    const payload = firstName;
                     const fromStart = skipWS(fullText, afterName);
                     const [fromKw, afterFromKw] = readIdent(fullText, fromStart);
                     if (fromKw !== 'from') continue;
@@ -873,7 +925,7 @@ export class SysMLModelProvider {
                         name,
                         from: rootName(srcRaw),
                         to: rootName(tgtRaw),
-                        payload: name,
+                        payload,
                         occurrence: occ++,
                         range: this.rangeToDTO(symbol.range),
                     });
