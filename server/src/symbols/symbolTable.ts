@@ -6,7 +6,7 @@ import { ParseResult } from '../parser/parseDocument.js';
 import { contextToRange, tokenToRange } from '../parser/positionUtils.js';
 import { SYSML_KEYWORDS } from '../utils/sysmlKeywords.js';
 import { Scope } from './scope.js';
-import { FilterExpr, ImportTarget, SysMLElementKind, SysMLSymbol, isDefinition, isUsage as isUsageKind } from './sysmlElements.js';
+import { FilterExpr, ImportTarget, SysMLElementKind, SysMLSymbol, isDefinition, isFlowUsage, isUsage as isUsageKind } from './sysmlElements.js';
 
 // ── ruleIndex-based lookup tables ───────────────────────────────────
 // These replace the toLowerCase() + string-comparison chains with O(1)
@@ -42,6 +42,7 @@ const RULE_INDEX_TO_KIND = new Map<number, SysMLElementKind>([
     [SysMLv2Parser.RULE_connectionUsage, SysMLElementKind.ConnectionUsage],       // 254
     [SysMLv2Parser.RULE_flow, SysMLElementKind.FlowUsage],                         // 152
     [SysMLv2Parser.RULE_flowUsage, SysMLElementKind.FlowUsage],                    // 284
+    [SysMLv2Parser.RULE_successionFlowUsage, SysMLElementKind.SuccessionFlowUsage], // 285
     [SysMLv2Parser.RULE_actionUsage, SysMLElementKind.ActionUsage],               // 296
     [SysMLv2Parser.RULE_mergeNode, SysMLElementKind.MergeNode],                   // 305
     [SysMLv2Parser.RULE_decisionNode, SysMLElementKind.DecisionNode],             // 306
@@ -977,13 +978,13 @@ export class SymbolTable {
         const transition = kind === SysMLElementKind.TransitionUsage
             ? this.extractTransitionDetails(ctx)
             : undefined;
-        const flowDetails = kind === SysMLElementKind.FlowUsage
+        const flowDetails = isFlowUsage(kind)
             ? this.extractFlowDetails(ctx)
             : undefined;
 
         const declaredName = transition
             ? transition.declaredName
-            : kind === SysMLElementKind.FlowUsage
+            : isFlowUsage(kind)
                 ? this.extractFlowName(ctx)
                 : this.extractName(ctx);
         // An anonymous transition, flow, connection, interface or allocation usage still gets a
@@ -996,7 +997,7 @@ export class SymbolTable {
             return undefined;
         }
         // Transitions never carry a declared <shortName> alias.
-        const shortName = transition || (kind === SysMLElementKind.FlowUsage && !declaredName)
+        const shortName = transition || (isFlowUsage(kind) && !declaredName)
             ? undefined
             : this.extractShortName(ctx);
 
@@ -1004,12 +1005,12 @@ export class SymbolTable {
             ?? (parentQualifiedName ? `${parentQualifiedName}::${name}` : name);
 
         const selectionRange = (transition && !transition.declaredName) ||
-            (kind === SysMLElementKind.FlowUsage && !declaredName)
+            (isFlowUsage(kind) && !declaredName)
             ? range
             : this.extractNameRange(ctx) ?? range;
         // Extract type names for both usages (typing) and definitions (specialization)
-        const typeNames = flowDetails?.itemType
-            ? [flowDetails.itemType]
+        const typeNames = isFlowUsage(kind)
+            ? this.extractFlowTypeNames(ctx)
             : this.extractTypeNames(ctx);
         const specializationNames = this.extractSpecializationNames(ctx);
         const typeName = typeNames[0];
@@ -1140,14 +1141,24 @@ export class SymbolTable {
             ? this.findRuleContext(payload, SysMLv2Parser.RULE_qualifiedName)
             : undefined;
         const itemType = payloadTypes[0]
-            ?? (!identification && qualifiedName ? this.cleanTransitionText(qualifiedName.getText()) : undefined)
-            ?? (identification ? this.parseIdentification(identification).name : undefined);
+            ?? (!identification && qualifiedName ? this.cleanTransitionText(qualifiedName.getText()) : undefined);
 
         return {
             itemType,
+            payloadDeclared: payload !== undefined,
             source: endpoints[0],
             target: endpoints[1],
         };
+    }
+
+    /** Extract the flow feature's own declared type without including its payload type. */
+    private extractFlowTypeNames(ctx: ParserRuleContext): string[] {
+        const declaration = this.findChildRule(ctx, SysMLv2Parser.RULE_flowDeclaration);
+        const typeDeclaration = declaration && (
+            this.findChildRule(declaration, SysMLv2Parser.RULE_featureDeclaration)
+            ?? this.findChildRule(declaration, SysMLv2Parser.RULE_usageDeclaration)
+        );
+        return typeDeclaration ? this.extractTypeNames(typeDeclaration) : [];
     }
 
     /** A flow name must come from its own declaration, never its payload or endpoints. */

@@ -743,6 +743,26 @@ package CameraTestSequence {
             expect(wake!.to).toBe('camera');
         });
 
+        it('should project named payload types and omit untyped payload names in sequence messages', async () => {
+            const model = await getModelForText(`
+package NamedPayloadSequence {
+    part def Sequence {
+        part source;
+        part target;
+        flow named of i : Signal from source.output to target.input;
+        flow untyped of i = 1 from source.other to target.other;
+    }
+}
+`, ['sequenceDiagrams']);
+
+            const diagram = model.sequenceDiagrams!.find(d => d.name === 'Sequence');
+            expect(diagram).toBeDefined();
+            expect(diagram!.messages.map(message => [message.name, message.payload])).toEqual([
+                ['named', 'Signal'],
+                ['untyped', ''],
+            ]);
+        });
+
         // Issue #44: message statements with dotted endpoints should reduce
         // to root participant names so arrows render between lifelines.
         it('should extract message statements with dotted endpoints', async () => {
@@ -1587,6 +1607,56 @@ package Test {
                 ['source', 'target', 'Payload'],
                 ['source', 'target', 'OtherPayload'],
             ]);
+        });
+
+        it('should project flow types separately from named payload types and include succession edges', async () => {
+            const model = await getModelForText(`
+package Test {
+    part def Container {
+        flow f : F of i : I from source.output to target.input;
+        succession flow from producer.output to consumer.input;
+    }
+}
+`, ['elements', 'relationships']);
+
+            const elements: any[] = [];
+            const visit = (items: any[]) => items.forEach(element => {
+                elements.push(element);
+                visit(element.children ?? []);
+            });
+            visit(model.elements ?? []);
+
+            const flow = elements.find(element => element.type === 'flow' && element.name === 'f');
+            expect(flow!.attributes).toMatchObject({
+                flowType: 'F',
+                itemType: 'I',
+                flowSource: 'source.output',
+                flowTarget: 'target.input',
+            });
+            expect(flow!.relationships).toContainEqual({
+                type: 'typing',
+                source: 'f',
+                target: 'F',
+            });
+            expect(flow!.relationships).toContainEqual({
+                type: 'flow',
+                source: 'source.output',
+                target: 'target.input',
+                name: 'I',
+            });
+
+            const succession = elements.find(element => element.type === 'succession flow');
+            expect(succession).toBeDefined();
+            expect(succession!.relationships).toContainEqual({
+                type: 'succession',
+                source: 'producer.output',
+                target: 'consumer.input',
+            });
+            expect(model.relationships).toContainEqual({
+                type: 'succession',
+                source: 'producer.output',
+                target: 'consumer.input',
+            });
         });
 
         it('should extract subsets relationship', async () => {

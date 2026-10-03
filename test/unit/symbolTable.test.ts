@@ -162,9 +162,10 @@ package Demo {
             [
                 '<flow source.output to target.input>',
                 true,
-                ['Payload'],
+                [],
                 {
                     itemType: 'Payload',
+                    payloadDeclared: true,
                     source: 'source.output',
                     target: 'target.input',
                 },
@@ -172,9 +173,10 @@ package Demo {
             [
                 'outgoing',
                 undefined,
-                ['OtherPayload'],
+                [],
                 {
                     itemType: 'OtherPayload',
+                    payloadDeclared: true,
                     source: 'source.other',
                     target: 'target.other',
                 },
@@ -182,6 +184,43 @@ package Demo {
         ]);
         expect(st.findByName('Payload')).toEqual([]);
         expect(st.findByName('source')).toEqual([]);
+    });
+
+    it('should keep a flow declared type separate from its named payload type', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    part def FlowContainer {
+        flow f : F of i : I from source.output to target.input;
+        flow untyped of i = 1 from source.other to target.other;
+        succession flow from producer to consumer;
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        const flows = st.getSymbolsForUri('test://test.sysml').filter(s =>
+            s.kind === 'flow' || s.kind === 'succession flow',
+        );
+        const typed = flows.find(flow => flow.name === 'f');
+        expect(typed?.typeNames).toEqual(['F']);
+        expect(typed?.flowDetails).toEqual({
+            itemType: 'I',
+            payloadDeclared: true,
+            source: 'source.output',
+            target: 'target.input',
+        });
+
+        const untyped = flows.find(flow => flow.name === 'untyped');
+        expect(untyped?.typeNames).toEqual([]);
+        expect(untyped?.flowDetails?.itemType).toBeUndefined();
+        expect(untyped?.flowDetails?.payloadDeclared).toBe(true);
+
+        const succession = flows.find(flow => flow.kind === 'succession flow');
+        expect(succession?.flowDetails).toEqual({
+            payloadDeclared: false,
+            source: 'producer',
+            target: 'consumer',
+        });
     });
 
     it('should name an anonymous interface usage after its ends\' reference paths', async () => {

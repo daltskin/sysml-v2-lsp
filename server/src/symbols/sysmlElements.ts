@@ -16,6 +16,7 @@ export enum SysMLElementKind {
     InterfaceDef = 'interface def',
     InterfaceUsage = 'interface',
     FlowUsage = 'flow',
+    SuccessionFlowUsage = 'succession flow',
     ActionDef = 'action def',
     ActionUsage = 'action',
     PerformActionUsage = 'perform action',
@@ -112,7 +113,7 @@ export interface SysMLSymbol {
     /** Target reference for a transition usage. */
     target?: string;
     /** Payload and endpoints declared by a flow usage. */
-    flowDetails?: { itemType?: string; source?: string; target?: string };
+    flowDetails?: { itemType?: string; payloadDeclared?: boolean; source?: string; target?: string };
     /** Accepter text used to trigger a transition usage. */
     transitionTrigger?: string;
     /** Explicit succession edges owned by an action definition or usage. */
@@ -207,6 +208,11 @@ export function isUsage(kind: SysMLElementKind): boolean {
         && kind !== SysMLElementKind.Unknown;
 }
 
+/** Whether an element is a regular or succession flow usage. */
+export function isFlowUsage(kind: SysMLElementKind): boolean {
+    return kind === SysMLElementKind.FlowUsage || kind === SysMLElementKind.SuccessionFlowUsage;
+}
+
 /**
  * Map a SysMLElementKind to its official SysML v2 metaclass name.
  *
@@ -228,6 +234,7 @@ export function toMetaclassName(kind: SysMLElementKind): string {
         case SysMLElementKind.InterfaceDef: return 'InterfaceDefinition';
         case SysMLElementKind.InterfaceUsage: return 'InterfaceUsage';
         case SysMLElementKind.FlowUsage: return 'FlowUsage';
+        case SysMLElementKind.SuccessionFlowUsage: return 'SuccessionFlowUsage';
         case SysMLElementKind.ActionDef: return 'ActionDefinition';
         case SysMLElementKind.ActionUsage: return 'ActionUsage';
         case SysMLElementKind.PerformActionUsage: return 'PerformActionUsage';

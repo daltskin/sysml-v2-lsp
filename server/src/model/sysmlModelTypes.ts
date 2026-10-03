@@ -189,6 +189,7 @@ export interface SysMLElementDTO {
      * The extension reads these specific keys:
      *   partType      – Type name for parts/items
      *   portType      – Type name for ports
+     *   flowType      – Declared type of a flow usage
      *   itemType      – Payload type for a flow usage
      *   flowSource    – Source feature path for a flow usage
      *   flowTarget    – Target feature path for a flow usage
