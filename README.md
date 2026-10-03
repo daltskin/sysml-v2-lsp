@@ -151,9 +151,10 @@ make update-grammar   # Pull latest grammar, rebuild parser + DFA snapshot
 make update-library   # Pull latest SysML v2 standard library
 make dfa              # Regenerate DFA snapshot (after any grammar change)
 make ci               # Full CI pipeline (lint + build + test)
-npm run bench         # Run all benchmark suites
-npm run bench:baseline # Save benchmark baseline
-npm run bench:regression # Compare against baseline
+make bench            # Run all benchmark suites (SUITE="parse" to select)
+make bench-baseline   # Save a baseline from the stable suites
+make bench-compare    # Compare two runs (BASE=<file|dir> HEAD=<file|dir>)
+make bench-history    # Stable historical benchmark trends
 ```
 
 ## Benchmarks
@@ -163,40 +164,35 @@ A built-in benchmark suite measures parser, symbol table, LSP provider, memory, 
 ### Running Benchmarks
 
 ```bash
-npm run bench                    # run all suites
-npm run bench:parse              # parse suite only
-npm run bench:providers          # LSP providers suite only
-```
-
-Or use the runner directly for full control:
-
-```bash
-npx tsx benchmarks/src/runner.ts --suite parse --suite symbolTable
-npx tsx benchmarks/src/runner.ts --runs 10 --warmup 3
-npx tsx benchmarks/src/runner.ts --output ./my-results
+npm run bench                                        # run all suites
+npm run bench -- --suite parse --suite symbolTable   # specific suites
+npm run bench -- --runs 10 --warmup 3                # custom iterations
+npm run bench -- --output ./my-results               # custom output directory
+npm run bench:compare -- --base <a> --head <b>       # compare two runs (used by CI)
+npm run bench:history                                # stable historical trends
 ```
 
 ### Suites
 
-| Suite         | What it measures                                                       |
-| ------------- | ---------------------------------------------------------------------- |
-| `parse`       | ANTLR4 parse time — cold (no DFA) vs warm (DFA snapshot pre-loaded)    |
-| `symbolTable` | Symbol table build and lookup latency                                  |
-| `providers`   | LSP features: diagnostics, hover, completion, references, rename, etc. |
-| `memory`      | Heap allocation per file and scaling behaviour                         |
-| `throughput`  | End-to-end lines/sec and tokens/sec across all example files           |
-| `folderLoad`  | Full folder parse + symbol build (examples, standard library, all)     |
+| Suite         | What it measures                                                                        |
+| ------------- | --------------------------------------------------------------------------------------- |
+| `parse`       | Raw ANTLR parse time with syntax validation; warm runs include stale-snapshot recovery  |
+| `symbolTable` | Document parse plus symbol build, and cached lookup latency                             |
+| `providers`   | Batched provider latency over pre-parsed data with verified non-empty results           |
+| `memory`      | Forced-GC retained-heap estimates; use for coarse trends, not precise allocation counts |
+| `throughput`  | Syntax-valid lexer/parser throughput, including document-level stale-snapshot recovery  |
+| `folderLoad`  | Workspace-style file discovery, parse, and symbol build                                 |
 
 ### Regression Detection
 
 Save a baseline, then compare future runs against it:
 
 ```bash
-npm run bench:baseline           # save current results as baseline
-npm run bench:regression         # compare against baseline, exit 1 on regression
+make bench-baseline                                            # save a baseline
+npm run bench -- --suite symbolTable --suite folderLoad --compare   # compare, exit 1 on regression
 ```
 
-The default regression threshold is 20%. Override with `--threshold <n>`.
+Run the same suites for the baseline and comparison: suites share a process, so earlier suites slow later ones. The comparison uses the same stable metrics, verdicts, and thresholds as the pull request check: it warns above 15% and fails above 35%. Override the failure threshold with `--threshold <n>`. Baselines must come from the same Node version and platform.
 
 ### Viewing Results
 
@@ -205,6 +201,26 @@ Each run produces a JSON file and a Markdown report in `benchmarks/results/`. To
 ```bash
 npx tsx benchmarks/src/reporters/markdownReporter.ts benchmarks/results/<file>.json
 ```
+
+Generate a historical report from saved JSON results with:
+
+```bash
+npm run bench:history
+```
+
+The history report tracks the stable metrics used by the pull request check, combining runs of the same commit and environment. Prefer medians and repeated runs for trend decisions; with the default five measured runs, p95 is indicative rather than statistically robust.
+
+### Pull Request Performance Check
+
+The CI `performance` job benchmarks the PR base and head on the same runner using the PR's benchmark harness, then compares the stable metrics:
+
+```bash
+npm run bench:compare -- --base <base.json|dir> --head <head.json|dir> --warn 15 --fail 35
+```
+
+Results appear in the job summary as a table, slowdowns above 15% raise warning annotations, regressions above 35% fail the job, and the raw JSON/Markdown reports are uploaded as the `benchmark-reports` artifact.
+
+If the base cannot be benchmarked (for example, when a PR changes server APIs the harness calls), the comparison is skipped with a warning and the job passes; check the job summary before relying on a green result.
 
 ## Grammar Updates
 

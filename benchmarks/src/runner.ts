@@ -3,14 +3,13 @@
  * SysML v2 LSP Benchmark Runner
  *
  * Usage:
- *   npx tsx benchmarks/src/runner.ts                          # run all suites
- *   npx tsx benchmarks/src/runner.ts --suite parse            # specific suite
- *   npx tsx benchmarks/src/runner.ts --suite providers        # specific suite
- *   npx tsx benchmarks/src/runner.ts --baseline               # save baseline
- *   npx tsx benchmarks/src/runner.ts --compare                # compare vs baseline
- *   npx tsx benchmarks/src/runner.ts --runs 10 --warmup 3     # custom iterations
- *   npx tsx benchmarks/src/runner.ts --threshold 15           # regression threshold %
- *   npx tsx benchmarks/src/runner.ts --output ./my-results    # custom output dir
+ *   npm run bench                                   # run all suites
+ *   npm run bench -- --suite parse                  # specific suite (repeatable)
+ *   npm run bench -- --baseline                     # save baseline
+ *   npm run bench -- --compare                      # compare vs baseline
+ *   npm run bench -- --runs 10 --warmup 3           # custom iterations
+ *   npm run bench -- --threshold 15                 # regression threshold %
+ *   npm run bench -- --output ./my-results          # custom output dir
  */
 
 import * as path from 'node:path';
@@ -23,6 +22,7 @@ import { runFolderLoadSuite } from './suites/folderLoad.bench.js';
 import { buildReport, writeReport, writeBaseline, loadBaseline, type SuiteReport } from './reporters/jsonReporter.js';
 import { writeMarkdownReport } from './reporters/markdownReporter.js';
 import { compareReports, formatRegressionSummary } from './utils/regression.js';
+import { DEFAULT_FAIL_PERCENT } from './reporters/visuals.js';
 import type { BenchmarkOptions } from './utils/harness.js';
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../..');
@@ -47,7 +47,7 @@ function parseArgs(): CliOptions {
         compare: false,
         runs: 5,
         warmup: 2,
-        threshold: 20,
+        threshold: DEFAULT_FAIL_PERCENT,
         outputDir: path.join(ROOT, 'benchmarks/results'),
         baselineDir: path.join(ROOT, 'benchmarks/baselines'),
     };
@@ -100,7 +100,7 @@ Options:
   --compare          Compare against saved baseline and exit 1 on regression.
   --runs <n>         Number of measured iterations per benchmark (default: 5).
   --warmup <n>       Number of warmup iterations (default: 2).
-  --threshold <n>    Regression threshold percentage (default: 20).
+  --threshold <n>    Regression failure threshold percentage for stable metrics (default: ${DEFAULT_FAIL_PERCENT}).
   --output <path>    Custom output directory for JSON results.
   -h, --help         Show this help message.
 `);

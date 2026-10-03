@@ -16,19 +16,21 @@ export interface BenchmarkReport {
     timestamp: string;
     gitCommit: string;
     gitBranch: string;
+    gitDirty?: boolean;
     nodeVersion: string;
     platform: string;
     arch: string;
     suites: SuiteReport[];
 }
 
-function gitInfo(): { commit: string; branch: string } {
+function gitInfo(): { commit: string; branch: string; dirty: boolean } {
     try {
         const commit = execSync('git rev-parse --short HEAD', { encoding: 'utf-8' }).trim();
         const branch = execSync('git rev-parse --abbrev-ref HEAD', { encoding: 'utf-8' }).trim();
-        return { commit, branch };
+        const dirty = execSync('git status --porcelain', { encoding: 'utf-8' }).trim().length > 0;
+        return { commit, branch, dirty };
     } catch {
-        return { commit: 'unknown', branch: 'unknown' };
+        return { commit: 'unknown', branch: 'unknown', dirty: false };
     }
 }
 
@@ -38,6 +40,7 @@ export function buildReport(suites: SuiteReport[]): BenchmarkReport {
         timestamp: new Date().toISOString(),
         gitCommit: git.commit,
         gitBranch: git.branch,
+        gitDirty: git.dirty,
         nodeVersion: process.version,
         platform: process.platform,
         arch: process.arch,

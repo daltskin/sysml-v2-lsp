@@ -29,6 +29,9 @@ jobs:
       - name: Compile TypeScript
         run: npm run compile
 
+      - name: Type-check benchmarks
+        run: npx tsc -p benchmarks/tsconfig.json --noEmit
+
       - name: Lint
         run: npm run lint
         continue-on-error: true
@@ -41,3 +44,56 @@ jobs:
 
       - name: Build
         run: npm run build
+
+  performance:
+    if: github.event_name == 'pull_request'
+    # Pinned image so base and head share identical hardware/software within a run.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    concurrency:
+      group: performance-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup
+        uses: ./.github/actions/setup
+
+      - name: Prepare base worktree
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          git worktree add "$RUNNER_TEMP/base" "$BASE_SHA"
+          # Use the PR's harness for both sides so only the LSP code differs.
+          rm -rf "$RUNNER_TEMP/base/benchmarks/src" "$RUNNER_TEMP/base/benchmarks/fixtures"
+          cp -R benchmarks/src benchmarks/fixtures "$RUNNER_TEMP/base/benchmarks/"
+          cd "$RUNNER_TEMP/base"
+          npm install
+          npm run generate
+
+      - name: Benchmark base
+        continue-on-error: true
+        working-directory: ${{ runner.temp }}/base
+        # The base branch may predate the tsx devDependency, so use the PR's pinned binary.
+        run: |
+          "$GITHUB_WORKSPACE/node_modules/.bin/tsx" benchmarks/src/runner.ts --suite symbolTable --suite folderLoad --output "$RUNNER_TEMP/bench/base"
+
+      - name: Benchmark head
+        run: npm run bench -- --suite symbolTable --suite folderLoad --output "$RUNNER_TEMP/bench/head"
+
+      - name: Compare with base
+        run: npm run bench:compare -- --base "$RUNNER_TEMP/bench/base" --head "$RUNNER_TEMP/bench/head"
+
+      - name: Upload benchmark reports
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: benchmark-reports
+          path: ${{ runner.temp }}/bench
+          if-no-files-found: ignore
+          retention-days: 30

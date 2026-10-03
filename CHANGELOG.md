@@ -2,6 +2,20 @@
 
 ## [Unreleased]
 
+### Added
+
+- Add a benchmark history report for stable folder-load and workspace-build metrics, with a summary table, Mermaid trend charts, per-commit run ranges, and plain-language faster/slower/no-clear-change verdicts.
+- Add a pull request `performance` CI job that benchmarks base and head on the same runner, reports a comparison table in the job summary, warns above 15% and fails above 35% slowdown, and uploads raw reports as artifacts.
+- Add `make bench`, `make bench-baseline`, `make bench-compare`, and `make bench-history` targets.
+- Type-check and lint the benchmark sources in CI.
+
+### Changed
+
+- Use the same verdict wording, thresholds, legend, and Mermaid charts across the per-run benchmark report, PR comparison summary, and history report.
+- Validate parse, throughput, and symbol-table correctness with stale-DFA recovery, isolate parser DFA state between suites, point provider probes at real type references, and batch cached provider measurements. Earlier benchmark results are not comparable and should be discarded; the baseline has been regenerated.
+- Make the benchmark TypeScript project independently type-checkable and document each suite's measurement boundary and limitations.
+- Pin `tsx` as a dev dependency and consolidate benchmark scripts to `bench`, `bench:compare`, and `bench:history`; use `npm run bench -- --suite <name>`, `--baseline`, or `--compare` in place of the removed `bench:parse`, `bench:providers`, `bench:baseline`, and `bench:regression` aliases.
+
 ## [0.32.0]
 
 ### Fixed

@@ -12,6 +12,8 @@ export interface BenchmarkOptions {
     runs?: number;
     /** Whether to track memory deltas. Default: false */
     trackMemory?: boolean;
+    /** Operations performed inside each timed iteration. Timings are reported per operation. Default: 1 */
+    operationsPerRun?: number;
 }
 
 export interface BenchmarkResult {
@@ -37,23 +39,28 @@ export function benchmarkFn(
     const warmup = opts.warmup ?? 2;
     const runs = opts.runs ?? 5;
     const trackMemory = opts.trackMemory ?? false;
+    const operationsPerRun = opts.operationsPerRun ?? 1;
+
+    if (!Number.isInteger(operationsPerRun) || operationsPerRun < 1) {
+        throw new Error('operationsPerRun must be a positive integer');
+    }
 
     // Warmup
     for (let i = 0; i < warmup; i++) {
-        fn();
+        for (let operation = 0; operation < operationsPerRun; operation++) fn();
     }
 
     const timings: number[] = [];
     const memoryDeltas: MemoryDelta[] = [];
-    let lastMeta: Record<string, unknown> | void;
+    let lastMeta: Record<string, unknown> | void = undefined;
 
     for (let i = 0; i < runs; i++) {
         if (trackMemory) forceGC();
         const memBefore = trackMemory ? takeMemorySnapshot() : undefined;
 
         const start = performance.now();
-        lastMeta = fn();
-        const elapsed = performance.now() - start;
+        for (let operation = 0; operation < operationsPerRun; operation++) lastMeta = fn();
+        const elapsed = (performance.now() - start) / operationsPerRun;
 
         timings.push(elapsed);
 
@@ -68,7 +75,9 @@ export function benchmarkFn(
         timings,
         stats: computeStats(timings),
         memoryDeltas,
-        meta: lastMeta ?? undefined,
+        meta: operationsPerRun > 1
+            ? { ...lastMeta, operationsPerRun }
+            : lastMeta ?? undefined,
     };
 }
 
@@ -83,22 +92,27 @@ export async function benchmarkFnAsync(
     const warmup = opts.warmup ?? 2;
     const runs = opts.runs ?? 5;
     const trackMemory = opts.trackMemory ?? false;
+    const operationsPerRun = opts.operationsPerRun ?? 1;
+
+    if (!Number.isInteger(operationsPerRun) || operationsPerRun < 1) {
+        throw new Error('operationsPerRun must be a positive integer');
+    }
 
     for (let i = 0; i < warmup; i++) {
-        await fn();
+        for (let operation = 0; operation < operationsPerRun; operation++) await fn();
     }
 
     const timings: number[] = [];
     const memoryDeltas: MemoryDelta[] = [];
-    let lastMeta: Record<string, unknown> | void;
+    let lastMeta: Record<string, unknown> | void = undefined;
 
     for (let i = 0; i < runs; i++) {
         if (trackMemory) forceGC();
         const memBefore = trackMemory ? takeMemorySnapshot() : undefined;
 
         const start = performance.now();
-        lastMeta = await fn();
-        const elapsed = performance.now() - start;
+        for (let operation = 0; operation < operationsPerRun; operation++) lastMeta = await fn();
+        const elapsed = (performance.now() - start) / operationsPerRun;
 
         timings.push(elapsed);
 
@@ -113,6 +127,8 @@ export async function benchmarkFnAsync(
         timings,
         stats: computeStats(timings),
         memoryDeltas,
-        meta: lastMeta ?? undefined,
+        meta: operationsPerRun > 1
+            ? { ...lastMeta, operationsPerRun }
+            : lastMeta ?? undefined,
     };
 }
