@@ -1255,7 +1255,7 @@ export class SymbolTable {
             if (child instanceof TerminalNode) {
                 const token = child.symbol;
                 // Skip keywords — we want identifier tokens only
-                if (this.isIdentifierToken(token)) {
+                if (this.isNameTerminal(child)) {
                     return this.unquoteName(token.text ?? '');
                 }
             }
@@ -1329,7 +1329,8 @@ export class SymbolTable {
     /**
      * The first node of rule `ruleIndex` in `ctx`'s own declaration: never
      * inside a nested element, its body, its value, a flow's payload or ends,
-     * or a prefix such as `#metadata`.
+     * a connector end's own multiplicity (`connect [2] a to b`), or a prefix
+     * such as `#metadata`.
      */
     private findOwnHeaderRule(ctx: ParserRuleContext, ruleIndex: number): ParserRuleContext | undefined {
         for (let i = 0; i < ctx.getChildCount(); i++) {
@@ -1338,6 +1339,7 @@ export class SymbolTable {
             if (child.ruleIndex === ruleIndex) return child;
             if (RULE_INDEX_TO_KIND.has(child.ruleIndex) || BODY_RULE_INDICES.has(child.ruleIndex)
                 || child.ruleIndex === SysMLv2Parser.RULE_valuePart || FLOW_PART_RULE_INDICES.has(child.ruleIndex)
+                || child.ruleIndex === SysMLv2Parser.RULE_ownedCrossMultiplicityMember
                 || this.isPrefixOrExtensionContext(child)) continue;
             const found = this.findOwnHeaderRule(child, ruleIndex);
             if (found) return found;
@@ -1529,7 +1531,7 @@ export class SymbolTable {
     private extractNameRange(ctx: ParserRuleContext): Range | undefined {
         for (let i = 0; i < ctx.getChildCount(); i++) {
             const child = ctx.getChild(i);
-            if (child instanceof TerminalNode && this.isIdentifierToken(child.symbol)) {
+            if (child instanceof TerminalNode && this.isNameTerminal(child)) {
                 return tokenToRange(child.symbol);
             }
             if (child instanceof ParserRuleContext) {
@@ -1770,12 +1772,12 @@ export class SymbolTable {
     }
 
     /**
-     * Extract multiplicity from a context.
-     * Looks for MultiplicityBoundsContext in the subtree.
+     * Extract multiplicity from a context's own declaration, never from a
+     * nested element or its body.
      * Returns { multiplicity: "1..5", multiplicityRange: { lower: 1, upper: 5 } }
      */
     private extractMultiplicity(ctx: ParserRuleContext): { multiplicity?: string; multiplicityRange?: { lower: number; upper: number | '*' } } {
-        const multCtx = this.findMultiplicityBounds(ctx);
+        const multCtx = this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_multiplicityBounds) as MultiplicityBoundsContext | undefined;
         if (!multCtx) {
             return {};
         }
@@ -1843,26 +1845,6 @@ export class SymbolTable {
     }
 
     /**
-     * Recursively search for a MultiplicityBoundsContext in the subtree.
-     */
-    private findMultiplicityBounds(ctx: ParserRuleContext): MultiplicityBoundsContext | undefined {
-        // Use ruleIndex instead of constructor.name to survive esbuild minification
-        if (ctx.ruleIndex === SysMLv2Parser.RULE_multiplicityBounds) {
-            return ctx as MultiplicityBoundsContext;
-        }
-        for (let i = 0; i < ctx.getChildCount(); i++) {
-            const child = ctx.getChild(i);
-            if (child instanceof ParserRuleContext) {
-                const result = this.findMultiplicityBounds(child);
-                if (result) {
-                    return result;
-                }
-            }
-        }
-        return undefined;
-    }
-
-    /**
      * Whether a context is a prefix metadata or definition/usage prefix rule.
      * These contain annotation identifiers (e.g. from `#product`) that should
      * not be mistaken for the element's own declared name.
@@ -1909,6 +1891,16 @@ export class SymbolTable {
         if (this.isQuotedName(text)) return true;
         // Identifiers start with a letter or underscore
         return /^[a-zA-Z_]/.test(text) && !this.isKeyword(text);
+    }
+
+    /**
+     * Whether a terminal is (part of) a name: an identifier, a quoted name, or
+     * a KerML keyword such as `step` or `function` that the grammar parsed as a
+     * name (`name : IDENTIFIER | STRING | unreservedKeyword`).
+     */
+    private isNameTerminal(node: TerminalNode): boolean {
+        return this.isIdentifierToken(node.symbol)
+            || (node.parent as ParserRuleContext | null)?.ruleIndex === SysMLv2Parser.RULE_unreservedKeyword;
     }
 
     /**
@@ -2352,7 +2344,7 @@ export class SymbolTable {
             const child = ctx.getChild(i);
             if (child instanceof TerminalNode) {
                 const text = child.symbol.text;
-                if (text && this.isIdentifierToken(child.symbol)) {
+                if (text && this.isNameTerminal(child)) {
                     parts.push(this.unquoteName(text));
                 }
             } else if (child instanceof ParserRuleContext) {

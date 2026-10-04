@@ -466,10 +466,9 @@ export class SysMLModelProvider {
             attributes['direction'] = direction;
         }
 
-        // Extract multiplicity from the source text
-        const multiplicity = this.extractMultiplicity(symbol, lines);
-        if (multiplicity) {
-            attributes['multiplicity'] = multiplicity;
+        // Multiplicity from the element's own declaration, never a nested element's
+        if (symbol.multiplicity) {
+            attributes['multiplicity'] = symbol.multiplicity;
         }
 
         // Extract modifiers
@@ -1275,7 +1274,7 @@ export class SysMLModelProvider {
                         name: c.name,
                         kind: toMetaclassName(c.kind),
                         type: c.typeNames.join(', ') || undefined,
-                        multiplicity: c.multiplicity ?? this.extractMultiplicity(c, lines),
+                        multiplicity: c.multiplicity,
                         direction: direction as 'in' | 'out' | 'inout' | undefined,
                         visibility: c.visibility,
                         isDerived: modifier?.split(', ').includes('derived') ?? false,
@@ -1442,16 +1441,6 @@ export class SysMLModelProvider {
         if (containsWord(elementText, 'in')) return 'in';
         if (containsWord(elementText, 'out')) return 'out';
         return undefined;
-    }
-
-    /** Extract multiplicity (e.g., [4], [0..*]) from source text. */
-    private extractMultiplicity(symbol: SysMLSymbol, lines: string[]): string | undefined {
-        const elementText = this.getElementText(symbol, lines);
-        const open = elementText.indexOf('[');
-        if (open < 0) return undefined;
-        const close = elementText.indexOf(']', open + 1);
-        if (close < 0) return undefined;
-        return elementText.substring(open + 1, close);
     }
 
     /** Extract modifiers (abstract, readonly, derived, etc.) from source text. */

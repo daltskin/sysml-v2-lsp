@@ -616,6 +616,49 @@ package Test {
         expect(items[0].multiplicityRange!.upper).toBe('*');
     });
 
+    it('should not take a usage\'s multiplicity from its body', async () => {
+        const { st } = await buildST(`
+package Test {
+    part def Engine;
+    part car {
+        part engines : Engine[2];
+    }
+}
+`);
+        expect(st.findByName('car')[0].multiplicity).toBeUndefined();
+        expect(st.findByName('engines')[0].multiplicity).toBe('2');
+    });
+
+    it('should not take a connection\'s multiplicity from its ends', async () => {
+        const { st } = await buildST(`
+package Test {
+    part def A { port p; }
+    part a : A;
+    part b : A;
+    connection c connect [2] a.p to [1] b.p;
+    connection d [3] connect a.p to b.p;
+}
+`);
+        expect(st.findByName('c')[0].multiplicity).toBeUndefined();
+        expect(st.findByName('d')[0].multiplicity).toBe('3');
+    });
+
+    it('should name elements declared with unreserved KerML keywords', async () => {
+        const { st, result } = await buildST(`
+package Test {
+    part def function;
+    part step : function;
+    perform action member[2];
+    alias multiplicity for step;
+}
+`);
+        expect(result.errors).toHaveLength(0);
+        expect(st.findByName('function')[0]?.qualifiedName).toBe('Test::function');
+        expect(st.findByName('step')[0]?.typeNames).toEqual(['function']);
+        expect(st.findByName('member')[0]?.multiplicity).toBe('2');
+        expect(st.findByName('multiplicity')).toHaveLength(1);
+    });
+
     it('should not include keywords as type names', async () => {
         const { st } = await buildST(`
 package Test {

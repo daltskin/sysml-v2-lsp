@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Added
+
+- Add `.github/copilot-instructions.md` requiring language-affecting changes to be validated against the latest OMG SysML and KerML specifications, with cited clauses or grammar productions and a regression test.
+
+### Fixed
+
+- Report only an element's own multiplicity: a definition or usage no longer takes the multiplicity of a nested element (`part def Car { part : Engine[2]; }` gave `Car` the multiplicity `2`), and a unit in a default value (`default 0 [kg]`) is no longer reported as a multiplicity. SysML definitions cannot declare a multiplicity (`DefinitionDeclaration`); a usage's comes from its own `FeatureSpecializationPart`. `sysml/model` now reads multiplicity from the parse tree, so a usage whose multiplicity follows a specialization (`item :>> edges [3..4]`) reports it correctly.
+- A connection or interface no longer reports the multiplicity of one of its ends (`connection c connect [2] a.p to [1] b.p;`): a `ConnectorEnd`'s cross multiplicity belongs to the end, not the connector.
+- Elements named with an unreserved KerML keyword (`step`, `function`, `type`, `member`, `feature`, `behavior`, `var`, `multiplicity`, ...) keep their name, which the grammar allows (`name : IDENTIFIER | STRING | unreservedKeyword`). They were reported as anonymous, e.g. `perform action step[2];` was shown as `[2]`, and `alias multiplicity for degeneracy;` was named after its target.
+
 ## [0.33.0]
 
 ### Added

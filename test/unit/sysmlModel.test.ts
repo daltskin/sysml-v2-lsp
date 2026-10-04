@@ -414,6 +414,32 @@ package Test {
             expect(wheels!.attributes['multiplicity']).toBe('4');
         });
 
+        it('should report only an element\'s own multiplicity', async () => {
+            const model = await getModelForText(`
+package Test {
+    part def Engine;
+    part def Car {
+        part : Engine[2];
+        part spare : Engine;
+        attribute mass default 0 [kg];
+    }
+    part car : Car {
+        part engines : Engine[1..2];
+    }
+}
+`, ['elements']);
+
+            const pkg = model.elements!.find(e => e.name === 'Test')!;
+            const carDef = pkg.children.find(e => e.name === 'Car')!;
+            const car = pkg.children.find(e => e.name === 'car')!;
+            expect(carDef.attributes['multiplicity']).toBeUndefined();
+            expect(car.attributes['multiplicity']).toBeUndefined();
+            expect(carDef.children.find(e => e.attributes['isAnonymous'])!.attributes['multiplicity']).toBe('2');
+            expect(carDef.children.find(e => e.name === 'spare')!.attributes['multiplicity']).toBeUndefined();
+            expect(carDef.children.find(e => e.name === 'mass')!.attributes['multiplicity']).toBeUndefined();
+            expect(car.children.find(e => e.name === 'engines')!.attributes['multiplicity']).toBe('1..2');
+        });
+
         it('should extract documentation', async () => {
             const model = await getModelForText(`
 package Test {
