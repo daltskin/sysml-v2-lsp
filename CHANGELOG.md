@@ -8,6 +8,9 @@
 - Add a pull request `performance` CI job that benchmarks base and head on the same runner, reports a comparison table in the job summary, warns above 15% and fails above 35% slowdown, and uploads raw reports as artifacts.
 - Add `make bench`, `make bench-baseline`, `make bench-compare`, and `make bench-history` targets.
 - Type-check and lint the benchmark sources in CI.
+- Project item flows into the symbol table and `sysml/model`, including payload forms such as `flow of Signal` and `flow f : F of i : I`. Flow elements expose `flowType`, `itemType`, `flowSource`, and `flowTarget` attributes plus `flow` relationships, and sequence diagrams include payload-carrying flows (#122).
+- Project `succession flow` usages as `SuccessionFlowUsage` elements with `succession` relationships (#122).
+- Build the package automatically when installed from Git (`npm install github:daltskin/sysml-v2-lsp`) via a `prepare` script (#122).
 
 ### Changed
 
@@ -15,6 +18,10 @@
 - Validate parse, throughput, and symbol-table correctness with stale-DFA recovery, isolate parser DFA state between suites, point provider probes at real type references, and batch cached provider measurements. Earlier benchmark results are not comparable and should be discarded; the baseline has been regenerated.
 - Make the benchmark TypeScript project independently type-checkable and document each suite's measurement boundary and limitations.
 - Pin `tsx` as a dev dependency and consolidate benchmark scripts to `bench`, `bench:compare`, and `bench:history`; use `npm run bench -- --suite <name>`, `--baseline`, or `--compare` in place of the removed `bench:parse`, `bench:providers`, `bench:baseline`, and `bench:regression` aliases.
+
+### Fixed
+
+- Sequence diagrams no longer show `succession flow` usages as messages (#122).
 
 ## [0.32.0]
 
