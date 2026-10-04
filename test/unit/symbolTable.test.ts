@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isAnonymous, type SysMLSymbol } from '../../server/src/symbols/sysmlElements.js';
+import { displayName, isAnonymous, type SysMLSymbol } from '../../server/src/symbols/sysmlElements.js';
 
 /** Helper: parse text and build a symbol table */
 async function buildST(text: string, uri = 'test://test.sysml') {
@@ -143,6 +143,106 @@ package Demo {
         const connection = st.findByName('link');
         expect(connection).toHaveLength(1);
         expect(connection[0].kind).toBe('connection');
+    });
+
+    it('should extract item flows without mistaking payloads or endpoints for declared names', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    interface def Link {
+        flow of Payload[1..*] from source.output to target.input;
+        flow outgoing of OtherPayload[1..*] from source.other to target.other;
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        const flows = st.getSymbolsForUri('test://test.sysml').filter(s => s.kind === 'flow');
+        expect(flows).toHaveLength(2);
+        expect(flows.map(flow => [flow.name, isAnonymous(flow), flow.typeNames, flow.flowDetails])).toEqual([
+            [
+                '',
+                true,
+                [],
+                {
+                    itemType: 'Payload',
+                    payloadDeclared: true,
+                    source: 'source.output',
+                    target: 'target.input',
+                },
+            ],
+            [
+                'outgoing',
+                false,
+                [],
+                {
+                    itemType: 'OtherPayload',
+                    payloadDeclared: true,
+                    source: 'source.other',
+                    target: 'target.other',
+                },
+            ],
+        ]);
+        // An anonymous flow is shown by its source and target.
+        expect(flows.map(flow => displayName(flow))).toEqual(['source.output→target.input', 'outgoing']);
+        expect(st.findByName('Payload')).toEqual([]);
+        expect(st.findByName('source')).toEqual([]);
+    });
+
+    it('should keep a flow anonymous when only its payload is named', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    part def Container {
+        flow of i : I from source.output to target.input;
+        flow <f1> outgoing of j : J from source.other to target.other;
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        const flows = st.getSymbolsForUri('test://test.sysml').filter(s => s.kind === 'flow');
+        expect(flows.map(flow => [flow.name, isAnonymous(flow), displayName(flow)])).toEqual([
+            ['', true, 'source.output→target.input'],
+            ['outgoing', false, 'outgoing'],
+        ]);
+        expect(st.findByName('i')).toEqual([]);
+        expect(st.findByName('j')).toEqual([]);
+    });
+
+    it('should keep a flow declared type separate from its named payload type', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    part def FlowContainer {
+        flow f : F of i : I from source.output to target.input;
+        flow untyped of i = 1 from source.other to target.other;
+        succession flow from producer to consumer;
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        const flows = st.getSymbolsForUri('test://test.sysml').filter(s =>
+            s.kind === 'flow' || s.kind === 'succession flow',
+        );
+        const typed = flows.find(flow => flow.name === 'f');
+        expect(typed?.typeNames).toEqual(['F']);
+        expect(typed?.flowDetails).toEqual({
+            itemType: 'I',
+            payloadDeclared: true,
+            source: 'source.output',
+            target: 'target.input',
+        });
+
+        const untyped = flows.find(flow => flow.name === 'untyped');
+        expect(untyped?.typeNames).toEqual([]);
+        expect(untyped?.flowDetails?.itemType).toBeUndefined();
+        expect(untyped?.flowDetails?.payloadDeclared).toBe(true);
+
+        const succession = flows.find(flow => flow.kind === 'succession flow');
+        expect(succession?.flowDetails).toEqual({
+            payloadDeclared: false,
+            source: 'producer',
+            target: 'consumer',
+        });
     });
 
     it('should name an anonymous interface usage after its ends\' reference paths', async () => {

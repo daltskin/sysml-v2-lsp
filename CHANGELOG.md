@@ -2,8 +2,30 @@
 
 ## [Unreleased]
 
+### Added
+
+- Add a benchmark history report for stable folder-load and workspace-build metrics, with a summary table, Mermaid trend charts, per-commit run ranges, and plain-language faster/slower/no-clear-change verdicts.
+- Add a pull request `performance` CI job that benchmarks base and head on the same runner, reports a comparison table in the job summary, warns above 15% and fails above 35% slowdown, and uploads raw reports as artifacts.
+- Add `make bench`, `make bench-baseline`, `make bench-compare`, and `make bench-history` targets.
+- Type-check and lint the benchmark sources in CI.
+- Project item flows into the symbol table and `sysml/model`, including payload forms such as `flow of Signal` and `flow f : F of i : I`. Flow elements expose `flowType`, `itemType`, `flowSource`, and `flowTarget` attributes plus `flow` relationships, and sequence diagrams include payload-carrying flows (#122).
+- Project `succession flow` usages as `SuccessionFlowUsage` elements with `succession` relationships (#122).
+- Build the package automatically when installed from Git (`npm install github:daltskin/sysml-v2-lsp`) via a `prepare` script (#122).
+
+### Changed
+
+- Use the same verdict wording, thresholds, legend, and Mermaid charts across the per-run benchmark report, PR comparison summary, and history report.
+- Validate parse, throughput, and symbol-table correctness with stale-DFA recovery, isolate parser DFA state between suites, point provider probes at real type references, and batch cached provider measurements. Earlier benchmark results are not comparable and should be discarded; the baseline has been regenerated.
+- Make the benchmark TypeScript project independently type-checkable and document each suite's measurement boundary and limitations.
+- Pin `tsx` as a dev dependency and consolidate benchmark scripts to `bench`, `bench:compare`, and `bench:history`; use `npm run bench -- --suite <name>`, `--baseline`, or `--compare` in place of the removed `bench:parse`, `bench:providers`, `bench:baseline`, and `bench:regression` aliases.
+- Every declared element (package, definition or usage) has a `symbolId`: a version 5 UUID derived from the project ID and its name, or, without one, its declaration (KerML 9.1). Stable across reloads; a rename gives a new one, so it is not the KerML `elementId`.
+- Every declared element links to its owner by `SysMLSymbol.parentId` (the owner's `symbolId`); `SysMLSymbol.parentQualifiedName` is removed, and `SysMLSymbol.qualifiedName` is optional (absent for an anonymous element and its members).
+- Add `initializationOptions.projectId` (MCP server: `SYSML_PROJECT_ID`): a project's UUID, making its top-level elements' URLs `urn:uuid:<projectId>/<name>`, so symbol IDs are unique across projects (KerML 9.1). Without it, symbol IDs are unique only within one workspace.
+- `sysml/model`, element lookup, the complexity report and MCP symbols report `symbolId`, and `qualifiedName: null` where an element has none (as in the SysML v2 API); relationships report `sourceId` or `symbolId`. Breaking for MCP: symbols report `parentId` (the owner's `symbolId`) instead of `parent`.
+
 ### Fixed
 
+- Sequence diagrams no longer show `succession flow` usages as messages (#122).
 - A definition or usage without a declared name (`part : P;`, `port :> p0;`, `connect a.p to b.p;`, `decide;`) is anonymous: it has no name or qualified name, instead of one taken from its type, a subsetted feature or its first end. A redefinition or `perform`/`exhibit`/`include` keeps the referenced name (7.6.5).
 - Anonymous elements are shown by their declaration without a name, as in the standard's graphical notation (`: Engine`, `:> p0`), else by what they connect (`a.p→b.p`, `s1→s2`), in the outline, workspace symbols, hierarchies, messages and MCP previews. `sysml/model` reports an empty `name` and `isAnonymous: true`.
 - An anonymous element is selected by its first token (`connect`): hover, go to definition and rename on `a` in `connect a.p to b.p;` now apply to `a`, not to the connection. Rename, find references and linked editing do nothing on an anonymous element, which has no name.
@@ -11,13 +33,6 @@
 - MCP preview diagrams give each anonymous element its own node, identified by its `symbolId`, so anonymous parts of one type no longer share a sequence lifeline; named participants are identified by qualified name, as in the other views. An anonymous actor is labelled by its type (`: User`).
 - A typed transition without a source state (`transition : T then s2;`) is an anonymous element like any other, owned by and listed among the members of its owner.
 - Report an empty quoted name (`''`) as an error (`empty-name`): SysML v2 requires a name in single quotes to contain at least one character (7.2.2). An element declared with it is treated as anonymous.
-
-### Changed
-
-- Every declared element (package, definition or usage) has a `symbolId`: a version 5 UUID derived from the project ID and its name, or, without one, its declaration (KerML 9.1). Stable across reloads; a rename gives a new one, so it is not the KerML `elementId`.
-- Every declared element links to its owner by `SysMLSymbol.parentId` (the owner's `symbolId`); `SysMLSymbol.parentQualifiedName` is removed, and `SysMLSymbol.qualifiedName` is optional (absent for an anonymous element and its members).
-- Add `initializationOptions.projectId` (MCP server: `SYSML_PROJECT_ID`): a project's UUID, making its top-level elements' URLs `urn:uuid:<projectId>/<name>`, so symbol IDs are unique across projects (KerML 9.1). Without it, symbol IDs are unique only within one workspace.
-- `sysml/model`, element lookup, the complexity report and MCP symbols report `symbolId`, and `qualifiedName: null` where an element has none (as in the SysML v2 API); relationships report `sourceId` or `symbolId`. Breaking for MCP: symbols report `parentId` (the owner's `symbolId`) instead of `parent`.
 
 ## [0.32.0]
 

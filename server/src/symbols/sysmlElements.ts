@@ -15,6 +15,8 @@ export enum SysMLElementKind {
     ConnectionUsage = 'connection',
     InterfaceDef = 'interface def',
     InterfaceUsage = 'interface',
+    FlowUsage = 'flow',
+    SuccessionFlowUsage = 'succession flow',
     ActionDef = 'action def',
     ActionUsage = 'action',
     PerformActionUsage = 'perform action',
@@ -128,6 +130,8 @@ export interface SysMLSymbol {
     source?: string;
     /** Target reference for a transition usage. */
     target?: string;
+    /** Payload and endpoints declared by a flow usage. */
+    flowDetails?: { itemType?: string; payloadDeclared?: boolean; source?: string; target?: string };
     /** Accepter text used to trigger a transition usage. */
     transitionTrigger?: string;
     /** Explicit succession edges owned by an action definition or usage. */
@@ -217,14 +221,16 @@ export function isAnonymous(symbol: SysMLSymbol): boolean {
  * workspace symbols, hierarchies, messages): its name; for an anonymous
  * element its declaration without a name, as the standard's graphical
  * notation shows it (8.2.3.6) -- its specialization part (`: Engine`); else
- * what it connects: a transition's states or a binary connector's ends with
- * an arrow for `to` (`s1→s2`, `a.p→b.p`), an n-ary connector's ends joined by
+ * what it connects: a transition's states, a flow's source and target, or a
+ * binary connector's ends with an arrow for `to` (`s1→s2`, `a.p→b.p`), an n-ary connector's ends joined by
  * `-`; else its declaration as written.
  */
 export function displayName(symbol: SysMLSymbol): string {
     if (symbol.name) return symbol.name;
     if (symbol.specialization) return symbol.specialization;
     if (symbol.source && symbol.target) return `${symbol.source}→${symbol.target}`;
+    const flow = symbol.flowDetails;
+    if (flow?.source && flow.target) return `${flow.source}→${flow.target}`;
     if (symbol.ends) return symbol.ends.join(symbol.ends.length === 2 ? '→' : '-');
     return symbol.label || symbol.kind;
 }
@@ -244,6 +250,11 @@ export function isUsage(kind: SysMLElementKind): boolean {
         && kind !== SysMLElementKind.Import && kind !== SysMLElementKind.Comment
         && kind !== SysMLElementKind.Doc && kind !== SysMLElementKind.Alias
         && kind !== SysMLElementKind.Unknown;
+}
+
+/** Whether an element is a regular or succession flow usage. */
+export function isFlowUsage(kind: SysMLElementKind): boolean {
+    return kind === SysMLElementKind.FlowUsage || kind === SysMLElementKind.SuccessionFlowUsage;
 }
 
 /**
@@ -266,6 +277,8 @@ export function toMetaclassName(kind: SysMLElementKind): string {
         case SysMLElementKind.ConnectionUsage: return 'ConnectionUsage';
         case SysMLElementKind.InterfaceDef: return 'InterfaceDefinition';
         case SysMLElementKind.InterfaceUsage: return 'InterfaceUsage';
+        case SysMLElementKind.FlowUsage: return 'FlowUsage';
+        case SysMLElementKind.SuccessionFlowUsage: return 'SuccessionFlowUsage';
         case SysMLElementKind.ActionDef: return 'ActionDefinition';
         case SysMLElementKind.ActionUsage: return 'ActionUsage';
         case SysMLElementKind.PerformActionUsage: return 'PerformActionUsage';

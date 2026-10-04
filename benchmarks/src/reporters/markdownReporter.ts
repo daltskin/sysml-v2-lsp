@@ -9,6 +9,7 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import type { BenchmarkReport, SuiteReport } from './jsonReporter.js';
 import type { BenchmarkResult } from '../utils/harness.js';
+import { mermaidChart } from './visuals.js';
 
 // ── Formatting helpers ──────────────────────────────────────────────
 
@@ -19,9 +20,8 @@ function fmt(ms: number): string {
     return `${(ms / 1000).toFixed(2)}s`;
 }
 
-function pctBar(ratio: number, width = 20): string {
-    const filled = Math.round(ratio * width);
-    return '█'.repeat(filled) + '░'.repeat(width - filled);
+function chartLabel(name: string): string {
+    return name.replace('fixture/', '').replace(/\.sysml$/, '');
 }
 
 function coefficient(result: BenchmarkResult): string {
@@ -39,9 +39,11 @@ function renderHeader(report: BenchmarkReport): string {
         `| Property | Value |`,
         `| --- | --- |`,
         `| Date | ${date} |`,
-        `| Commit | \`${report.gitCommit}\` (${report.gitBranch}) |`,
+        `| Commit | \`${report.gitCommit}${report.gitDirty ? '*' : ''}\` (${report.gitBranch})${report.gitDirty ? ', dirty worktree' : ''} |`,
         `| Node | ${report.nodeVersion} |`,
         `| Platform | ${report.platform}/${report.arch} |`,
+        '',
+        'Times are medians; **lower is better**. CV is the coefficient of variation (run-to-run spread).',
         '',
     ].join('\n');
 }
@@ -53,10 +55,13 @@ function renderParseSuite(suite: SuiteReport): string {
     const lines: string[] = [
         `## Parse`,
         '',
-        'Measures raw ANTLR4 parse time. **Cold** = no DFA cache; **Warm** = DFA snapshot pre-loaded.',
+        'Measures raw ANTLR4 parse time. **Cold** = no DFA cache; **Warm** = DFA snapshot pre-loaded. 🟡 marks warm parses that needed a stale-snapshot retry.',
         '',
-        `| File | Lines | Tokens | Cold (median) | Warm (median) | Speedup | Mode |`,
-        `| --- | ---: | ---: | ---: | ---: | ---: | --- |`,
+        ...(warm.length > 0
+            ? [...mermaidChart('Warm Parse', warm.map(r => chartLabel(r.name.replace('warm/', ''))), 'bar', warm.map(r => r.stats.median)), '']
+            : []),
+        `| File | Lines | Tokens | Cold (median) | Warm (median) | Speedup | Mode | Errors | Recovery |`,
+        `| --- | ---: | ---: | ---: | ---: | ---: | --- | ---: | --- |`,
     ];
 
     for (const c of cold) {
@@ -65,9 +70,13 @@ function renderParseSuite(suite: SuiteReport): string {
         const wMedian = w ? w.stats.median : 0;
         const speedup = wMedian > 0 ? (c.stats.median / wMedian).toFixed(1) : '–';
         const mode = (w?.meta?.mode ?? c.meta?.mode ?? '') as string;
+        const errors = Number(w?.meta?.errors ?? c.meta?.errors ?? 0);
+        const initialErrors = Number(w?.meta?.initialErrors ?? 0);
+        const retries = Number(w?.meta?.retries ?? 0);
+        const recovery = retries > 0 ? `🟡 ${initialErrors} initial, ${retries} retry` : 'none';
         lines.push(
             `| ${label} | ${c.meta?.lines ?? '–'} | ${c.meta?.tokens ?? '–'} ` +
-            `| ${fmt(c.stats.median)} | ${w ? fmt(wMedian) : '–'} | ${speedup}× | ${mode} |`
+            `| ${fmt(c.stats.median)} | ${w ? fmt(wMedian) : '–'} | ${speedup}× | ${mode} | ${errors} | ${recovery} |`
         );
     }
 
@@ -84,6 +93,9 @@ function renderSymbolTableSuite(suite: SuiteReport): string {
         '',
         '### Build',
         '',
+        ...(builds.length > 0
+            ? [...mermaidChart('Symbol Table Build', builds.map(b => chartLabel(b.name.replace('build/', ''))), 'bar', builds.map(b => b.stats.median)), '']
+            : []),
         `| Scope | Symbols | Median | p95 | CV |`,
         `| --- | ---: | ---: | ---: | ---: |`,
     ];
@@ -165,15 +177,17 @@ function renderThroughputSuite(suite: SuiteReport): string {
     const lines: string[] = [
         `## Throughput`,
         '',
-        `| Mode | Median | Lines/sec | Tokens/sec | Files |`,
-        `| --- | ---: | ---: | ---: | ---: |`,
+        `| Mode | Median | Lines/sec | Tokens/sec | Files | Errors | Recovery |`,
+        `| --- | ---: | ---: | ---: | ---: | ---: | --- |`,
     ];
 
     for (const r of suite.results) {
         const lps = r.meta?.linesPerSec ? Number(r.meta.linesPerSec).toLocaleString() : '–';
         const tps = r.meta?.tokensPerSec ? Number(r.meta.tokensPerSec).toLocaleString() : '–';
+        const retries = Number(r.meta?.retries ?? 0);
+        const recovery = retries > 0 ? `${r.meta?.initialErrors ?? 0} initial, ${retries} retry` : 'none';
         lines.push(
-            `| ${r.name.replace('throughput/', '')} | ${fmt(r.stats.median)} | ${lps} | ${tps} | ${r.meta?.fileCount ?? '–'} |`
+            `| ${r.name.replace('throughput/', '')} | ${fmt(r.stats.median)} | ${lps} | ${tps} | ${r.meta?.fileCount ?? '–'} | ${r.meta?.errors ?? '–'} | ${recovery} |`
         );
     }
 
@@ -182,21 +196,17 @@ function renderThroughputSuite(suite: SuiteReport): string {
 }
 
 function renderFolderLoadSuite(suite: SuiteReport): string {
-    // Find the max median to scale the bars
-    const maxMedian = Math.max(...suite.results.map(r => r.stats.median));
-
     const lines: string[] = [
         `## Folder Load`,
         '',
-        `| Folder | Files | Symbols | Median | p95 | |`,
-        `| --- | ---: | ---: | ---: | ---: | --- |`,
+        `| Folder | Files | Symbols | Median | p95 | CV |`,
+        `| --- | ---: | ---: | ---: | ---: | ---: |`,
     ];
 
     for (const r of suite.results) {
-        const bar = pctBar(r.stats.median / maxMedian, 15);
         lines.push(
             `| ${r.name.replace('folder/', '')} | ${r.meta?.fileCount ?? '–'} | ${r.meta?.symbolCount ?? '–'} ` +
-            `| ${fmt(r.stats.median)} | ${fmt(r.stats.p95)} | \`${bar}\` |`
+            `| ${fmt(r.stats.median)} | ${fmt(r.stats.p95)} | ${coefficient(r)} |`
         );
     }
 

@@ -2,82 +2,19 @@
  * Parse benchmark suite — measures lexer + parser performance with cold/warm DFA.
  */
 
-import { BailErrorStrategy, CharStream, CommonTokenStream, DefaultErrorStrategy, PredictionMode } from 'antlr4ng';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { SysMLv2Lexer } from '../../../server/src/generated/SysMLv2Lexer.js';
-import { SysMLv2Parser } from '../../../server/src/generated/SysMLv2Parser.js';
-import { isDfaPreSeeded, loadDFASnapshot, markDfaNotPreSeeded } from '../../../server/src/parser/dfaLoader.js';
+import {
+    clearAllDFAStates,
+    isDfaPreSeeded,
+    loadDFASnapshot,
+    markDfaNotPreSeeded,
+} from '../../../server/src/parser/dfaLoader.js';
 import { benchmarkFn, type BenchmarkResult, type BenchmarkOptions } from '../utils/harness.js';
+import { parseRaw, resetDFA } from '../utils/rawParser.js';
 import type { SuiteReport } from '../reporters/jsonReporter.js';
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..');
-
-interface ParseTiming {
-    lexMs: number;
-    parseMs: number;
-    totalMs: number;
-    tokens: number;
-    lines: number;
-    mode: 'SLL' | 'SLL+LL';
-    errors: number;
-}
-
-function resetDFA(): void {
-    const dfas = (SysMLv2Parser as unknown as Record<string, unknown[]>).decisionsToDFA as Array<{s0?: undefined; states?: {clear?: () => void}}>;
-    for (const dfa of dfas) {
-        if (!dfa) continue;
-        dfa.s0 = undefined;
-        if (dfa.states && typeof dfa.states.clear === 'function') {
-            dfa.states.clear();
-        }
-    }
-}
-
-function parseOnce(text: string): ParseTiming {
-    const totalStart = performance.now();
-
-    const input = CharStream.fromString(text);
-    const lexer = new SysMLv2Lexer(input);
-    const tokenStream = new CommonTokenStream(lexer);
-
-    const lexStart = performance.now();
-    tokenStream.fill();
-    const lexMs = performance.now() - lexStart;
-    const tokenCount = tokenStream.getTokens().length;
-
-    const parser = new SysMLv2Parser(tokenStream);
-    parser.removeErrorListeners();
-
-    let mode: 'SLL' | 'SLL+LL' = 'SLL';
-    let errors = 0;
-
-    parser.interpreter.predictionMode = PredictionMode.SLL;
-    parser.errorHandler = new BailErrorStrategy();
-
-    const parseStart = performance.now();
-    try {
-        parser.rootNamespace();
-    } catch {
-        mode = 'SLL+LL';
-        tokenStream.seek(0);
-        parser.reset();
-        parser.interpreter.predictionMode = PredictionMode.LL;
-        parser.errorHandler = new DefaultErrorStrategy();
-        parser.removeErrorListeners();
-        parser.addErrorListener({
-            syntaxError: () => { errors++; },
-            reportAmbiguity: () => { },
-            reportAttemptingFullContext: () => { },
-            reportContextSensitivity: () => { },
-        });
-        parser.rootNamespace();
-    }
-    const parseMs = performance.now() - parseStart;
-    const totalMs = performance.now() - totalStart;
-
-    return { lexMs, parseMs, totalMs, tokens: tokenCount, lines: text.split('\n').length, mode, errors };
-}
 
 interface BenchFile {
     label: string;
@@ -116,7 +53,8 @@ export function runParseSuite(opts: BenchmarkOptions = {}): SuiteReport {
         // Cold parse (reset DFA each iteration)
         const coldResult = benchmarkFn(`cold/${file.label}`, () => {
             resetDFA();
-            const t = parseOnce(text);
+            const t = parseRaw(text);
+            if (t.errors > 0) throw new Error(`Cold parse failed for ${file.label}: ${t.errors} syntax errors`);
             return { lines: t.lines, tokens: t.tokens, mode: t.mode, errors: t.errors };
         }, opts);
         results.push(coldResult);
@@ -125,12 +63,31 @@ export function runParseSuite(opts: BenchmarkOptions = {}): SuiteReport {
         const warmResult = benchmarkFn(`warm/${file.label}`, () => {
             resetDFA();
             loadDFASnapshot();
+            const first = parseRaw(text);
+            let result = first;
+            let retries = 0;
+
+            if (first.errors > 0) {
+                clearAllDFAStates();
+                result = parseRaw(text);
+                retries = 1;
+            }
             if (isDfaPreSeeded()) markDfaNotPreSeeded();
-            const t = parseOnce(text);
-            return { lines: t.lines, tokens: t.tokens, mode: t.mode, errors: t.errors };
+            if (result.errors > 0) throw new Error(`Warm parse failed for ${file.label}: ${result.errors} syntax errors`);
+
+            return {
+                lines: result.lines,
+                tokens: result.tokens,
+                mode: retries > 0 ? `${first.mode}+retry` : result.mode,
+                errors: result.errors,
+                initialErrors: first.errors,
+                retries,
+            };
         }, opts);
         results.push(warmResult);
     }
 
+    // Snapshot reloads leave stale states that later suites' production retry cannot detect.
+    resetDFA();
     return { name: 'parse', results };
 }

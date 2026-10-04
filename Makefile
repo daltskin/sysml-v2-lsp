@@ -1,4 +1,4 @@
-.PHONY: help install update-deps generate build watch test lint package package-server test-package clean update-grammar dfa update-library ci web
+.PHONY: help install update-deps generate build watch test lint package package-server test-package clean update-grammar dfa update-library ci web bench bench-baseline bench-compare bench-history
 
 help: ## Show this help
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -128,6 +128,19 @@ update-library: ## Pull latest SysML v2 standard library from OMG release repo
 	@echo "✅ SysML v2 standard library updated from $(LIBRARY_REPO)"
 
 ci: lint build test ## Full CI pipeline
+
+bench: ## Run benchmarks (SUITE="parse symbolTable" to select suites, BENCH_ARGS for extra flags)
+	npm run bench -- $(foreach s,$(SUITE),--suite $(s)) $(BENCH_ARGS)
+
+bench-baseline: ## Save a baseline from the stable suites used by the PR check
+	npm run bench -- --suite symbolTable --suite folderLoad --baseline
+
+bench-compare: ## Compare two benchmark runs (BASE=<file|dir> HEAD=<file|dir>)
+	@if [ -z "$(BASE)" ] || [ -z "$(HEAD)" ]; then echo "Usage: make bench-compare BASE=<file|dir> HEAD=<file|dir>"; exit 2; fi
+	npm run bench:compare -- --base "$(BASE)" --head "$(HEAD)"
+
+bench-history: ## Write stable benchmark trends to benchmarks/results/HISTORY.md
+	npm run bench:history
 
 web: build ## Launch the web client (http://localhost:3000)
 	@echo "🌐 Starting SysML v2 web client on http://localhost:3000 ..."

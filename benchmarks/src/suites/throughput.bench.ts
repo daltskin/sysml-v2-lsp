@@ -2,27 +2,14 @@
  * Throughput benchmark suite — measures lines/second and tokens/second.
  */
 
-import { CharStream, CommonTokenStream } from 'antlr4ng';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { SysMLv2Lexer } from '../../../server/src/generated/SysMLv2Lexer.js';
-import { SysMLv2Parser } from '../../../server/src/generated/SysMLv2Parser.js';
-import { loadDFASnapshot, isDfaPreSeeded, markDfaNotPreSeeded } from '../../../server/src/parser/dfaLoader.js';
+import { clearAllDFAStates, loadDFASnapshot, isDfaPreSeeded, markDfaNotPreSeeded } from '../../../server/src/parser/dfaLoader.js';
 import { benchmarkFn, type BenchmarkResult, type BenchmarkOptions } from '../utils/harness.js';
+import { parseRaw, resetDFA } from '../utils/rawParser.js';
 import type { SuiteReport } from '../reporters/jsonReporter.js';
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..');
-
-function resetDFA(): void {
-    const dfas = (SysMLv2Parser as unknown as Record<string, unknown[]>).decisionsToDFA as Array<{s0?: undefined; states?: {clear?: () => void}}>;
-    for (const dfa of dfas) {
-        if (!dfa) continue;
-        dfa.s0 = undefined;
-        if (dfa.states && typeof dfa.states.clear === 'function') {
-            dfa.states.clear();
-        }
-    }
-}
 
 interface FileData {
     label: string;
@@ -32,6 +19,8 @@ interface FileData {
 }
 
 function loadAndTokenize(): FileData[] {
+    // Earlier suites can leave stale snapshot DFA states; validate fixtures against a clean ATN.
+    resetDFA();
     const files: FileData[] = [];
     const examplesDir = path.join(ROOT, 'examples');
     const fixturesDir = path.join(ROOT, 'benchmarks/fixtures');
@@ -52,15 +41,13 @@ function loadAndTokenize(): FileData[] {
             const p = path.join(dir, name);
             if (!fs.existsSync(p)) continue;
             const text = fs.readFileSync(p, 'utf-8');
-            const input = CharStream.fromString(text);
-            const lexer = new SysMLv2Lexer(input);
-            const stream = new CommonTokenStream(lexer);
-            stream.fill();
+            const parsed = parseRaw(text);
+            if (parsed.errors > 0) throw new Error(`Fixture parse failed for ${name}: ${parsed.errors} syntax errors`);
             files.push({
                 label: name,
                 text,
                 lines: text.split('\n').length,
-                tokens: stream.getTokens().length,
+                tokens: parsed.tokens,
             });
         }
     }
@@ -68,16 +55,28 @@ function loadAndTokenize(): FileData[] {
     return files;
 }
 
-function parseAllFiles(files: FileData[]): void {
+interface BatchParseResult {
+    errors: number;
+    initialErrors: number;
+    retries: number;
+}
+
+function parseAllFiles(files: FileData[], recoverStaleDfa = false): BatchParseResult {
+    let errors = 0;
+    let initialErrors = 0;
+    let retries = 0;
     for (const file of files) {
-        const input = CharStream.fromString(file.text);
-        const lexer = new SysMLv2Lexer(input);
-        const stream = new CommonTokenStream(lexer);
-        stream.fill();
-        const parser = new SysMLv2Parser(stream);
-        parser.removeErrorListeners();
-        parser.rootNamespace();
+        const first = parseRaw(file.text);
+        initialErrors += first.errors;
+        if (recoverStaleDfa && first.errors > 0) {
+            clearAllDFAStates();
+            errors += parseRaw(file.text).errors;
+            retries++;
+        } else {
+            errors += first.errors;
+        }
     }
+    return { errors, initialErrors, retries };
 }
 
 export function runThroughputSuite(opts: BenchmarkOptions = {}): SuiteReport {
@@ -91,10 +90,11 @@ export function runThroughputSuite(opts: BenchmarkOptions = {}): SuiteReport {
     results.push(benchmarkFn('throughput/warm', () => {
         resetDFA();
         loadDFASnapshot();
-        if (isDfaPreSeeded()) markDfaNotPreSeeded();
         const start = performance.now();
-        parseAllFiles(files);
+        const parsed = parseAllFiles(files, true);
+        if (isDfaPreSeeded()) markDfaNotPreSeeded();
         const elapsed = performance.now() - start;
+        if (parsed.errors > 0) throw new Error(`Warm throughput parse failed: ${parsed.errors} syntax errors`);
         return {
             totalLines,
             totalTokens,
@@ -102,6 +102,9 @@ export function runThroughputSuite(opts: BenchmarkOptions = {}): SuiteReport {
             elapsedMs: elapsed,
             linesPerSec: Math.round(totalLines / (elapsed / 1000)),
             tokensPerSec: Math.round(totalTokens / (elapsed / 1000)),
+            errors: parsed.errors,
+            initialErrors: parsed.initialErrors,
+            retries: parsed.retries,
         };
     }, opts));
 
@@ -109,8 +112,9 @@ export function runThroughputSuite(opts: BenchmarkOptions = {}): SuiteReport {
     results.push(benchmarkFn('throughput/cold', () => {
         resetDFA();
         const start = performance.now();
-        parseAllFiles(files);
+        const parsed = parseAllFiles(files);
         const elapsed = performance.now() - start;
+        if (parsed.errors > 0) throw new Error(`Cold throughput parse failed: ${parsed.errors} syntax errors`);
         return {
             totalLines,
             totalTokens,
@@ -118,8 +122,11 @@ export function runThroughputSuite(opts: BenchmarkOptions = {}): SuiteReport {
             elapsedMs: elapsed,
             linesPerSec: Math.round(totalLines / (elapsed / 1000)),
             tokensPerSec: Math.round(totalTokens / (elapsed / 1000)),
+            errors: parsed.errors,
         };
     }, opts));
 
+    // Snapshot reloads leave stale states that later suites' production retry cannot detect.
+    resetDFA();
     return { name: 'throughput', results };
 }

@@ -7,7 +7,7 @@ import { contextToRange, tokenToRange } from '../parser/positionUtils.js';
 import { SYSML_KEYWORDS } from '../utils/sysmlKeywords.js';
 import { IdRegistry } from './ids.js';
 import { Scope } from './scope.js';
-import { FilterExpr, ImportTarget, SysMLElementKind, SysMLSymbol, isAnonymous, isDefinition, isUsage as isUsageKind } from './sysmlElements.js';
+import { FilterExpr, ImportTarget, SysMLElementKind, SysMLSymbol, isAnonymous, isDefinition, isFlowUsage, isUsage as isUsageKind } from './sysmlElements.js';
 
 // ── ruleIndex-based lookup tables ───────────────────────────────────
 // These replace the toLowerCase() + string-comparison chains with O(1)
@@ -41,6 +41,9 @@ const RULE_INDEX_TO_KIND = new Map<number, SysMLElementKind>([
     [SysMLv2Parser.RULE_attributeUsage, SysMLElementKind.AttributeUsage],         // 224
     [SysMLv2Parser.RULE_portUsage, SysMLElementKind.PortUsage],                   // 251
     [SysMLv2Parser.RULE_connectionUsage, SysMLElementKind.ConnectionUsage],       // 254
+    [SysMLv2Parser.RULE_flow, SysMLElementKind.FlowUsage],                         // 152
+    [SysMLv2Parser.RULE_flowUsage, SysMLElementKind.FlowUsage],                    // 284
+    [SysMLv2Parser.RULE_successionFlowUsage, SysMLElementKind.SuccessionFlowUsage], // 285
     [SysMLv2Parser.RULE_actionUsage, SysMLElementKind.ActionUsage],               // 296
     [SysMLv2Parser.RULE_mergeNode, SysMLElementKind.MergeNode],                   // 305
     [SysMLv2Parser.RULE_decisionNode, SysMLElementKind.DecisionNode],             // 306
@@ -77,6 +80,16 @@ const RULE_INDEX_TO_KIND = new Map<number, SysMLElementKind>([
 const BODY_RULE_INDICES: ReadonlySet<number> = new Set(
     SysMLv2Parser.ruleNames.flatMap((ruleName, index) => ruleName.endsWith('Body') ? [index] : []),
 );
+
+/**
+ * A flow's payload (`of i : I`) and ends (`from a to b`): they declare names
+ * and types of their own, never the flow's.
+ */
+const FLOW_PART_RULE_INDICES: ReadonlySet<number> = new Set([
+    SysMLv2Parser.RULE_payloadFeatureMember,
+    SysMLv2Parser.RULE_flowPayloadFeatureMember,
+    SysMLv2Parser.RULE_flowEndMember,
+]);
 
 /**
  * Usages named after the element they refer to when they declare no name of
@@ -931,9 +944,12 @@ export class SymbolTable {
         const transition = kind === SysMLElementKind.TransitionUsage
             ? this.extractTransitionDetails(ctx)
             : undefined;
+        const flowDetails = isFlowUsage(kind)
+            ? this.extractFlowDetails(ctx)
+            : undefined;
 
         const declaredName = transition ? transition.declaredName : this.extractName(ctx);
-        // An anonymous transition, connection, interface or allocation usage still gets a
+        // An anonymous transition, flow, connection, interface or allocation usage still gets a
         // symbol, with an empty name and a label (`generateAnonymousLabel`); without a
         // declared name, only an element with something to label it by gets one.
         const label = declaredName ? undefined : this.generateAnonymousLabel(ctx, kind, transition);
@@ -946,7 +962,9 @@ export class SymbolTable {
         const anonymous = !declaredName;
         const name = declaredName ?? '';
         // Transitions never carry a declared <shortName> alias.
-        const shortName = transition ? undefined : this.extractShortName(ctx);
+        const shortName = transition || (isFlowUsage(kind) && !declaredName)
+            ? undefined
+            : this.extractShortName(ctx);
 
         // KerML: only an element that is named, like all its owners, has a qualified name.
         const qualifiedName = anonymous || (owner && owner.qualifiedName === undefined)
@@ -959,7 +977,9 @@ export class SymbolTable {
             ? (ctx.start ? tokenToRange(ctx.start) : range)
             : this.extractNameRange(ctx) ?? range;
         // Extract type names for both usages (typing) and definitions (specialization)
-        const typeNames = this.extractTypeNames(ctx);
+        const typeNames = isFlowUsage(kind)
+            ? this.extractFlowTypeNames(ctx)
+            : this.extractTypeNames(ctx);
         const specializationNames = this.extractSpecializationNames(ctx);
         const typeName = typeNames[0];
         const documentation = this.extractDocumentation(ctx);
@@ -1004,6 +1024,7 @@ export class SymbolTable {
             visibility,
             source: transition?.source,
             target: transition?.target,
+            flowDetails,
             transitionTrigger: transition?.trigger,
             controlFlows: controlFlows && controlFlows.length > 0 ? controlFlows : undefined,
             children: [],
@@ -1066,6 +1087,55 @@ export class SymbolTable {
         }
 
         return { declaredName, source, target, trigger };
+    }
+
+    /** Extract the payload type and both endpoint paths from a flow declaration. */
+    private extractFlowDetails(ctx: ParserRuleContext): SysMLSymbol['flowDetails'] {
+        const declaration = this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_flowDeclaration);
+        if (!declaration) return undefined;
+
+        const flowEnds: ParserRuleContext[] = [];
+        this.collectDescendantRules(declaration, SysMLv2Parser.RULE_flowEndMember, flowEnds);
+        const endpoints = flowEnds.map((end) => {
+            const flowEnd = this.findOwnHeaderRule(end, SysMLv2Parser.RULE_flowEnd);
+            return flowEnd ? this.cleanTransitionText(flowEnd.getText()) : undefined;
+        });
+
+        const payload = this.findOwnHeaderRule(declaration, SysMLv2Parser.RULE_payloadFeatureMember)
+            ?? this.findOwnHeaderRule(declaration, SysMLv2Parser.RULE_flowPayloadFeatureMember);
+        const payloadTypes = payload ? this.extractTypeNames(payload) : [];
+        const identification = payload
+            ? this.findRuleContext(payload, SysMLv2Parser.RULE_identification)
+            : undefined;
+        const qualifiedName = payload
+            ? this.findRuleContext(payload, SysMLv2Parser.RULE_qualifiedName)
+            : undefined;
+        const itemType = payloadTypes[0]
+            ?? (!identification && qualifiedName ? this.cleanTransitionText(qualifiedName.getText()) : undefined);
+
+        return {
+            itemType,
+            payloadDeclared: payload !== undefined,
+            source: endpoints[0],
+            target: endpoints[1],
+        };
+    }
+
+    /** Extract the flow feature's own declared type without including its payload type. */
+    private extractFlowTypeNames(ctx: ParserRuleContext): string[] {
+        const declaration = this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_flowDeclaration);
+        const typeDeclaration = declaration && (
+            this.findOwnHeaderRule(declaration, SysMLv2Parser.RULE_featureDeclaration)
+            ?? this.findOwnHeaderRule(declaration, SysMLv2Parser.RULE_usageDeclaration)
+        );
+        return typeDeclaration ? this.extractTypeNames(typeDeclaration) : [];
+    }
+
+    /** Find the first descendant of `ctx` with rule `ruleIndex`, in source order. */
+    private findRuleContext(ctx: ParserRuleContext, ruleIndex: number): ParserRuleContext | undefined {
+        const matches: ParserRuleContext[] = [];
+        this.collectDescendantRules(ctx, ruleIndex, matches);
+        return matches[0];
     }
 
     /** Find and clean the text of the first descendant with a given rule. */
@@ -1243,7 +1313,9 @@ export class SymbolTable {
      * redefines. Undefined when it has neither, i.e. when it is anonymous.
      */
     private extractOwnName(ctx: ParserRuleContext, kind: SysMLElementKind): string | undefined {
-        const identification = this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_identification);
+        // A flow in the feature form (`flow f : F of ...`) names itself in a featureIdentification.
+        const identification = this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_identification)
+            ?? this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_featureIdentification);
         const declaredName = identification && this.parseIdentification(identification).name;
         if (declaredName) return declaredName;
 
@@ -1256,7 +1328,8 @@ export class SymbolTable {
 
     /**
      * The first node of rule `ruleIndex` in `ctx`'s own declaration: never
-     * inside a nested element, its body, its value or a prefix such as `#metadata`.
+     * inside a nested element, its body, its value, a flow's payload or ends,
+     * or a prefix such as `#metadata`.
      */
     private findOwnHeaderRule(ctx: ParserRuleContext, ruleIndex: number): ParserRuleContext | undefined {
         for (let i = 0; i < ctx.getChildCount(); i++) {
@@ -1264,7 +1337,8 @@ export class SymbolTable {
             if (!(child instanceof ParserRuleContext)) continue;
             if (child.ruleIndex === ruleIndex) return child;
             if (RULE_INDEX_TO_KIND.has(child.ruleIndex) || BODY_RULE_INDICES.has(child.ruleIndex)
-                || child.ruleIndex === SysMLv2Parser.RULE_valuePart || this.isPrefixOrExtensionContext(child)) continue;
+                || child.ruleIndex === SysMLv2Parser.RULE_valuePart || FLOW_PART_RULE_INDICES.has(child.ruleIndex)
+                || this.isPrefixOrExtensionContext(child)) continue;
             const found = this.findOwnHeaderRule(child, ruleIndex);
             if (found) return found;
         }

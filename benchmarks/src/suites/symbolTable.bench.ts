@@ -11,6 +11,11 @@ import type { SuiteReport } from '../reporters/jsonReporter.js';
 
 const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '../../..');
 
+function parseValid(dm: DocumentManager, file: TestFile): void {
+    const errors = dm.parse(TextDocument.create(file.uri, 'sysml', 1, file.text)).errors.length;
+    if (errors > 0) throw new Error(`Symbol table parse failed for ${file.label}: ${errors} syntax errors`);
+}
+
 interface TestFile {
     label: string;
     uri: string;
@@ -47,8 +52,7 @@ export function runSymbolTableSuite(opts: BenchmarkOptions = {}): SuiteReport {
     for (const file of files) {
         const result = benchmarkFn(`build/${file.label}`, () => {
             const dm = new DocumentManager();
-            const doc = TextDocument.create(file.uri, 'sysml', 1, file.text);
-            dm.parse(doc);
+            parseValid(dm, file);
             const st = dm.getSymbolTable(file.uri);
             const symbolCount = st?.getAllSymbols().length ?? 0;
             return { symbolCount };
@@ -61,8 +65,7 @@ export function runSymbolTableSuite(opts: BenchmarkOptions = {}): SuiteReport {
         const result = benchmarkFn('build/workspace-all', () => {
             const dm = new DocumentManager();
             for (const file of files) {
-                const doc = TextDocument.create(file.uri, 'sysml', 1, file.text);
-                dm.parse(doc);
+                parseValid(dm, file);
             }
             const wst = dm.getWorkspaceSymbolTable();
             const symbolCount = wst.getAllSymbols().length;
@@ -75,8 +78,7 @@ export function runSymbolTableSuite(opts: BenchmarkOptions = {}): SuiteReport {
     const bikeFile = files.find(f => f.label === 'bike.sysml');
     if (bikeFile) {
         const dm = new DocumentManager();
-        const doc = TextDocument.create(bikeFile.uri, 'sysml', 1, bikeFile.text);
-        dm.parse(doc);
+        parseValid(dm, bikeFile);
         const st = dm.getSymbolTable(bikeFile.uri);
 
         if (st) {
