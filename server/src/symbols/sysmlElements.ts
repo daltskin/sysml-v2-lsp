@@ -78,7 +78,7 @@ export interface SysMLSymbol {
      * Conn`, `transition first s1 then s2`) -- not a name. Part of its
      * `symbolId`; never looked up or shown as a name (see `displayName`).
      */
-    label?: string;
+    declaration?: string;
     /**
      * For an anonymous element only: its specialization part as written
      * (`: Engine`, `:> p0`, `: Wheel[4]`) -- what the standard's graphical
@@ -232,7 +232,7 @@ export function displayName(symbol: SysMLSymbol): string {
     const flow = symbol.flowDetails;
     if (flow?.source && flow.target) return `${flow.source}→${flow.target}`;
     if (symbol.ends) return symbol.ends.join(symbol.ends.length === 2 ? '→' : '-');
-    return symbol.label || symbol.kind;
+    return symbol.declaration || symbol.kind;
 }
 
 /**

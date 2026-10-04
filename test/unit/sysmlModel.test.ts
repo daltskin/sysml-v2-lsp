@@ -242,6 +242,37 @@ package Test {
             expect(model.relationships).toContainEqual({ type: 'typing', source: 'engine', sourceId: engine.symbolId, target: 'Engine' });
         });
 
+        it('should report each element\'s displayName: its name, or for an anonymous one the text the outline shows', async () => {
+            const model = await getModelForText(`
+package Demo {
+    part def Engine;
+    part a { port p; }
+    part b { port p; }
+    part car { part : Engine; }
+    connect a.p to b.p { attribute flowRate; }
+}
+`, ['elements']);
+
+            const labels: string[][] = [];
+            const visit = (elements: any[]) => elements.forEach(element => {
+                labels.push([element.name, element.displayName]);
+                visit(element.children ?? []);
+            });
+            visit(model.elements ?? []);
+            expect(labels).toEqual([
+                ['Demo', 'Demo'],
+                ['Engine', 'Engine'],
+                ['a', 'a'],
+                ['p', 'p'],
+                ['b', 'b'],
+                ['p', 'p'],
+                ['car', 'car'],
+                ['', ': Engine'],
+                ['', 'a.p→b.p'],
+                ['flowRate', 'flowRate'],
+            ]);
+        });
+
         it('should report the symbol ID of the allocation, named or anonymous, its allocation relationship is', async () => {
             const model = await getModelForText(`
 package Demo {
@@ -757,9 +788,9 @@ package Test {
     }
 }
 `;
-            // A declared part quoted like the anonymous interface's label, with a member of its own.
-            const label = 'interface a.p to b.p';
-            const model = await getModelForText(base.replace('\n}\n', `\n    part '${label}' { part inner; }\n}\n`), ['sequenceDiagrams']);
+            // A declared part quoted like the anonymous interface's declaration, with a member of its own.
+            const declaration = 'interface a.p to b.p';
+            const model = await getModelForText(base.replace('\n}\n', `\n    part '${declaration}' { part inner; }\n}\n`), ['sequenceDiagrams']);
             const diagram = model.sequenceDiagrams!.find(d => d.messages.some(m => m.name === 'm'))!;
             expect(diagram.participants.map(p => p.name).sort()).toEqual(['x', 'y']);
         });
@@ -1131,7 +1162,7 @@ package Demo {
             expect(connectors.map(c => c.name)).toContain('link');
         });
 
-        it('should model a declared connection quoted like an anonymous one\'s label, and anonymous duplicates, each as its own element', async () => {
+        it('should model a declared connection quoted like an anonymous one\'s declaration, and anonymous duplicates, each as its own element', async () => {
             const model = await getModelForText(`
 package Demo {
     part a { port p; }
@@ -1181,7 +1212,7 @@ package Demo {
             expect(new Set(members).size).toBe(3);
         });
 
-        it('should keep an anonymous interface\'s members apart from a declared part quoted like its label', async () => {
+        it('should keep an anonymous interface\'s members apart from a declared part quoted like its declaration', async () => {
             const base = `package Demo {
     part a { port p; }
     part b { port p; }
@@ -1192,19 +1223,19 @@ package Demo {
                 els.forEach(el => { if (pred(el)) out.push(el); findAll(el.children ?? [], pred, out); });
                 return out;
             };
-            // The anonymous interface has no name; its label is its declaration as written.
-            const label = 'interface a.p to b.p';
+            // The anonymous interface has no name; only its declaration as written.
+            const declaration = 'interface a.p to b.p';
 
-            const model = await getModelForText(base.replace('\n}\n', `\n    part '${label}' { part inner; }\n}\n`), ['elements']);
+            const model = await getModelForText(base.replace('\n}\n', `\n    part '${declaration}' { part inner; }\n}\n`), ['elements']);
             const [anonymous] = findAll(model.elements ?? [], el => el.type === 'interface');
-            const [declared] = findAll(model.elements ?? [], el => el.type === 'part' && el.name === label);
+            const [declared] = findAll(model.elements ?? [], el => el.type === 'part' && el.name === declaration);
             expect(anonymous.attributes.isAnonymous).toBe(true);
             expect(declared).toBeDefined();
             expect(anonymous.children.map((c: { name: string }) => c.name)).toEqual(['w']);
             expect(declared.children.map((c: { name: string }) => c.name)).toEqual(['inner']);
         });
 
-        it('should resolve names in an anonymous interface\'s own namespace, not in a declared part quoted like its label', async () => {
+        it('should resolve names in an anonymous interface\'s own namespace, not in a declared part quoted like its declaration', async () => {
             const base = `package Demo {
     part a { port p; }
     part b { port p; }
@@ -1213,9 +1244,9 @@ package Demo {
 `;
             const baseModel = await getModelForText(base, ['elements', 'diagnostics']);
             expect(baseModel.diagnostics).toEqual([]);
-            // `W` is a member of the anonymous interface only: `inner`, in a part quoted like its label, can't see it.
-            const label = 'interface a.p to b.p';
-            const model = await getModelForText(base.replace('\n}\n', `\n    part '${label}' { part inner : W; }\n}\n`), ['diagnostics']);
+            // `W` is a member of the anonymous interface only: `inner`, in a part quoted like its declaration, can't see it.
+            const declaration = 'interface a.p to b.p';
+            const model = await getModelForText(base.replace('\n}\n', `\n    part '${declaration}' { part inner : W; }\n}\n`), ['diagnostics']);
             expect(model.diagnostics!.map(d => [d.code, d.elementName])).toEqual([['unresolved-type', 'inner']]);
         });
 

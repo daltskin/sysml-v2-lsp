@@ -17,7 +17,7 @@ import { SysMLElementKind, SysMLSymbol, isAnonymous } from './sysmlElements.js';
  * - any other element: its path in the namespace of its top-level element's
  *   UUID. The path is its qualified name as written in the notation; without
  *   one, its owner's path, `/` and its declaration as written (KerML uses a
- *   position here, which this server can't reproduce).
+ *   position in the abstract syntax here, which this server doesn't build).
  *
  * Declarations with the same path form a group, identified by the UUID of
  * that key. A package, one element however many documents declare it, takes
@@ -26,6 +26,11 @@ import { SysMLElementKind, SysMLSymbol, isAnonymous } from './sysmlElements.js';
  * documents are indexed in. A document is added or removed on its own: only
  * groups it shares with other documents, and the members of a declaration
  * whose symbol ID changes as a result, are revisited.
+ *
+ * So a symbol ID is stable across reloads only while the set of declarations
+ * is unchanged: when another document adds or removes a declaration with the
+ * same path, the declarations are renumbered, and one sorted after it gets a
+ * new symbol ID, as do its members (a package keeps its own).
  */
 export class IdRegistry {
     /** Declarations by symbol ID */
@@ -188,7 +193,7 @@ export class IdRegistry {
  * path segment of it follows a `/`, so it never equals a qualified name.
  */
 function segmentOf(declaration: SysMLSymbol): string {
-    return isAnonymous(declaration) ? declaration.label ?? declaration.kind : escapeName(declaration.name);
+    return isAnonymous(declaration) ? declaration.declaration ?? declaration.kind : escapeName(declaration.name);
 }
 
 /**

@@ -3041,7 +3041,7 @@ describe('Anonymous connectors and transitions next to declared names', () => {
         ['declared first', `connection 'connect a.p to b.p';\n    connect a.p to b.p;`],
         ['anonymous first', `connect a.p to b.p;\n    connection 'connect a.p to b.p';`],
     ] as const) {
-        it(`does not report a declared connection quoted like an anonymous one's label (${order})`, async () => {
+        it(`does not report a declared connection quoted like an anonymous one's declaration (${order})`, async () => {
             expect(await ambiguousNames(`
 package Demo {
     part a { port p; }

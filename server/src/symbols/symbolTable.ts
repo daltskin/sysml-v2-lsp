@@ -865,7 +865,7 @@ export class SymbolTable {
         const uriSymbols = this.symbolsByUri.get(uri) ?? [];
         uriSymbols.push(symbol);
         this.symbolsByUri.set(uri, uriSymbols);
-        // Maintain name index -- an anonymous element's label is not a name to look up
+        // Maintain name index -- an anonymous element's declaration is not a name to look up
         if (!isAnonymous(symbol)) {
             const nameList = this.symbolsByName.get(symbol.name) ?? [];
             nameList.push(symbol);
@@ -926,7 +926,7 @@ export class SymbolTable {
     }
     /**
      * Try to extract a SysMLSymbol from a parse tree context. Returns undefined
-     * if it isn't a declaration, or is an anonymous one with nothing to label it by.
+     * if it isn't a declaration, or is an anonymous one with no declaration to identify it by.
      */
     private tryExtractSymbol(
         ctx: ParserRuleContext,
@@ -950,13 +950,13 @@ export class SymbolTable {
 
         const declaredName = transition ? transition.declaredName : this.extractName(ctx);
         // An anonymous transition, flow, connection, interface or allocation usage still gets a
-        // symbol, with an empty name and a label (`generateAnonymousLabel`); without a
-        // declared name, only an element with something to label it by gets one.
-        const label = declaredName ? undefined : this.generateAnonymousLabel(ctx, kind, transition);
-        const specializationPart = label === undefined ? undefined
+        // symbol, with an empty name and its declaration (`anonymousDeclaration`); without a
+        // declared name, only an element with a declaration to identify it by gets one.
+        const declaration = declaredName ? undefined : this.anonymousDeclaration(ctx, kind, transition);
+        const specializationPart = declaration === undefined ? undefined
             : this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_featureSpecializationPart)
                 ?? this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_subclassificationPart);
-        if (!declaredName && !label) {
+        if (!declaredName && !declaration) {
             return undefined;
         }
         const anonymous = !declaredName;
@@ -1006,7 +1006,7 @@ export class SymbolTable {
 
         return {
             name,
-            label,
+            declaration,
             specialization: specializationPart && this.declarationText(specializationPart),
             ends: this.extractConnectorEnds(ctx, kind),
             // A placeholder: the document's symbol IDs are assigned at the end of `build` (`IdRegistry`).
@@ -1241,7 +1241,7 @@ export class SymbolTable {
         // b.p;`), where the first identifier below it names its type, a feature
         // it subsets or an end, not the element itself. Its name comes from its
         // own declaration only; without one, it is anonymous, and the symbol
-        // builder gives it a label instead (`generateAnonymousLabel`).
+        // builder keeps its declaration instead (`anonymousDeclaration`).
         const kind = RULE_INDEX_TO_KIND.get(ctx.ruleIndex);
         if (kind !== undefined && (isDefinition(kind) || isUsageKind(kind))) {
             return this.extractOwnName(ctx, kind);
@@ -1291,12 +1291,12 @@ export class SymbolTable {
     }
 
     /**
-     * The label (`SysMLSymbol.label`) of a definition or usage without a
-     * declared name: its declaration as written. Undefined for any other
+     * The declaration (`SysMLSymbol.declaration`) of a definition or usage
+     * without a declared name, as written. Undefined for any other
      * element, and for an untyped transition without a source and target
      * state. Its name is empty; it is identified by its `symbolId`.
      */
-    private generateAnonymousLabel(
+    private anonymousDeclaration(
         ctx: ParserRuleContext,
         kind: SysMLElementKind,
         transition: { source?: string; target?: string } | undefined,

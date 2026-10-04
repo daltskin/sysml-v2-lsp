@@ -180,6 +180,13 @@ export interface SysMLElementDTO {
     name: string;
 
     /**
+     * Text to show for the element, as in the outline: its name; for an
+     * anonymous element its declaration without a name (`: Engine`), else what
+     * it connects (`a.p→b.p`), else its declaration as written (`decide`).
+     */
+    displayName: string;
+
+    /**
      * The element's symbol ID: a version 5 UUID derived from the project ID and
      * its name, or, without one, its declaration. The same after a reload, but
      * not the KerML `elementId`: a rename gives a new one.

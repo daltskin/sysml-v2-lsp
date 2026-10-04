@@ -22,17 +22,17 @@ function idsByDeclaration(st: SymbolTable): Map<string, [string, string | undefi
 }
 
 /**
- * The symbol ID of each symbol by a label that survives a move: its qualified
+ * The symbol ID of each symbol by a key that survives a move: its qualified
  * name, or, without one (an anonymous element or a member of one), its owner's
- * label followed by its own kind and name (or, anonymous, its own label).
+ * key followed by its own kind and name (or, anonymous, its own declaration).
  */
-function idsByLabel(st: SymbolTable): Map<string, string> {
-    const label = (s: SysMLSymbol): string => {
+function idsByKey(st: SymbolTable): Map<string, string> {
+    const keyOf = (s: SysMLSymbol): string => {
         if (s.qualifiedName !== undefined) return `${s.kind} ${s.qualifiedName}`;
         const owner = st.getOwner(s);
-        return `${owner ? label(owner) : ''} / ${s.kind} ${s.name || s.label}`;
+        return `${owner ? keyOf(owner) : ''} / ${s.kind} ${s.name || s.declaration}`;
     };
-    return new Map(st.getAllSymbols().map((s) => [label(s), s.symbolId]));
+    return new Map(st.getAllSymbols().map((s) => [keyOf(s), s.symbolId]));
 }
 
 describe('symbolId', () => {
@@ -78,7 +78,7 @@ describe('symbolId', () => {
             (await build([{ uri: 'file:///w/a.sysml', text: source }])).getAllSymbols().filter((s) => isAnonymous(s));
         const before = await connectors(original);
         const after = await connectors(swapped);
-        const idOf = (list: SysMLSymbol[], label: string) => list.filter((s) => s.label === label).map((s) => s.symbolId).sort();
+        const idOf = (list: SysMLSymbol[], declaration: string) => list.filter((s) => s.declaration === declaration).map((s) => s.symbolId).sort();
         expect(idOf(after, 'connect c to d')).toEqual(idOf(before, 'connect c to d'));
         expect(idOf(after, 'connect e to f')).toEqual(idOf(before, 'connect e to f'));
         // Two identical declarations stay apart, and keep the same two symbol IDs between them.
@@ -87,17 +87,17 @@ describe('symbolId', () => {
     });
 
     it('keeps symbol IDs when a document moves to another folder', async () => {
-        const before = idsByLabel(await build([{ uri: 'file:///w/a.sysml', text }]));
-        const after = idsByLabel(await build([{ uri: 'file:///w/sub/renamed.sysml', text }]));
+        const before = idsByKey(await build([{ uri: 'file:///w/a.sysml', text }]));
+        const after = idsByKey(await build([{ uri: 'file:///w/sub/renamed.sysml', text }]));
         expect(after).toEqual(before);
     });
 
     it('keeps symbol IDs, of anonymous elements and their members too, when lines are inserted above them', async () => {
         const edited = text.replace('package Demo {\n', 'package Demo {\n    // a comment\n    part extra;\n\n');
-        const before = idsByLabel(await build([{ uri: 'file:///w/a.sysml', text }]));
-        const after = idsByLabel(await build([{ uri: 'file:///w/a.sysml', text: edited }]));
+        const before = idsByKey(await build([{ uri: 'file:///w/a.sysml', text }]));
+        const after = idsByKey(await build([{ uri: 'file:///w/a.sysml', text: edited }]));
         const memberId = async (source: string) => (await build([{ uri: 'file:///w/a.sysml', text: source }])).findByName('w')[0].symbolId;
-        expect([...before].every(([label, id]) => after.get(label) === id)).toBe(true);
+        expect([...before].every(([key, id]) => after.get(key) === id)).toBe(true);
         expect(await memberId(edited)).toBe(await memberId(text));
     });
 
@@ -161,7 +161,7 @@ describe('symbolId', () => {
         const machine = (transitions: string) => `package Demo { state def S { state s1; state s2; ${transitions} } }`;
         const idsOfTransitions = async (source: string) => new Map(
             (await build([{ uri: 'file:///w/a.sysml', text: source }])).getAllSymbols()
-                .filter((s) => s.kind === 'transition').map((s) => [s.label, s.symbolId]),
+                .filter((s) => s.kind === 'transition').map((s) => [s.declaration, s.symbolId]),
         );
         const before = await idsOfTransitions(machine('transition first s1 then s2; transition first s2 then s1;'));
         const swapped = await idsOfTransitions(machine('transition first s2 then s1; transition first s1 then s2;'));
@@ -294,11 +294,11 @@ describe('symbolId', () => {
     it('gives a document removed and added again under another name the same symbol IDs', async () => {
         const { parseDocument } = await import('../../server/src/parser/parseDocument.js');
         const st = await build([{ uri: 'file:///w/a.sysml', text }]);
-        const before = idsByLabel(st);
+        const before = idsByKey(st);
 
         st.removeUri('file:///w/a.sysml');
         st.build('file:///w/models/vehicle.sysml', parseDocument(text));
-        expect(idsByLabel(st)).toEqual(before);
+        expect(idsByKey(st)).toEqual(before);
     });
 
     it('changes the symbol ID of a renamed element and of its members', async () => {

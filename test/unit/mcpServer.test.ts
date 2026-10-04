@@ -180,7 +180,7 @@ describe('MCP Server Core', () => {
             expect(symbols.some(s => 'parent' in s)).toBe(false);
             // A client finds an owner, and its name or its absence, through parentId.
             expect(ownerOf('a')!.name).toBe('Demo');
-            expect(ownerOf('flowRate')).toMatchObject({ name: '', kind: 'connection', label: 'connect a.p to b.p' });
+            expect(ownerOf('flowRate')).toMatchObject({ name: '', kind: 'connection', declaration: 'connect a.p to b.p' });
             // The qualified name is always reported: null without one, as in the SysML v2 API.
             expect(symbols.map(s => [s.name, s.qualifiedName])).toContainEqual(['flowRate', null]);
             expect(symbols.map(s => [s.name, s.qualifiedName])).toContainEqual(['', null]);
@@ -324,6 +324,20 @@ describe('MCP Server Core', () => {
             expect(result.ancestors.length).toBe(0);
         });
 
+        it('should give every symbol and ancestor a displayName, an anonymous one next to its declaration', () => {
+            const code = `package Demo {
+    part a { port p; }
+    part b { port p; }
+    interface a.p to b.p { part x; }
+}`;
+            const { symbols } = handleGetSymbols(ctx, { code, uri: 'display-name.sysml' }) as { symbols: Array<Record<string, unknown>> };
+            expect(symbols.find(s => s.kind === 'interface')).toMatchObject({ name: '', declaration: 'interface a.p to b.p', displayName: 'a.p→b.p' });
+            expect(symbols.find(s => s.name === 'a')).toMatchObject({ displayName: 'a' });
+            expect(symbols.find(s => s.name === 'a')).not.toHaveProperty('declaration');
+            const { ancestors } = handleGetHierarchy(ctx, 'x', code, 'display-name.sysml') as { ancestors: Array<Record<string, unknown>> };
+            expect(ancestors.map(a => a.displayName)).toEqual(['Demo', 'a.p→b.p']);
+        });
+
         it('should list an anonymous owner among the ancestors of its member', () => {
             const code = `package Demo {
     part a { port p; }
@@ -331,10 +345,10 @@ describe('MCP Server Core', () => {
     interface a.p to b.p { part x { part y; } }
 }`;
             const result = handleGetHierarchy(ctx, 'y', code, 'anonymous.sysml') as {
-                ancestors: Array<{ name: string; label?: string; kind: string }>;
+                ancestors: Array<{ name: string; declaration?: string; kind: string }>;
             };
-            // The anonymous interface has no name, only its declaration as a label.
-            expect(result.ancestors.map(a => [a.name, a.label, a.kind])).toEqual([
+            // The anonymous interface has no name, only its declaration.
+            expect(result.ancestors.map(a => [a.name, a.declaration, a.kind])).toEqual([
                 ['Demo', undefined, 'package'],
                 ['', 'interface a.p to b.p', 'interface'],
                 ['x', undefined, 'part'],

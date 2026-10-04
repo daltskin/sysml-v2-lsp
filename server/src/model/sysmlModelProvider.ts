@@ -435,7 +435,7 @@ export class SysMLModelProvider {
             attributes['documentation'] = symbol.documentation;
         }
 
-        // An anonymous element (`isAnonymous`): no name, only a generated label.
+        // An anonymous element (`isAnonymous`): no name; clients show its `displayName`.
         if (isAnonymous(symbol)) {
             attributes['isAnonymous'] = true;
         }
@@ -518,6 +518,7 @@ export class SysMLModelProvider {
         return {
             type: symbol.kind as string,
             name: symbol.name,
+            displayName: displayName(symbol),
             symbolId: symbol.symbolId,
             range: this.rangeToDTO(symbol.range),
             children,

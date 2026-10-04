@@ -78,7 +78,9 @@ export function formatSymbol(sym: SysMLSymbol): Record<string, unknown> {
     return {
         name: sym.name,
         kind: sym.kind,
-        ...(sym.label ? { label: sym.label } : {}),
+        ...(sym.declaration ? { declaration: sym.declaration } : {}),
+        // The text to show, as in the outline: its name, or for an anonymous element `: Engine`, `a.p→b.p`
+        displayName: displayName(sym),
         // null without one (an anonymous element or a member of one), as in the SysML v2 API
         qualifiedName: sym.qualifiedName ?? null,
         symbolId: sym.symbolId,
@@ -472,10 +474,10 @@ export function handleGetHierarchy(
         return { found: false, message: `No symbol "${name}" found` };
     }
 
-    const ancestors: Array<{ name: string; label?: string; kind: string; qualifiedName: string | null }> = [];
+    const ancestors: Array<{ name: string; declaration?: string; displayName: string; kind: string; qualifiedName: string | null }> = [];
     let parent = ctx.symbolTable.getOwner(target);
     while (parent) {
-        ancestors.unshift({ name: parent.name, ...(parent.label ? { label: parent.label } : {}), kind: parent.kind, qualifiedName: parent.qualifiedName ?? null });
+        ancestors.unshift({ name: parent.name, ...(parent.declaration ? { declaration: parent.declaration } : {}), displayName: displayName(parent), kind: parent.kind, qualifiedName: parent.qualifiedName ?? null });
         parent = ctx.symbolTable.getOwner(parent);
     }
 
