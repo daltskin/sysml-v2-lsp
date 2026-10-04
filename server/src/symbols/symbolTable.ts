@@ -5,7 +5,7 @@ import { MultiplicityBoundsContext, OwnedExpressionContext, SysMLv2Parser } from
 import { ParseResult } from '../parser/parseDocument.js';
 import { contextToRange, tokenToRange } from '../parser/positionUtils.js';
 import { SYSML_KEYWORDS } from '../utils/sysmlKeywords.js';
-import { ElementIdRegistry } from './elementIds.js';
+import { IdRegistry } from './ids.js';
 import { Scope } from './scope.js';
 import { FilterExpr, ImportTarget, SysMLElementKind, SysMLSymbol, isAnonymous, isDefinition, isUsage as isUsageKind } from './sysmlElements.js';
 
@@ -228,8 +228,8 @@ export class SymbolTable {
     private owners = new WeakMap<SysMLSymbol, SysMLSymbol>();
     /** Each symbol's own members, the reverse of `owners` */
     private members = new WeakMap<SysMLSymbol, SysMLSymbol[]>();
-    /** Assigns and finds `elementId`s, one document at a time */
-    private elementIds = new ElementIdRegistry(this.owners, this.members);
+    /** Assigns and finds `symbolId`s, one document at a time */
+    private ids = new IdRegistry(this.owners, this.members);
     /** All symbols indexed by URI for cross-file lookup */
     private symbolsByUri = new Map<string, SysMLSymbol[]>();
     /** All symbols indexed by simple name for O(1) lookup */
@@ -269,7 +269,7 @@ export class SymbolTable {
         // filters, rendering, and expose targets from parent view defs
         this.resolveViewInheritance(uri);
         const declarations = this.symbolsByUri.get(uri) ?? [];
-        this.elementIds.add(declarations);
+        this.ids.add(declarations);
         this.refreshMergedPackages(declarations);
     }
 
@@ -280,9 +280,9 @@ export class SymbolTable {
         return this.symbols.get(qualifiedName);
     }
 
-    /** Get a symbol by its `elementId`; for a package, its merged view across documents. */
-    getSymbolByElementId(elementId: string): SysMLSymbol | undefined {
-        const symbol = this.elementIds.get(elementId);
+    /** Get a symbol by its `symbolId`; for a package, its merged view across documents. */
+    getSymbolById(id: string): SysMLSymbol | undefined {
+        const symbol = this.ids.get(id);
         if (symbol?.kind !== SysMLElementKind.Package || symbol.qualifiedName === undefined) return symbol;
         const merged = this.symbols.get(symbol.qualifiedName);
         return merged?.kind === SysMLElementKind.Package ? merged : symbol;
@@ -290,7 +290,7 @@ export class SymbolTable {
 
     /** Get `symbol`'s owner, by its `parentId`. */
     getOwner(symbol: SysMLSymbol): SysMLSymbol | undefined {
-        return symbol.parentId ? this.getSymbolByElementId(symbol.parentId) : undefined;
+        return symbol.parentId ? this.getSymbolById(symbol.parentId) : undefined;
     }
 
     /**
@@ -336,14 +336,15 @@ export class SymbolTable {
 
     /**
      * Give each package's merged view (`mergePackageFragments`), built before
-     * its declarations got their IDs, the IDs of its declarations in `declarations`.
+     * its declarations got their symbol IDs, the symbol IDs of its
+     * declarations in `declarations`.
      */
     private refreshMergedPackages(declarations: readonly SysMLSymbol[]): void {
         for (const declaration of declarations) {
             if (declaration.kind !== SysMLElementKind.Package || declaration.qualifiedName === undefined) continue;
             const merged = this.symbols.get(declaration.qualifiedName);
             if (merged && merged !== declaration && merged.kind === SysMLElementKind.Package) {
-                merged.elementId = declaration.elementId;
+                merged.symbolId = declaration.symbolId;
                 merged.parentId = declaration.parentId;
             }
         }
@@ -472,7 +473,7 @@ export class SymbolTable {
     private clearUri(uri: string): void {
         const existing = this.symbolsByUri.get(uri);
         if (existing && existing.length > 0) {
-            this.elementIds.remove(existing);
+            this.ids.remove(existing);
             // Collect names and type names that need index updates
             const affectedNames = new Set<string>();
             const affectedTypeNames = new Set<string>();
@@ -809,7 +810,7 @@ export class SymbolTable {
     }
 
     private registerSymbol(symbol: SysMLSymbol, uri: string, scope: Scope): void {
-        // A symbol without a qualified name is found by its elementId only, so a
+        // A symbol without a qualified name is found by its symbol ID only, so a
         // declared name, however it is quoted, never collides with it.
         if (symbol.qualifiedName === undefined) {
             this.unqualifiedSymbols.add(symbol);
@@ -988,8 +989,8 @@ export class SymbolTable {
             label,
             specialization: specializationPart && this.declarationText(specializationPart),
             ends: this.extractConnectorEnds(ctx, kind),
-            // A placeholder: the document's IDs are assigned at the end of `build` (`ElementIdRegistry`).
-            elementId: '',
+            // A placeholder: the document's symbol IDs are assigned at the end of `build` (`IdRegistry`).
+            symbolId: '',
             shortName,
             kind,
             qualifiedName,
@@ -1223,7 +1224,7 @@ export class SymbolTable {
      * The label (`SysMLSymbol.label`) of a definition or usage without a
      * declared name: its declaration as written. Undefined for any other
      * element, and for an untyped transition without a source and target
-     * state. Its name is empty; it is identified by its `elementId`.
+     * state. Its name is empty; it is identified by its `symbolId`.
      */
     private generateAnonymousLabel(
         ctx: ParserRuleContext,

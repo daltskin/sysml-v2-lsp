@@ -71,7 +71,7 @@ export function ensureParsed(ctx: McpContext, uri: string, code?: string): void 
 // Formatting helpers
 // ---------------------------------------------------------------------------
 
-/** A symbol as MCP output; its owner is referred to by `parentId`, its owner's UUID. */
+/** A symbol as MCP output; its owner is referred to by `parentId`, its owner's symbol ID. */
 export function formatSymbol(sym: SysMLSymbol): Record<string, unknown> {
     const specSet = new Set(sym.specializationNames);
     const typingOnly = sym.typeNames.filter(n => !specSet.has(n));
@@ -81,8 +81,7 @@ export function formatSymbol(sym: SysMLSymbol): Record<string, unknown> {
         ...(sym.label ? { label: sym.label } : {}),
         // null without one (an anonymous element or a member of one), as in the SysML v2 API
         qualifiedName: sym.qualifiedName ?? null,
-        elementId: sym.elementId,
-        // The owner's elementId (a UUID)
+        symbolId: sym.symbolId,
         ...(sym.parentId ? { parentId: sym.parentId } : {}),
         ...(typingOnly.length > 0 ? { type: typingOnly.join(', ') } : {}),
         ...(sym.specializationNames.length > 0 ? { specializes: sym.specializationNames.join(', ') } : {}),
@@ -237,10 +236,10 @@ export function handlePreview(
     // Focus mode: filter to the targeted element and its children/related types
     if (opts.focus) {
         const focusName = opts.focus;
-        // The elementIds of the elements to render
+        // The symbol IDs of the elements to render
         const focusSet = new Set<string>();
 
-        // Build owner→members index by elementId (sym.children is not populated by parser)
+        // Build owner→members index by symbol ID (sym.children is not populated by parser)
         const childrenOf = new Map<string, SysMLSymbol[]>();
         for (const s of allSymbols) {
             if (s.parentId) {
@@ -258,11 +257,11 @@ export function handlePreview(
         );
 
         for (const f of focused) {
-            focusSet.add(f.elementId);
+            focusSet.add(f.symbolId);
             // Include its members
-            const children = childrenOf.get(f.elementId) ?? [];
+            const children = childrenOf.get(f.symbolId) ?? [];
             for (const child of children) {
-                focusSet.add(child.elementId);
+                focusSet.add(child.symbolId);
             }
             // Include its owner
             if (f.parentId) {
@@ -276,17 +275,17 @@ export function handlePreview(
             for (const tn of typeSource) {
                 const typed = allSymbols.find(s => s.name === tn || s.qualifiedName === tn);
                 if (typed) {
-                    focusSet.add(typed.elementId);
+                    focusSet.add(typed.symbolId);
                     // Include children of the type definition too
-                    for (const child of (childrenOf.get(typed.elementId) ?? [])) {
-                        focusSet.add(child.elementId);
+                    for (const child of (childrenOf.get(typed.symbolId) ?? [])) {
+                        focusSet.add(child.symbolId);
                     }
                 }
             }
         }
 
         if (focusSet.size > 0) {
-            renderSymbols = allSymbols.filter(s => focusSet.has(s.elementId));
+            renderSymbols = allSymbols.filter(s => focusSet.has(s.symbolId));
         }
     }
 

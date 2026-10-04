@@ -77,8 +77,8 @@ export interface ElementMatch {
     /** The element's qualified name; null for an element without one (KerML):
      *  a member of an anonymous element. */
     qualifiedName: string | null;
-    /** The element's unique, stable identifier (see `SysMLElementDTO.elementId`). */
-    elementId: string;
+    /** The element's unique, stable identifier (see `SysMLElementDTO.symbolId`). */
+    symbolId: string;
     /** SysML-specific element type keyword, e.g. 'part def', 'part'. Same
      *  value space as `SysMLElementDTO.type` (`sysmlModelTypes.ts`). */
     type: string;

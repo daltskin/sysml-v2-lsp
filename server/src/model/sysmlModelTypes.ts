@@ -116,7 +116,7 @@ export interface SysMLModelResult {
             hotspots: {
                 /** null for a definition without a qualified name (inside an anonymous element). */
                 qualifiedName: string | null;
-                elementId: string;
+                symbolId: string;
                 kind: string;
                 childCount: number;
                 depth: number;
@@ -180,11 +180,11 @@ export interface SysMLElementDTO {
     name: string;
 
     /**
-     * Unique identifier of the element (KerML `elementId`): a version 5 UUID
-     * derived from the workspace's text, the same after a reload and while
-     * other parts of the model are edited.
+     * The element's symbol ID: a version 5 UUID derived from the project ID and
+     * its name, or, without one, its declaration. The same after a reload, but
+     * not the KerML `elementId`: a rename gives a new one.
      */
-    elementId: string;
+    symbolId: string;
 
     /** Source location. */
     range: RangeDTO;
@@ -237,11 +237,11 @@ export interface RelationshipDTO {
     /** Source element name (absent for shorthand satisfy/verify without `by`). */
     source?: string;
 
-    /** `elementId` of the source element, when the source is the element declaring the relationship. */
-    sourceElementId?: string;
+    /** `symbolId` of the source element, when the source is the element declaring the relationship. */
+    sourceId?: string;
 
-    /** `elementId` of the element that is the relationship itself (a connection, allocation or transition usage). */
-    elementId?: string;
+    /** `symbolId` of the element that is the relationship itself (a connection, allocation or transition usage). */
+    symbolId?: string;
 
     /** Target element name. */
     target: string;

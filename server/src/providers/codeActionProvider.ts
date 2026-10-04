@@ -592,7 +592,7 @@ export class CodeActionProvider {
 
         const scope = scopeName ? symbolsInUri.find((s) => s.name === scopeName) : undefined;
         const scopeMembers = scope
-            ? allSymbols.filter((s) => s.parentId === scope.elementId)
+            ? allSymbols.filter((s) => s.parentId === scope.symbolId)
             : [];
         const rootUsage = scopeMembers.find((s) => s.name === root)
             ?? symbolsInUri.find((s) => s.name === root && !!(s.typeNames[0] ?? s.typeName));
@@ -603,7 +603,7 @@ export class CodeActionProvider {
             const typeDef = allSymbols.find((s) => s.name === rootType && s.kind.endsWith(' def'));
             if (typeDef) {
                 memberNames = allSymbols
-                    .filter((s) => s.parentId === typeDef.elementId)
+                    .filter((s) => s.parentId === typeDef.symbolId)
                     .map((s) => s.name);
             }
         }

@@ -118,7 +118,7 @@ describe('ElementLookupProvider', () => {
         return dm;
     }
 
-    it('reports a null qualified name, and the elementId, for a member of an anonymous element', async () => {
+    it('reports a null qualified name, and the symbol ID, for a member of an anonymous element', async () => {
         const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
         const text = `
 package Demo {
@@ -128,7 +128,7 @@ package Demo {
 }`;
         const dm = await setupMulti([{ uri: 'test://a.sysml', text }]);
         const { results } = new ElementLookupProvider(dm).elementLookup({ queries: [{ name: 'flowRate' }, { name: 'a' }] });
-        expect(results.flowRate.map(m => [m.qualifiedName, typeof m.elementId])).toEqual([[null, 'string']]);
+        expect(results.flowRate.map(m => [m.qualifiedName, typeof m.symbolId])).toEqual([[null, 'string']]);
         expect(results.a.map(m => m.qualifiedName)).toEqual(['Demo::a']);
     });
 

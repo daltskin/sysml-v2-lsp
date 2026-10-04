@@ -38,8 +38,8 @@ export class ElementLookupProvider {
             const matchedPackages = new Set<string>();
             results[query.name] = matches.filter(sym => {
                 if (sym.kind !== SysMLElementKind.Package) return true;
-                if (matchedPackages.has(sym.elementId)) return false;
-                matchedPackages.add(sym.elementId);
+                if (matchedPackages.has(sym.symbolId)) return false;
+                matchedPackages.add(sym.symbolId);
                 return true;
             }).map(sym => this.toElementMatch(sym));
         }
@@ -80,13 +80,13 @@ export class ElementLookupProvider {
     private withinScope(symbols: SysMLSymbol[], scope: string | undefined): SysMLSymbol[] {
         if (!scope) return symbols;
         const prefix = `${scope}::`;
-        const byElementId = new Map(symbols.map(sym => [sym.elementId, sym]));
+        const byId = new Map(symbols.map(sym => [sym.symbolId, sym]));
         return symbols.filter(sym => {
             if (sym.qualifiedName !== undefined) return sym.qualifiedName.startsWith(prefix);
             // Without a qualified name (inside an anonymous element): placed by its nearest owner that has one.
-            let owner = sym.parentId ? byElementId.get(sym.parentId) : undefined;
+            let owner = sym.parentId ? byId.get(sym.parentId) : undefined;
             while (owner && owner.qualifiedName === undefined) {
-                owner = owner.parentId ? byElementId.get(owner.parentId) : undefined;
+                owner = owner.parentId ? byId.get(owner.parentId) : undefined;
             }
             return owner?.qualifiedName !== undefined && `${owner.qualifiedName}::`.startsWith(prefix);
         });
@@ -97,7 +97,7 @@ export class ElementLookupProvider {
             name: sym.name,
             shortName: sym.shortName,
             qualifiedName: sym.qualifiedName ?? null,
-            elementId: sym.elementId,
+            symbolId: sym.symbolId,
             type: sym.kind,
             uri: sym.uri,
             range: sym.range,

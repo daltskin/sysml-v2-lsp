@@ -222,7 +222,7 @@ export class SemanticValidator {
         if (symbol.kind !== SysMLElementKind.EnumDef) return [];
 
         const children = allSymbols.filter(s =>
-            s.parentId === symbol.elementId
+            s.parentId === symbol.symbolId
         );
         const hasEnumValues = children.some(c =>
             c.kind === SysMLElementKind.EnumUsage ||
@@ -1276,14 +1276,14 @@ export class SemanticValidator {
     private checkDuplicateDefinitions(symbols: SysMLSymbol[]): Diagnostic[] {
         const diagnostics: Diagnostic[] = [];
         const definitionsByScope = new Map<NamespaceKey, Map<string, SysMLSymbol[]>>();
-        const byElementId = new Map(symbols.map(s => [s.elementId, s]));
+        const byId = new Map(symbols.map(s => [s.symbolId, s]));
 
         for (const symbol of symbols) {
             // An anonymous definition declares no name, so it can't duplicate one.
             if (!isDefinition(symbol.kind) || isAnonymous(symbol)) continue;
 
             // The namespace it is declared in: one scope however many documents declare it.
-            const scope = ownerKeyOf(symbol, byElementId);
+            const scope = ownerKeyOf(symbol, byId);
             let scopeMap = definitionsByScope.get(scope);
             if (!scopeMap) {
                 scopeMap = new Map();

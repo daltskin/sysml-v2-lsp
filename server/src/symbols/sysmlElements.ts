@@ -74,7 +74,7 @@ export interface SysMLSymbol {
      * For an anonymous element only: its declaration as written, without its
      * body and with whitespace collapsed (`connect a.p to b.p`, `connection :
      * Conn`, `transition first s1 then s2`) -- not a name. Part of its
-     * `elementId`; never looked up or shown as a name (see `displayName`).
+     * `symbolId`; never looked up or shown as a name (see `displayName`).
      */
     label?: string;
     /**
@@ -90,12 +90,13 @@ export interface SysMLSymbol {
      */
     ends?: string[];
     /**
-     * Unique, stable identifier (KerML `Element::elementId`): a version 5 UUID
-     * derived from the workspace's text (see `ElementIdRegistry`), so it survives
-     * edits elsewhere and reloads. Empty only while its document is being built;
-     * an empty elementId after `SymbolTable.build` is invalid.
+     * The symbol's ID: a version 5 UUID derived from the project ID and the
+     * element's name, or, without one, its declaration (see `IdRegistry`). The
+     * same after a reload, but not the KerML `elementId`: a rename gives a new
+     * one. Empty only while its document is being built; an empty symbolId
+     * after `SymbolTable.build` is invalid.
      */
-    elementId: string;
+    symbolId: string;
     /** Declared `<shortName>` alias (`identification: LT name GT name | LT name GT`), if any. */
     shortName?: string;
     /** The kind of SysML element */
@@ -104,7 +105,7 @@ export interface SysMLSymbol {
      * The fully qualified name (e.g., "VehicleModel::Chassis::wheel"); undefined
      * for an element without one (KerML): an anonymous element, or any member of one.
      * A name, for resolving and comparing what a model writes -- an element is
-     * identified by its `elementId`, and its owner by `parentId`.
+     * identified by its `symbolId`, and its owner by `parentId`.
      */
     qualifiedName?: string;
     /** The range where the symbol is defined */
@@ -131,7 +132,7 @@ export interface SysMLSymbol {
     transitionTrigger?: string;
     /** Explicit succession edges owned by an action definition or usage. */
     controlFlows?: { source: string; target: string; guard?: string }[];
-    /** Owner's `elementId`; unset for an element owned by no other (a root package). */
+    /** Owner's `symbolId`; unset for an element owned by no other (a root package). */
     parentId?: string;
     /** Child symbol qualified names */
     children: string[];
@@ -205,7 +206,7 @@ export type FilterExpr =
 /**
  * Whether `symbol` is anonymous (KerML: no declared name or short name). It is
  * never found by name lookup, never takes part in duplicate-name checks, has no
- * qualified name, and is identified by its `elementId` only.
+ * qualified name, and is identified by its `symbolId` only.
  */
 export function isAnonymous(symbol: SysMLSymbol): boolean {
     return !symbol.name && !symbol.shortName;

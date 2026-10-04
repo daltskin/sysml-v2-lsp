@@ -222,7 +222,7 @@ package Test {
             expect(port!.attributes['portType']).toBe('PowerPort');
         });
 
-        it('should report each element\'s elementId, and it as the source of its relationships', async () => {
+        it('should report each symbol\'s ID, and it as the source of its relationships', async () => {
             const model = await getModelForText(`
 package Test {
     part def Engine;
@@ -235,14 +235,14 @@ package Test {
             const pkg = model.elements!.find(e => e.name === 'Test')!;
             const vehicle = pkg.children.find(e => e.name === 'Vehicle')!;
             const engine = vehicle.children.find(e => e.name === 'engine')!;
-            const ids = [pkg, vehicle, engine].map(e => e.elementId);
+            const ids = [pkg, vehicle, engine].map(e => e.symbolId);
             expect(ids.every(id => /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id))).toBe(true);
             expect(new Set(ids).size).toBe(3);
-            expect(engine.relationships).toEqual([{ type: 'typing', source: 'engine', sourceElementId: engine.elementId, target: 'Engine' }]);
-            expect(model.relationships).toContainEqual({ type: 'typing', source: 'engine', sourceElementId: engine.elementId, target: 'Engine' });
+            expect(engine.relationships).toEqual([{ type: 'typing', source: 'engine', sourceId: engine.symbolId, target: 'Engine' }]);
+            expect(model.relationships).toContainEqual({ type: 'typing', source: 'engine', sourceId: engine.symbolId, target: 'Engine' });
         });
 
-        it('should report the elementId of the allocation, named or anonymous, its allocation relationship is', async () => {
+        it('should report the symbol ID of the allocation, named or anonymous, its allocation relationship is', async () => {
             const model = await getModelForText(`
 package Demo {
     allocation def Alloc;
@@ -253,12 +253,12 @@ package Demo {
 
             const [named, anonymous] = model.elements!.find(e => e.name === 'Demo')!.children.filter(e => e.type === 'allocation');
             expect(model.relationships!.filter(r => r.type === 'allocation')).toEqual([
-                { type: 'allocation', source: 'l', target: 'p', name: 'a1', elementId: named.elementId },
-                { type: 'allocation', source: 'p', target: 'l', name: '', elementId: anonymous.elementId },
+                { type: 'allocation', source: 'l', target: 'p', name: 'a1', symbolId: named.symbolId },
+                { type: 'allocation', source: 'p', target: 'l', name: '', symbolId: anonymous.symbolId },
             ]);
         });
 
-        it('should report the satisfying or verifying element\'s elementId, but none for a `by` name', async () => {
+        it('should report the satisfying or verifying symbol\'s ID, but none for a `by` name', async () => {
             const model = await getModelForText(`
 package Demo {
     requirement def R;
@@ -273,13 +273,13 @@ package Demo {
 
             const sys = model.elements!.find(e => e.name === 'Demo')!.children.find(e => e.name === 'sys')!;
             const rels = model.relationships!.filter(r => r.type === 'satisfy' || r.type === 'verify');
-            expect(rels).toContainEqual({ type: 'satisfy', source: 'sys', sourceElementId: sys.elementId, target: 'r' });
-            expect(rels).toContainEqual({ type: 'verify', source: 'sys', sourceElementId: sys.elementId, target: 'r' });
-            // `by sys` gives the source as written: a name, without an elementId.
-            expect(rels.filter(r => r.type === 'verify' && r.source === 'sys' && r.sourceElementId === undefined)).toHaveLength(1);
+            expect(rels).toContainEqual({ type: 'satisfy', source: 'sys', sourceId: sys.symbolId, target: 'r' });
+            expect(rels).toContainEqual({ type: 'verify', source: 'sys', sourceId: sys.symbolId, target: 'r' });
+            // `by sys` gives the source as written: a name, without a symbol ID.
+            expect(rels.filter(r => r.type === 'verify' && r.source === 'sys' && r.sourceId === undefined)).toHaveLength(1);
         });
 
-        it('should report the workspace\'s elementIds, distinct for declarations clashing across documents', async () => {
+        it('should report the workspace\'s symbol IDs, distinct for declarations clashing across documents', async () => {
             const { DocumentManager } = await import('../../server/src/documentManager.js');
             const { SysMLModelProvider } = await import('../../server/src/model/sysmlModelProvider.js');
             const { TextDocument } = await import('vscode-languageserver-textdocument');
@@ -290,12 +290,12 @@ package Demo {
             const provider = new SysMLModelProvider(docManager);
             const idsIn = (uri: string) => {
                 const p = provider.getModel(uri, 1, ['elements']).elements![0].children[0];
-                return [p.elementId, p.children[0].elementId];
+                return [p.symbolId, p.children[0].symbolId];
             };
             const workspace = docManager.getWorkspaceSymbolTable();
             for (const uri of ['test://a.sysml', 'test://b.sysml']) {
                 const declared = workspace.getSymbolsForUri(uri);
-                expect(idsIn(uri)).toEqual([declared.find(s => s.name === 'P')!.elementId, declared.find(s => s.name === 'w')!.elementId]);
+                expect(idsIn(uri)).toEqual([declared.find(s => s.name === 'P')!.symbolId, declared.find(s => s.name === 'w')!.symbolId]);
             }
             expect(new Set([...idsIn('test://a.sysml'), ...idsIn('test://b.sysml')]).size).toBe(4);
         });
@@ -483,7 +483,7 @@ package Demo {
                 source: 'a',
                 target: 'b',
                 name: 'Tick',
-                elementId: transition.elementId,
+                symbolId: transition.symbolId,
             });
         });
 
@@ -1067,7 +1067,7 @@ package Demo {
             const [declared] = interfacesNamed('link') as any[];
             const nested = declared.children.filter((c: any) => c.type === 'interface');
             expect(nested.map((c: any) => [c.name, c.attributes.isAnonymous])).toEqual([['', true], ['', true]]);
-            expect(new Set(nested.map((c: any) => c.elementId)).size).toBe(2);
+            expect(new Set(nested.map((c: any) => c.symbolId)).size).toBe(2);
             expect(declared.attributes.isAnonymous).toBeUndefined();
         });
 
@@ -1132,7 +1132,7 @@ package Demo {
                 ['connect a.p to b.p', undefined],
                 ['', true],
             ]);
-            expect(new Set(connections.map(c => c.elementId)).size).toBe(3);
+            expect(new Set(connections.map(c => c.symbolId)).size).toBe(3);
         });
 
         it('should model declared elements quoted like an anonymous connection\'s display name, or its former generated name, each as its own element', async () => {
@@ -1155,9 +1155,9 @@ package Demo {
                 ['connection', 'a.p→b.p', undefined],
                 ['connection', 'a.p-b.p', undefined],
             ]);
-            expect(new Set(elements.map(e => e.elementId)).size).toBe(3);
+            expect(new Set(elements.map(e => e.symbolId)).size).toBe(3);
             // Each has its own member `w`.
-            const members = elements.map(e => e.children.find(c => c.name === 'w')!.elementId);
+            const members = elements.map(e => e.children.find(c => c.name === 'w')!.symbolId);
             expect(new Set(members).size).toBe(3);
         });
 

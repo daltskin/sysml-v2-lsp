@@ -15,14 +15,14 @@ import { SysMLElementKind } from '../../server/src/symbols/sysmlElements.js';
 // ---------------------------------------------------------------------------
 
 /**
- * A hand-made symbol. Its elementId defaults to its qualified name, so a
+ * A hand-made symbol. Its symbol ID defaults to its qualified name, so a
  * member names its owner by that (`parent`).
  */
 function sym({ parent, ...overrides }: Partial<SysMLSymbol> & { name: string; kind: SysMLElementKind; parent?: string }): SysMLSymbol {
     const qualifiedName = overrides.qualifiedName ?? overrides.name;
     return {
         qualifiedName,
-        elementId: overrides.elementId ?? qualifiedName,
+        symbolId: overrides.symbolId ?? qualifiedName,
         parentId: overrides.parentId ?? parent,
         range: overrides.range ?? { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },
         selectionRange: overrides.selectionRange ?? { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } },

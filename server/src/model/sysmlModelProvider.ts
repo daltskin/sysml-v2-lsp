@@ -186,9 +186,9 @@ function readCommaSeparatedIdents(text: string, pos: number): string[] {
     return names;
 }
 
-/** `symbols` by `elementId`. */
-function symbolsByElementId(symbols: SysMLSymbol[]): Map<string, SysMLSymbol> {
-    return new Map(symbols.map(s => [s.elementId, s]));
+/** `symbols` by `symbolId`. */
+function symbolsById(symbols: SysMLSymbol[]): Map<string, SysMLSymbol> {
+    return new Map(symbols.map(s => [s.symbolId, s]));
 }
 
 /**
@@ -249,19 +249,19 @@ export class SysMLModelProvider {
     }
 
     /**
-     * Give this document's symbols the elementIds of the workspace symbol table.
-     * An ID can depend on other documents (a clash, or identical anonymous
+     * Give this document's symbols the symbol IDs of the workspace symbol table.
+     * A symbol ID can depend on other documents (a clash, or identical anonymous
      * elements in a package declared in several), which this document's own
      * table doesn't see. Both tables come from the same parse, so each
      * declaration is matched by its kind and position.
      */
-    private useWorkspaceElementIds(symbolTable: SymbolTable, uri: string): void {
+    private useWorkspaceIds(symbolTable: SymbolTable, uri: string): void {
         const siteOf = (s: SysMLSymbol) => `${s.kind}@${s.range.start.line}:${s.range.start.character}`;
         const workspace = new Map(this.documentManager.getWorkspaceSymbolTable().getSymbolsForUri(uri).map(s => [siteOf(s), s]));
         for (const symbol of symbolTable.getSymbolsForUri(uri)) {
             const declaration = workspace.get(siteOf(symbol));
             if (!declaration) continue;
-            symbol.elementId = declaration.elementId;
+            symbol.symbolId = declaration.symbolId;
             symbol.parentId = declaration.parentId;
         }
     }
@@ -288,7 +288,7 @@ export class SysMLModelProvider {
 
         // Build (or retrieve cached) symbol table from parse result
         const symbolTable = this._getSymbolTable(uri, parseResult);
-        this.useWorkspaceElementIds(symbolTable, uri);
+        this.useWorkspaceIds(symbolTable, uri);
 
         const text = this.documentManager.getText(uri) ?? '';
         const lines = text.split('\n');
@@ -366,14 +366,14 @@ export class SysMLModelProvider {
     ): SysMLElementDTO[] {
         const symbols = symbolTable.getSymbolsForUri(uri);
 
-        const byElementId = symbolsByElementId(symbols);
+        const byId = symbolsById(symbols);
         const declaredQualifiedNames = new Set(symbols.flatMap(s => s.qualifiedName !== undefined ? [s.qualifiedName] : []));
 
         // Build parent → children index, keyed by each symbol's owning namespace
         const childrenOf = new Map<NamespaceKey, SysMLSymbol[]>();
         const roots: SysMLSymbol[] = [];
         for (const sym of symbols) {
-            const ownerKey = ownerKeyOf(sym, byElementId);
+            const ownerKey = ownerKeyOf(sym, byId);
             if (typeof ownerKey === 'string' && !declaredQualifiedNames.has(ownerKey)) {
                 // No parent, or a parent not in this URI
                 roots.push(sym);
@@ -399,7 +399,7 @@ export class SysMLModelProvider {
         // Build children recursively from the parent→children index
         const childSymbols = (childrenOf.get(namespaceKeyOf(symbol)) ?? [])
             // B1: Filter phantom self-referencing package children
-            .filter(c => c.elementId !== symbol.elementId);
+            .filter(c => c.symbolId !== symbol.symbolId);
         const children: SysMLElementDTO[] = childSymbols.map(c =>
             this.symbolToElementDTO(c, childrenOf, lines),
         );
@@ -484,7 +484,7 @@ export class SysMLModelProvider {
             relationships.push({
                 type: 'typing',
                 source: symbol.name,
-                sourceElementId: symbol.elementId,
+                sourceId: symbol.symbolId,
                 target: tn,
             });
         }
@@ -495,7 +495,7 @@ export class SysMLModelProvider {
             relationships.push({
                 type: 'specializes',
                 source: symbol.name,
-                sourceElementId: symbol.elementId,
+                sourceId: symbol.symbolId,
                 target: spec,
             });
         }
@@ -503,7 +503,7 @@ export class SysMLModelProvider {
         return {
             type: symbol.kind as string,
             name: symbol.name,
-            elementId: symbol.elementId,
+            symbolId: symbol.symbolId,
             range: this.rangeToDTO(symbol.range),
             children,
             attributes,
@@ -545,7 +545,7 @@ export class SysMLModelProvider {
                     relationships.push({
                         type: 'typing',
                         source: symbol.name,
-                        sourceElementId: symbol.elementId,
+                        sourceId: symbol.symbolId,
                         target: tn,
                     });
                 }
@@ -557,7 +557,7 @@ export class SysMLModelProvider {
                 relationships.push({
                     type: 'specializes',
                     source: symbol.name,
-                    sourceElementId: symbol.elementId,
+                    sourceId: symbol.symbolId,
                     target: spec,
                 });
             }
@@ -571,7 +571,7 @@ export class SysMLModelProvider {
                         source: connectionTargets[0],
                         target: connectionTargets[1],
                         name: symbol.name,
-                        elementId: symbol.elementId,
+                        symbolId: symbol.symbolId,
                     });
                 }
             }
@@ -585,7 +585,7 @@ export class SysMLModelProvider {
                     source: symbol.source,
                     target: symbol.target,
                     name: symbol.transitionTrigger,
-                    elementId: symbol.elementId,
+                    symbolId: symbol.symbolId,
                 });
             }
 
@@ -598,7 +598,7 @@ export class SysMLModelProvider {
                         source: allocTargets[0],
                         target: allocTargets[1],
                         name: symbol.name,
-                        elementId: symbol.elementId,
+                        symbolId: symbol.symbolId,
                     });
                 }
             }
@@ -769,7 +769,7 @@ export class SysMLModelProvider {
                 // Only mark as fully handled if it has real messages;
                 // items-only diagrams (0 messages) can be enriched by D3 synthesis
                 if (messages.length > 0) {
-                    seen.add(symbol.elementId);
+                    seen.add(symbol.symbolId);
                 }
             }
         }
@@ -778,7 +778,7 @@ export class SysMLModelProvider {
         // For action defs with first/then flows, synthesise a sequence diagram
         // using action children as participants and flow edges as messages.
         for (const symbol of symbols) {
-            if (seen.has(symbol.elementId)) continue;
+            if (seen.has(symbol.symbolId)) continue;
             if (symbol.kind !== SysMLElementKind.ActionDef &&
                 symbol.kind !== SysMLElementKind.ActionUsage) {
                 continue;
@@ -868,7 +868,7 @@ export class SysMLModelProvider {
         };
 
         for (const symbol of symbols) {
-            if (seen.has(symbol.elementId)) continue;
+            if (seen.has(symbol.symbolId)) continue;
             if (!containerKinds.has(symbol.kind)) continue;
 
             const children = this.getChildSymbols(symbol, symbolTable);
@@ -954,7 +954,7 @@ export class SysMLModelProvider {
                 messages: parsedMessages,
                 range: this.rangeToDTO(symbol.range),
             });
-            seen.add(symbol.elementId);
+            seen.add(symbol.symbolId);
         }
 
         return diagrams;
@@ -1277,12 +1277,12 @@ export class SysMLModelProvider {
         // request's own diagnostics (Model Explorer, Dashboard, Feature
         // Inspector) explain *why* a reference is unresolved the same way the
         // editor's own diagnostics do, not just leave it unexplained.
-        // By elementId: this document's own symbols carry the workspace's IDs (`useWorkspaceElementIds`).
+        // By symbol ID: this document's own symbols carry the workspace's symbol IDs (`useWorkspaceIds`).
         const conflicts = new Map([...findConflictingDeclarations(this.documentManager.getWorkspaceSymbolTable().getAllSymbols())]
-            .map(([declaration, group]) => [declaration.elementId, group]));
+            .map(([declaration, group]) => [declaration.symbolId, group]));
 
         for (const symbol of symbols) {
-            const conflicting = conflicts.get(symbol.elementId);
+            const conflicting = conflicts.get(symbol.symbolId);
             if (conflicting) {
                 const others = otherDeclarations(conflicting, symbol);
                 diagnostics.push({
@@ -1348,9 +1348,9 @@ export class SysMLModelProvider {
         // The symbol table's children array may not be populated; use the
         // symbolsByUri list and filter by owning namespace instead.
         const allSymbols = symbolTable.getSymbolsForUri(parent.uri);
-        const byElementId = symbolsByElementId(allSymbols);
+        const byId = symbolsById(allSymbols);
         const parentKey = namespaceKeyOf(parent);
-        return allSymbols.filter(s => ownerKeyOf(s, byElementId) === parentKey);
+        return allSymbols.filter(s => ownerKeyOf(s, byId) === parentKey);
     }
 
     /**
@@ -1536,7 +1536,7 @@ export class SysMLModelProvider {
     /** Extract relationship keywords from the text of `element`, the relationships' default source. */
     private extractKeywordRelationships(element: SysMLSymbol, elementText: string): RelationshipDTO[] {
         const elementName = element.name;
-        const fromElement = { source: elementName, sourceElementId: element.elementId };
+        const fromElement = { source: elementName, sourceId: element.symbolId };
         elementText = stripComments(elementText);
         const rels: RelationshipDTO[] = [];
 
@@ -1566,7 +1566,7 @@ export class SysMLModelProvider {
             const [reqName, afterReq] = readNameOrQuoted(elementText, pos);
             if (reqName && reqName !== 'requirement') {
                 // Check for 'by <satisfier>' clause
-                let satisfier: Pick<RelationshipDTO, 'source' | 'sourceElementId'> = fromElement;
+                let satisfier: Pick<RelationshipDTO, 'source' | 'sourceId'> = fromElement;
                 const byPos = skipWS(elementText, afterReq);
                 const [byWord, afterBy] = readIdent(elementText, byPos);
                 if (byWord === 'by') {
@@ -1589,7 +1589,7 @@ export class SysMLModelProvider {
             const [reqName, afterReq] = readNameOrQuoted(elementText, pos);
             if (reqName && reqName !== 'requirement') {
                 // Check for 'by <verifier>' clause
-                let verifier: Pick<RelationshipDTO, 'source' | 'sourceElementId'> = fromElement;
+                let verifier: Pick<RelationshipDTO, 'source' | 'sourceId'> = fromElement;
                 const byPos = skipWS(elementText, afterReq);
                 const [byWord, afterBy] = readIdent(elementText, byPos);
                 if (byWord === 'by') {

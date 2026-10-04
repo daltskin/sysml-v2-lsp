@@ -27,8 +27,8 @@ export interface SymbolIndexes {
     /** Named members by owning namespace (`NamespaceKey`); `''` holds the root's. */
     byParent: Map<NamespaceKey, SysMLSymbol[]>;
     byQualifiedName: Map<string, SysMLSymbol>;
-    /** Every symbol by `elementId`; the only index an anonymous one (`isAnonymous`) is in. */
-    byElementId: Map<string, SysMLSymbol>;
+    /** Every symbol by `symbolId`; the only index an anonymous one (`isAnonymous`) is in. */
+    byId: Map<string, SysMLSymbol>;
     definitionsByName: Map<string, SysMLSymbol[]>;
     portsByName: Map<string, SysMLSymbol[]>;
 }
@@ -106,7 +106,7 @@ export function findConflictedQualifiedNames(allSymbols: SysMLSymbol[]): Map<str
  * names, this covers members of an anonymous element, which have no
  * qualified name: two of them clash when they share their owner (by
  * `parentId`) and name. The two cases are grouped separately, so no
- * qualified name, however it is quoted, can be confused with an owner's ID.
+ * qualified name, however it is quoted, can be confused with an owner's symbol ID.
  */
 export function findConflictingDeclarations(allSymbols: SysMLSymbol[]): Map<SysMLSymbol, SysMLSymbol[]> {
     const conflicting = new Map<SysMLSymbol, SysMLSymbol[]>();
@@ -225,7 +225,7 @@ export function buildSymbolIndexes(allSymbols: SysMLSymbol[]): SymbolIndexes {
     const byName = new Map<string, SysMLSymbol[]>();
     const byParent = new Map<NamespaceKey, SysMLSymbol[]>();
     const byQualifiedName = new Map<string, SysMLSymbol>();
-    const byElementId = new Map<string, SysMLSymbol>();
+    const byId = new Map<string, SysMLSymbol>();
     const definitionsByName = new Map<string, SysMLSymbol[]>();
     const portsByName = new Map<string, SysMLSymbol[]>();
 
@@ -244,15 +244,15 @@ export function buildSymbolIndexes(allSymbols: SysMLSymbol[]): SymbolIndexes {
     // declaration.
     const conflictedQualifiedNames = new Set(findConflictedQualifiedNames(allSymbols).keys());
 
-    // Every element by its elementId, indexed first so members below can be
+    // Every element by its symbol ID, indexed first so members below can be
     // keyed by their owner. An anonymous element (`isAnonymous`) is
     // reachable only this way: its generated name is not a member name to
     // resolve, and a declared name quoted like its qualifiedName must not be
     // shadowed by it.
     for (const s of allSymbols) {
-        byElementId.set(s.elementId, s);
+        byId.set(s.symbolId, s);
     }
-    const indexes: SymbolIndexes = { byName, byParent, byQualifiedName, byElementId, definitionsByName, portsByName };
+    const indexes: SymbolIndexes = { byName, byParent, byQualifiedName, byId, definitionsByName, portsByName };
 
     for (const s of allSymbols) {
         if (isAnonymous(s)) continue;
@@ -267,7 +267,7 @@ export function buildSymbolIndexes(allSymbols: SysMLSymbol[]): SymbolIndexes {
         // Root-level symbols (no owner) are keyed under '', the
         // implicit root namespace -- mirrors the '' sentinel used for namespace
         // ancestor chains, so byParent.get('') gives the root's own members.
-        const parentKey = ownerKeyOf(s, indexes.byElementId);
+        const parentKey = ownerKeyOf(s, indexes.byId);
         if (typeof parentKey !== 'string' || !conflictedQualifiedNames.has(parentKey)) {
             const children = byParent.get(parentKey) ?? [];
             children.push(s);
@@ -292,7 +292,7 @@ export function buildSymbolIndexes(allSymbols: SysMLSymbol[]): SymbolIndexes {
 
 /** `symbol`'s owner, by its `parentId`. */
 export function ownerOf(symbol: SysMLSymbol, indexes: SymbolIndexes): SysMLSymbol | undefined {
-    return symbol.parentId ? indexes.byElementId.get(symbol.parentId) : undefined;
+    return symbol.parentId ? indexes.byId.get(symbol.parentId) : undefined;
 }
 
 /**
@@ -305,10 +305,10 @@ export function namespaceKeyOf(symbol: SysMLSymbol): NamespaceKey {
 
 /**
  * The `NamespaceKey` of the namespace owning `symbol`: its owner (looked up by
- * `parentId` in `byElementId`) as a namespace, else the root (`''`).
+ * `parentId` in `byId`) as a namespace, else the root (`''`).
  */
-export function ownerKeyOf(symbol: SysMLSymbol, byElementId: ReadonlyMap<string, SysMLSymbol>): NamespaceKey {
-    const owner = symbol.parentId ? byElementId.get(symbol.parentId) : undefined;
+export function ownerKeyOf(symbol: SysMLSymbol, byId: ReadonlyMap<string, SysMLSymbol>): NamespaceKey {
+    const owner = symbol.parentId ? byId.get(symbol.parentId) : undefined;
     return owner ? namespaceKeyOf(owner) : '';
 }
 
@@ -367,7 +367,7 @@ export class NamespaceResolver {
      * namespace.
      */
     isLocallyVisible(symbol: SysMLSymbol, name: string, indexes: SymbolIndexes): boolean {
-        return this.resolveQualifiedNameFrom(ownerKeyOf(symbol, indexes.byElementId), name, indexes) !== undefined;
+        return this.resolveQualifiedNameFrom(ownerKeyOf(symbol, indexes.byId), name, indexes) !== undefined;
     }
 
     /**
@@ -488,7 +488,7 @@ export class NamespaceResolver {
                 const next: SysMLSymbol[] = [];
                 for (const symbol of frontier) {
                     for (const typeName of symbol.typeNames) {
-                        const supertype = this.resolveQualifiedNameFrom(ownerKeyOf(symbol, indexes.byElementId), typeName, indexes);
+                        const supertype = this.resolveQualifiedNameFrom(ownerKeyOf(symbol, indexes.byId), typeName, indexes);
                         if (!supertype) continue;
                         // Resolved through its name, a supertype is found as `byQualifiedName`'s
                         // entry, which for a package declared in several documents is its merged view.
@@ -514,7 +514,7 @@ export class NamespaceResolver {
      * Members of any of these are visible from `symbol` without an import.
      */
     namespaceAncestors(symbol: SysMLSymbol, indexes: SymbolIndexes): Set<NamespaceKey> {
-        return this.namespaceAncestorsOf(ownerKeyOf(symbol, indexes.byElementId), indexes);
+        return this.namespaceAncestorsOf(ownerKeyOf(symbol, indexes.byId), indexes);
     }
 
     /**
@@ -536,7 +536,7 @@ export class NamespaceResolver {
         while (current !== undefined && current !== '' && guard++ < MAX_NAMESPACE_NESTING_DEPTH) {
             ancestors.add(current);
             const namespaceSymbol: SysMLSymbol | undefined = typeof current === 'string' ? indexes.byQualifiedName.get(current) : current;
-            current = namespaceSymbol ? ownerKeyOf(namespaceSymbol, indexes.byElementId) : undefined;
+            current = namespaceSymbol ? ownerKeyOf(namespaceSymbol, indexes.byId) : undefined;
         }
         ancestors.add('');
         return ancestors;

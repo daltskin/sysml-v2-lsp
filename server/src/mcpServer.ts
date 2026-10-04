@@ -39,6 +39,7 @@ import {
     COPILOT_SERVER_INSTRUCTIONS,
     isCopilotMode,
 } from './mcpToolResponse.js';
+import { PROJECT_ID_ENV_VAR, setProjectId } from './utils/uuid.js';
 
 // ---------------------------------------------------------------------------
 // Server setup
@@ -53,6 +54,12 @@ const server = new McpServer(
         ...(copilotMode ? { instructions: COPILOT_SERVER_INSTRUCTIONS } : {}),
     },
 );
+
+// KerML 9.1: each top-level element needs a unique URL; a client sets its project's ID.
+const projectId = process.env[PROJECT_ID_ENV_VAR];
+if (projectId && !setProjectId(projectId)) {
+    console.error(`${PROJECT_ID_ENV_VAR} is not a UUID: ${projectId}; symbol IDs are unique only within this workspace`);
+}
 
 const ctx = new McpContext();
 

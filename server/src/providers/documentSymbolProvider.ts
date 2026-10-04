@@ -28,13 +28,13 @@ export class DocumentSymbolProvider {
     }
 
     private buildHierarchy(symbols: SysMLSymbol[]): DocumentSymbol[] {
-        // Separate top-level symbols from children, linked by their owner's elementId
+        // Separate top-level symbols from children, linked by their owner's symbol ID
         const topLevel: SysMLSymbol[] = [];
-        const elementIds = new Set(symbols.map(sym => sym.elementId));
+        const ids = new Set(symbols.map(sym => sym.symbolId));
         const childrenOf = new Map<string, SysMLSymbol[]>();
 
         for (const sym of symbols) {
-            if (!sym.parentId || !elementIds.has(sym.parentId)) {
+            if (!sym.parentId || !ids.has(sym.parentId)) {
                 topLevel.push(sym);
             } else {
                 const siblings = childrenOf.get(sym.parentId) ?? [];
@@ -44,7 +44,7 @@ export class DocumentSymbolProvider {
         }
 
         const buildSymbol = (sym: SysMLSymbol): DocumentSymbol => {
-            const children = childrenOf.get(sym.elementId) ?? [];
+            const children = childrenOf.get(sym.symbolId) ?? [];
             return {
                 name: displayName(sym),
                 detail: toMetaclassName(sym.kind),

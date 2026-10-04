@@ -55,6 +55,7 @@ import { SemanticTokensProvider, tokenModifiers, tokenTypes } from './providers/
 import { SemanticValidator } from './providers/semanticValidator.js';
 import { DEFAULT_SKIP_DIRS, findSysMLFilesAsync, readFilesBatch } from './utils/fileDiscovery.js';
 import { isSameDocumentUri } from './utils/documentUri.js';
+import { setProjectId } from './utils/uuid.js';
 
 /** Convert a file:// URI to a filesystem path, returning undefined for non-file URIs. */
 function toFsPath(uri: string): string | undefined {
@@ -307,8 +308,12 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
     );
 
     // Check if the client opened a .code-workspace file
-    const initOpts = params.initializationOptions as { isWorkspaceFile?: boolean } | undefined;
+    const initOpts = params.initializationOptions as { isWorkspaceFile?: boolean; projectId?: string } | undefined;
     isWorkspaceFile = initOpts?.isWorkspaceFile ?? false;
+    // KerML 9.1: each top-level element needs a unique URL; a client sets its project's ID.
+    if (initOpts?.projectId !== undefined && !setProjectId(initOpts.projectId)) {
+        connection.console.warn(`projectId is not a UUID: ${initOpts.projectId}; symbol IDs are unique only within this workspace`);
+    }
 
     // Capture workspace folder roots for background file scanning.
     if (params.workspaceFolders) {

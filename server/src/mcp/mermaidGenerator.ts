@@ -50,18 +50,18 @@ function safeId(name: string): string {
     return result.substring(start, end) || 'node';
 }
 
-/** Lookups over all symbols: by name (qualified, or simple for type references), and by elementId. */
+/** Lookups over all symbols: by name (qualified, or simple for type references), and by symbol ID. */
 interface SymbolLookup {
     byName: Map<string, SysMLSymbol>;
-    byElementId: Map<string, SysMLSymbol>;
+    byId: Map<string, SysMLSymbol>;
 }
 
 /**
  * What a node ID is made from: the qualified name when there is one (readable),
- * else the elementId (`safeId` turns its dashes into underscores).
+ * else the symbol ID (`safeId` turns its dashes into underscores).
  */
 function nodeKey(sym: SysMLSymbol): string {
-    return sym.qualifiedName ?? sym.elementId;
+    return sym.qualifiedName ?? sym.symbolId;
 }
 
 /** The Mermaid node ID of `sym`. */
@@ -71,13 +71,13 @@ function nodeId(sym: SysMLSymbol): string {
 
 /** `sym`'s owner, by its parentId. */
 function ownerOf(sym: SysMLSymbol, lookup: SymbolLookup): SysMLSymbol | undefined {
-    return sym.parentId ? lookup.byElementId.get(sym.parentId) : undefined;
+    return sym.parentId ? lookup.byId.get(sym.parentId) : undefined;
 }
 
 /** Whether `sym` is owned by `ancestor`, directly or through its owners. */
 function isOwnedBy(sym: SysMLSymbol, ancestor: SysMLSymbol, lookup: SymbolLookup): boolean {
     for (let owner = ownerOf(sym, lookup); owner; owner = ownerOf(owner, lookup)) {
-        if (owner.elementId === ancestor.elementId) return true;
+        if (owner.symbolId === ancestor.symbolId) return true;
     }
     return false;
 }
@@ -107,8 +107,8 @@ function buildChildrenIndex(allSymbols: SysMLSymbol[]): Map<string, SysMLSymbol[
     for (const s of allSymbols) {
         // Deduplicate — the symbol table may contain the same symbol
         // under both its qualified name and simple name keys.
-        if (seen.has(s.elementId)) continue;
-        seen.add(s.elementId);
+        if (seen.has(s.symbolId)) continue;
+        seen.add(s.symbolId);
 
         if (s.parentId) {
             const list = index.get(s.parentId) ?? [];
@@ -305,7 +305,7 @@ export function inferDiagramType(symbols: SysMLSymbol[]): DiagramType {
 // ---------------------------------------------------------------------------
 
 /**
- * Build a map from elementId → short display ID.
+ * Build a map from symbol ID → short display ID.
  * Uses simple names where unambiguous, otherwise disambiguates with parent prefix.
  */
 function buildDisplayIds(symbols: SysMLSymbol[], lookup: SymbolLookup): Map<string, string> {
@@ -316,9 +316,9 @@ function buildDisplayIds(symbols: SysMLSymbol[], lookup: SymbolLookup): Map<stri
 
     const ids = new Map<string, string>();
     for (const s of symbols) {
-        // An anonymous element has no name to show: identified by its elementId.
+        // An anonymous element has no name to show: identified by its symbol ID.
         if (!s.name) {
-            ids.set(s.elementId, nodeId(s));
+            ids.set(s.symbolId, nodeId(s));
             continue;
         }
         let displayId: string;
@@ -329,7 +329,7 @@ function buildDisplayIds(symbols: SysMLSymbol[], lookup: SymbolLookup): Map<stri
         } else {
             displayId = safeId(s.name);
         }
-        ids.set(s.elementId, displayId);
+        ids.set(s.symbolId, displayId);
     }
     return ids;
 }
@@ -344,7 +344,7 @@ function generateGeneralView(symbols: SysMLSymbol[], lookup: SymbolLookup): Merm
     let elementCount = 0;
 
     // Build parent→children index (sym.children is not populated by the parser)
-    const childrenOf = buildChildrenIndex([...lookup.byElementId.values()]);
+    const childrenOf = buildChildrenIndex([...lookup.byId.values()]);
 
     // Only render definitions and structural usages (skip attributes, docs, etc.)
     const meaningful = symbols.filter(s =>
@@ -361,13 +361,13 @@ function generateGeneralView(symbols: SysMLSymbol[], lookup: SymbolLookup): Merm
     const displayIds = buildDisplayIds(meaningful, lookup);
 
     for (const sym of meaningful) {
-        const id = displayIds.get(sym.elementId) ?? nodeId(sym);
+        const id = displayIds.get(sym.symbolId) ?? nodeId(sym);
         if (rendered.has(id)) continue;
         rendered.add(id);
         elementCount++;
 
         // Collect members: attributes, ports, nested parts
-        const childSymbols = (childrenOf.get(sym.elementId) ?? [])
+        const childSymbols = (childrenOf.get(sym.symbolId) ?? [])
             .filter(c =>
                 c.kind === SysMLElementKind.AttributeUsage
                 || c.kind === SysMLElementKind.PortUsage
@@ -384,7 +384,7 @@ function generateGeneralView(symbols: SysMLSymbol[], lookup: SymbolLookup): Merm
         // Track for styling
         nodeStyles.set(id, kindLabel);
 
-        // A named class is shown by its ID; an anonymous one by its display name as label.
+        // A named class is shown by its node ID; an anonymous one by its display name as label.
         const classDecl = sym.name ? `class ${id}` : `class ${id}["${escapeLabel(displayName(sym))}"]`;
         if (childSymbols.length > 0) {
             lines.push(`    ${classDecl} {`);
@@ -403,13 +403,13 @@ function generateGeneralView(symbols: SysMLSymbol[], lookup: SymbolLookup): Merm
 
     // Relationships: specialisation and containment
     for (const sym of meaningful) {
-        const id = displayIds.get(sym.elementId) ?? nodeId(sym);
+        const id = displayIds.get(sym.symbolId) ?? nodeId(sym);
 
         for (const typeName of sym.typeNames) {
             const target = lookup.byName.get(typeName)
                 ?? [...lookup.byName.values()].find(s => s.name === typeName);
             if (target) {
-                const targetId = displayIds.get(target.elementId) ?? nodeId(target);
+                const targetId = displayIds.get(target.symbolId) ?? nodeId(target);
                 if (rendered.has(targetId)) {
                     lines.push(`    ${targetId} <|-- ${id} : specializes`);
                 }
@@ -418,7 +418,7 @@ function generateGeneralView(symbols: SysMLSymbol[], lookup: SymbolLookup): Merm
 
         const owner = ownerOf(sym, lookup);
         if (owner) {
-            const parentId = displayIds.get(owner.elementId) ?? nodeId(owner);
+            const parentId = displayIds.get(owner.symbolId) ?? nodeId(owner);
             if (rendered.has(parentId) && rendered.has(id)
                 && (isDefinition(sym.kind) || sym.kind === SysMLElementKind.PartUsage)) {
                 lines.push(`    ${parentId} *-- ${id} : contains`);
@@ -500,7 +500,7 @@ function generateActivityView(symbols: SysMLSymbol[], lookup: SymbolLookup): Mer
     const actions = symbols.filter(s => isActionLike(s.kind));
 
     // Build parent→children index (sym.children is not populated by the parser)
-    const childrenOf = buildChildrenIndex([...lookup.byElementId.values()]);
+    const childrenOf = buildChildrenIndex([...lookup.byId.values()]);
 
     // Render action definitions as subgraphs with their child actions
     for (const def of actionDefs) {
@@ -508,7 +508,7 @@ function generateActivityView(symbols: SysMLSymbol[], lookup: SymbolLookup): Mer
         lines.push(`    subgraph ${defId}["${escapeLabel(displayName(def))}"]`);
         elementCount++;
 
-        const childActions = (childrenOf.get(def.elementId) ?? [])
+        const childActions = (childrenOf.get(def.symbolId) ?? [])
             .filter(c => isActionLike(c.kind));
 
         for (const action of childActions) {
@@ -549,7 +549,7 @@ function generateActivityView(symbols: SysMLSymbol[], lookup: SymbolLookup): Mer
 
     // Standalone actions (not part of a def)
     for (const action of actions) {
-        if (actionDefs.some(d => d.elementId === action.parentId)) {
+        if (actionDefs.some(d => d.symbolId === action.parentId)) {
             continue; // Already rendered inside a subgraph
         }
         const actionId = nodeId(action);
@@ -595,7 +595,7 @@ function generateStateView(symbols: SysMLSymbol[], lookup: SymbolLookup): Mermai
     const transitions = symbols.filter(s => s.kind === SysMLElementKind.TransitionUsage);
 
     // Build parent→children index (sym.children is not populated by the parser)
-    const childrenOf = buildChildrenIndex([...lookup.byElementId.values()]);
+    const childrenOf = buildChildrenIndex([...lookup.byId.values()]);
 
     // State definitions as composite states
     for (const def of stateDefs) {
@@ -604,7 +604,7 @@ function generateStateView(symbols: SysMLSymbol[], lookup: SymbolLookup): Mermai
         nodeStyles.set(defId, 'StateDef');
         elementCount++;
 
-        const childStates = (childrenOf.get(def.elementId) ?? [])
+        const childStates = (childrenOf.get(def.symbolId) ?? [])
             .filter(c => c.kind === SysMLElementKind.StateUsage || c.kind === SysMLElementKind.ExhibitStateUsage);
 
         for (const child of childStates) {
@@ -619,7 +619,7 @@ function generateStateView(symbols: SysMLSymbol[], lookup: SymbolLookup): Mermai
 
     // Standalone states
     for (const state of states) {
-        if (stateDefs.some(d => d.elementId === state.parentId)) {
+        if (stateDefs.some(d => d.symbolId === state.parentId)) {
             continue;
         }
         const stateId = nodeId(state);
@@ -688,7 +688,7 @@ function generateInterconnectionView(symbols: SysMLSymbol[], lookup: SymbolLooku
     );
 
     // Build parent→children index (sym.children is not populated by the parser)
-    const childrenOf = buildChildrenIndex([...lookup.byElementId.values()]);
+    const childrenOf = buildChildrenIndex([...lookup.byId.values()]);
 
     for (const part of parts) {
         const id = nodeId(part);
@@ -696,7 +696,7 @@ function generateInterconnectionView(symbols: SysMLSymbol[], lookup: SymbolLooku
         const typeStr = part.name && part.typeNames.length > 0 ? `\\n: ${part.typeNames[0]}` : '';
 
         // Parts with ports get rendered as subgraphs
-        const ports = (childrenOf.get(part.elementId) ?? [])
+        const ports = (childrenOf.get(part.symbolId) ?? [])
             .filter(c => c.kind === SysMLElementKind.PortUsage);
 
         if (ports.length > 0) {
@@ -916,7 +916,7 @@ function generateUseCaseView(symbols: SysMLSymbol[], lookup: SymbolLookup): Merm
                 const ucId = nodeId(uc);
                 lines.push(`        ${ucId}(["${escapeLabel(displayName(uc))}"])`);
                 nodeStyles.set(ucId, 'UseCaseDef');
-                renderedUCs.add(uc.elementId);
+                renderedUCs.add(uc.symbolId);
                 elementCount++;
             }
 
@@ -927,11 +927,11 @@ function generateUseCaseView(symbols: SysMLSymbol[], lookup: SymbolLookup): Merm
 
     // Render use cases not inside any package
     for (const uc of canonicalUseCases) {
-        if (renderedUCs.has(uc.elementId)) continue;
+        if (renderedUCs.has(uc.symbolId)) continue;
         const ucId = nodeId(uc);
         lines.push(`    ${ucId}(["${escapeLabel(displayName(uc))}"])`);
         nodeStyles.set(ucId, 'UseCaseDef');
-        renderedUCs.add(uc.elementId);
+        renderedUCs.add(uc.symbolId);
         elementCount++;
     }
 
@@ -1043,15 +1043,15 @@ export function generateMermaidDiagram(
     allSymbols: SysMLSymbol[],
     diagramType?: DiagramType,
 ): MermaidResult {
-    // Build lookups for cross-references: by name, and by elementId for owners
-    const lookup: SymbolLookup = { byName: new Map(), byElementId: new Map() };
+    // Build lookups for cross-references: by name, and by symbol ID for owners
+    const lookup: SymbolLookup = { byName: new Map(), byId: new Map() };
     for (const s of allSymbols) {
         if (s.qualifiedName !== undefined) lookup.byName.set(s.qualifiedName, s);
         // Also index by simple name for type lookups
         if (!lookup.byName.has(s.name)) {
             lookup.byName.set(s.name, s);
         }
-        lookup.byElementId.set(s.elementId, s);
+        lookup.byId.set(s.symbolId, s);
     }
 
     const type = diagramType ?? inferDiagramType(symbols);
@@ -1080,17 +1080,17 @@ export function diffSymbols(
     originalSymbols: SysMLSymbol[],
     modifiedSymbols: SysMLSymbol[],
 ): { added: SysMLSymbol[]; changed: SysMLSymbol[]; removed: string[]; unchanged: SysMLSymbol[] } {
-    // Matched by elementId: stable across edits, for anonymous elements too
-    const origMap = new Map(originalSymbols.map(s => [s.elementId, s]));
-    const modMap = new Map(modifiedSymbols.map(s => [s.elementId, s]));
+    // Matched by symbol ID: stable across edits, for anonymous elements too
+    const origMap = new Map(originalSymbols.map(s => [s.symbolId, s]));
+    const modMap = new Map(modifiedSymbols.map(s => [s.symbolId, s]));
 
     const added: SysMLSymbol[] = [];
     const changed: SysMLSymbol[] = [];
     const unchanged: SysMLSymbol[] = [];
     const removed: string[] = [];
 
-    for (const [elementId, sym] of modMap) {
-        const orig = origMap.get(elementId);
+    for (const [id, sym] of modMap) {
+        const orig = origMap.get(id);
         if (!orig) {
             added.push(sym);
         } else if (
@@ -1110,8 +1110,8 @@ export function diffSymbols(
         }
     }
 
-    for (const [elementId, orig] of origMap) {
-        if (!modMap.has(elementId)) {
+    for (const [id, orig] of origMap) {
+        if (!modMap.has(id)) {
             removed.push(orig.qualifiedName ?? orig.name);
         }
     }

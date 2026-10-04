@@ -172,11 +172,11 @@ describe('MCP Server Core', () => {
     // -----------------------------------------------------------------------
 
     describe('handleGetSymbols', () => {
-        it('should refer to each owner by its elementId as parentId, never by a name', () => {
+        it('should refer to each owner by its symbol ID as parentId, never by a name', () => {
             const code = 'package Demo {\n    part a { port p; }\n    part b { port p; }\n    connect a.p to b.p { attribute flowRate; }\n}\n';
             const { symbols } = handleGetSymbols(ctx, { code, uri: 'owners.sysml' }) as { symbols: Array<Record<string, unknown>> };
-            const byElementId = new Map(symbols.map(s => [s.elementId, s]));
-            const ownerOf = (name: string) => byElementId.get(symbols.find(s => s.name === name)!.parentId);
+            const byId = new Map(symbols.map(s => [s.symbolId, s]));
+            const ownerOf = (name: string) => byId.get(symbols.find(s => s.name === name)!.parentId);
             expect(symbols.some(s => 'parent' in s)).toBe(false);
             // A client finds an owner, and its name or its absence, through parentId.
             expect(ownerOf('a')!.name).toBe('Demo');
@@ -745,8 +745,8 @@ describe('MCP Server Core', () => {
     connect a.p to b.p;
 }`;
             const result = handlePreview(ctx, { code, diagramType: 'general', uri: 'anonymous-general.sysml' });
-            // Each is its elementId, with the dashes Mermaid can't take as underscores.
-            const ids = ctx.symbolTable.getSymbolsForUri('anonymous-general.sysml').filter(s => s.kind === 'connection').map(s => s.elementId);
+            // Each is its symbol ID, with the dashes Mermaid can't take as underscores.
+            const ids = ctx.symbolTable.getSymbolsForUri('anonymous-general.sysml').filter(s => s.kind === 'connection').map(s => s.symbolId);
             const nodes = [...result.diagram.matchAll(/class ([0-9a-f]{8}_\w+)/g)].map(m => m[1]);
             expect(nodes.sort()).toEqual(ids.map(id => id.replace(/-/g, '_')).sort());
             expect(new Set(nodes).size).toBe(2);
@@ -1056,4 +1056,41 @@ requirement def Safety { stakeholder : Owner; stakeholder regulator; }`;
             expect(result.diagram).toBeDefined();
         });
     });
+});
+
+describe('MCP server process', () => {
+    it('derives IDs from the project ID in SYSML_PROJECT_ID', async () => {
+        const { build } = await import('esbuild');
+        const { mkdtemp, rm } = await import('node:fs/promises');
+        const { tmpdir } = await import('node:os');
+        const { join } = await import('node:path');
+        const { Client } = await import('@modelcontextprotocol/sdk/client/index.js');
+        const { StdioClientTransport } = await import('@modelcontextprotocol/sdk/client/stdio.js');
+        const { NAMESPACE_URL, uuidV5 } = await import('../../server/src/utils/uuid.js');
+        const directory = await mkdtemp(join(tmpdir(), 'sysml-mcp-project-id-'));
+        const projectId = '3f9c2b1e-7a4d-4e8b-9c2f-1d5e6a7b8c9d';
+        try {
+            await build({
+                entryPoints: { mcpServer: 'server/src/mcpServer.ts' },
+                bundle: true, platform: 'node', format: 'cjs', outdir: directory, logLevel: 'silent',
+            });
+            const transport = new StdioClientTransport({
+                command: process.execPath,
+                args: [join(directory, 'mcpServer.js')],
+                env: { ...process.env, SYSML_PROJECT_ID: projectId } as Record<string, string>,
+                stderr: 'ignore',
+            });
+            const client = new Client({ name: 'test', version: '1.0.0' });
+            await client.connect(transport);
+            try {
+                const result = await client.callTool({ name: 'getSymbols', arguments: { code: 'package Demo;', uri: 'demo.sysml' } });
+                const { symbols } = result.structuredContent as { symbols: Array<{ name: string; symbolId: string }> };
+                expect(symbols.find(s => s.name === 'Demo')!.symbolId).toBe(uuidV5(NAMESPACE_URL, `urn:uuid:${projectId}/Demo`));
+            } finally {
+                await client.close();
+            }
+        } finally {
+            await rm(directory, { recursive: true, force: true });
+        }
+    }, 60_000);
 });
