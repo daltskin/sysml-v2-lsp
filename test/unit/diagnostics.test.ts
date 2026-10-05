@@ -408,6 +408,36 @@ package Test {
             expect(constraintDiags.length).toBeGreaterThanOrEqual(1);
         });
 
+        it('should resolve inherited requirement subjects and their typed feature paths', async () => {
+            const text = `
+package Generic {
+    part def MainComponent {
+        attribute throughput : Real;
+    }
+
+    requirement def ThroughputRequirement {
+        subject transferringComponent : MainComponent;
+        attribute rate : Real;
+    }
+
+    requirement def specificThroughputRequirementUse :> ThroughputRequirement {
+        require constraint {
+            transferringComponent.throughput >= rate
+        }
+        require constraint {
+            transferringComponent.missing >= rate
+        }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unresolved = diags.filter(d => d.code === 'unresolved-constraint-reference');
+
+            expect(unresolved.map(d => d.message)).toEqual([
+                "Unresolved constraint reference 'transferringComponent.missing' in scope 'specificThroughputRequirementUse'",
+            ]);
+        });
+
         it('should resolve constraint references from an anonymous interface\'s own members', async () => {
             const text = `
 package Test {
