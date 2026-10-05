@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { escapeName } from '../../server/src/utils/names.js';
-import { DEFAULT_URL_PREFIX, NAMESPACE_URL, getUrlPrefix, setFolderProjectIdIds, setProjectId, uuidV5 } from '../../server/src/utils/uuid.js';
+import { DEFAULT_URL_PREFIX, NAMESPACE_URL, getUrlPrefix, setFolderProjectIds, setProjectId, uuidV5 } from '../../server/src/utils/uuid.js';
 
 const DNS_NAMESPACE = '6ba7b810-9dad-11d1-80b4-00c04fd430c8';
 const PROJECT = '3f9c2b1e-7a4d-4e8b-9c2f-1d5e6a7b8c9d';
@@ -17,7 +17,7 @@ async function symbolsOf(text: string, projectId?: string) {
 
 afterEach(() => {
     setProjectId(undefined);
-    setFolderProjectIdIds([]);
+    setFolderProjectIds([]);
 });
 
 describe('uuidV5', () => {
@@ -49,20 +49,20 @@ describe('setProjectId', () => {
     });
 });
 
-describe('setFolderProjectIdIds', () => {
+describe('setFolderProjectIds', () => {
     const OTHER = '9a1b2c3d-4e5f-4a6b-8c7d-0e1f2a3b4c5d';
     const NESTED = 'c0ffee00-1234-4abc-8def-001122334455';
 
     it("gives a document its folder's projectId prefix, else the workspace's", () => {
         setProjectId(PROJECT);
-        expect(setFolderProjectIdIds([{ folderUri: 'file:///w/b', projectId: OTHER.toUpperCase() }])).toEqual([]);
+        expect(setFolderProjectIds([{ folderUri: 'file:///w/b', projectId: OTHER.toUpperCase() }])).toEqual([]);
         expect(getUrlPrefix('file:///w/b/x.sysml')).toBe(`urn:uuid:${OTHER}/`);
         expect(getUrlPrefix('file:///w/a/x.sysml')).toBe(`urn:uuid:${PROJECT}/`);
         expect(getUrlPrefix()).toBe(`urn:uuid:${PROJECT}/`);
     });
 
     it('matches a whole folder name only, and prefers the innermost folder', () => {
-        setFolderProjectIdIds([
+        setFolderProjectIds([
             { folderUri: 'file:///w/b', projectId: OTHER },
             { folderUri: 'file:///w/b/inner/', projectId: NESTED },
         ]);
@@ -71,20 +71,20 @@ describe('setFolderProjectIdIds', () => {
     });
 
     it('matches the spellings of one Windows folder', () => {
-        setFolderProjectIdIds([{ folderUri: 'file:///C:/w', projectId: OTHER }]);
+        setFolderProjectIds([{ folderUri: 'file:///C:/w', projectId: OTHER }]);
         expect(getUrlPrefix('file:///c%3A/w/x.sysml')).toBe(`urn:uuid:${OTHER}/`);
     });
 
     it("returns, and leaves out, a folder whose projectId isn't a UUID", () => {
         const rejected = { folderUri: 'file:///w/b', projectId: 'nope' };
-        expect(setFolderProjectIdIds([rejected])).toEqual([rejected]);
+        expect(setFolderProjectIds([rejected])).toEqual([rejected]);
         expect(getUrlPrefix('file:///w/b/x.sysml')).toBe(DEFAULT_URL_PREFIX);
     });
 
     it('gives same-named top-level elements in two folders the symbol IDs of their own projects', async () => {
         const { parseDocument } = await import('../../server/src/parser/parseDocument.js');
         const { SymbolTable } = await import('../../server/src/symbols/symbolTable.js');
-        setFolderProjectIdIds([
+        setFolderProjectIds([
             { folderUri: 'file:///w/a', projectId: PROJECT },
             { folderUri: 'file:///w/b', projectId: OTHER },
         ]);

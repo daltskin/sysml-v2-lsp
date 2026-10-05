@@ -56,7 +56,7 @@ import { SemanticTokensProvider, tokenModifiers, tokenTypes } from './providers/
 import { SemanticValidator } from './providers/semanticValidator.js';
 import { DEFAULT_SKIP_DIRS, findSysMLFilesAsync, readFilesBatch } from './utils/fileDiscovery.js';
 import { isInFolder, isSameDocumentUri } from './utils/documentUri.js';
-import { DEFAULT_URL_PREFIX, type FolderProjectId, getUrlPrefix, setFolderProjectIdIds, setProjectId } from './utils/uuid.js';
+import { DEFAULT_URL_PREFIX, type FolderProjectId, getUrlPrefix, setFolderProjectIds, setProjectId } from './utils/uuid.js';
 
 /** Convert a file:// URI to a filesystem path, returning undefined for non-file URIs. */
 function toFsPath(uri: string): string | undefined {
@@ -528,7 +528,7 @@ async function pullFolderProjectIds(): Promise<void> {
 
     const uris = documentManager.getUris();
     const prefixBefore = new Map(uris.map(uri => [uri, getUrlPrefix(uri)]));
-    const rejected = setFolderProjectIdIds(projectIds);
+    const rejected = setFolderProjectIds(projectIds);
     for (const entry of rejected) {
         connection.console.warn(`projectId of ${entry.folderUri} is not a UUID: ${entry.projectId}; ignored, so its documents use the projectId of an enclosing folder, else initializationOptions.projectId, else the default prefix`);
     }

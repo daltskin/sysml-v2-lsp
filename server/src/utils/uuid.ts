@@ -18,7 +18,7 @@ export const PROJECT_ID_ENV_VAR = 'SYSML_PROJECT_ID';
 
 let urlPrefix = DEFAULT_URL_PREFIX;
 
-/** Per-folder URL prefixes (`setFolderProjectIdIds`), longest folder first so the innermost one wins. */
+/** Per-folder URL prefixes (`setFolderProjectIds`), longest folder first so the innermost one wins. */
 let folderPrefixes: { folderUri: string; prefix: string }[] = [];
 
 /** A workspace folder and its projectId. */
@@ -51,7 +51,7 @@ export function setProjectId(projectId: string | undefined): boolean {
  * before any document of those folders is indexed; replaces earlier folders. Returns the entries
  * left out because their `projectId` isn't a UUID.
  */
-export function setFolderProjectIdIds(projectIds: readonly FolderProjectId[]): FolderProjectId[] {
+export function setFolderProjectIds(projectIds: readonly FolderProjectId[]): FolderProjectId[] {
     const rejected = projectIds.filter(p => !validate(p.projectId));
     folderPrefixes = projectIds
         .filter(p => validate(p.projectId))
@@ -62,7 +62,7 @@ export function setFolderProjectIdIds(projectIds: readonly FolderProjectId[]): F
 
 /**
  * The URL prefix of top-level elements of the document `uri`: its folder's projectId
- * (`setFolderProjectIdIds`), else the one `setProjectId` sets.
+ * (`setFolderProjectIds`), else the one `setProjectId` sets.
  */
 export function getUrlPrefix(uri?: string): string {
     const match = uri === undefined ? undefined : folderPrefixes.find(f => isInFolder(uri, f.folderUri));
