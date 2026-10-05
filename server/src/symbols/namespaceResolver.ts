@@ -367,15 +367,23 @@ export class NamespaceResolver {
      * namespace.
      */
     isLocallyVisible(symbol: SysMLSymbol, name: string, indexes: SymbolIndexes): boolean {
-        return this.resolveQualifiedNameFrom(ownerKeyOf(symbol, indexes.byId), name, indexes) !== undefined;
+        return this.resolveNameFrom(symbol, name, indexes) !== undefined;
+    }
+
+    /**
+     * Resolve a (possibly qualified) name from the namespace containing
+     * `symbol`, respecting namespace membership and visibility.
+     */
+    resolveNameFrom(symbol: SysMLSymbol, name: string, indexes: SymbolIndexes): SysMLSymbol | undefined {
+        return this.resolveQualifiedNameFrom(ownerKeyOf(symbol, indexes.byId), name, indexes);
     }
 
     /**
      * Resolve a (possibly qualified) name to its symbol per §7.5.1, searching
      * outward from namespace `start` and its enclosing namespaces (its own resolved
      * members first, then its parent's, ...). Shared by `isLocallyVisible` (an
-     * ordinary reference resolving relative to its own enclosing namespace) and
-     * import-target resolution (an `import` declaration's target is itself a
+     * ordinary reference resolving relative to its own enclosing namespace),
+     * `resolveNameFrom`, and import-target resolution (an `import` declaration's target is itself a
      * qualifiedName, resolved the same relative way -- not as an absolute/global
      * name -- so a bare `import C;` inside a nested package can pick up a `C`
      * its own enclosing package already imported, per §7.5.1/§7.5.3).

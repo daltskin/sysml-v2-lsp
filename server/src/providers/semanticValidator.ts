@@ -11,6 +11,7 @@ const CONSTRAINT_KEYWORDS = new Set([
     'and', 'or', 'not', 'xor', 'implies', 'if', 'then', 'else', 'true', 'false', 'null',
     'require', 'constraint', 'subject', 'return', 'doc', 'comment', 'assert', 'assume',
 ]);
+const MAX_CONSTRAINT_INHERITANCE_NODES = 64;
 
 /**
  * Semantic validator for SysML v2 documents.
@@ -1024,7 +1025,7 @@ export class SemanticValidator {
             const parent = this.findConstraintScopeSymbol(symbolsInUri, indexes, b.startLine);
             if (!parent) continue;
 
-            const parentMembers = indexes.byParent.get(namespaceKeyOf(parent)) ?? [];
+            const parentMembers = this.getConstraintScopeMembers(parent, indexes);
             if (parentMembers.length === 0) continue;
 
             const ignoredRanges = this.getIgnoredBodyRanges(b.body);
@@ -1100,20 +1101,52 @@ export class SemanticValidator {
         if (!root) return false;
         if (path.length === 1) return true;
 
-        let typeName = root.typeNames[0] ?? root.typeName;
+        let current = root;
         for (let i = 1; i < path.length; i++) {
+            const typeName = current.typeNames[0] ?? current.typeName;
             if (!typeName) return false;
-            const typeDefs = indexes.definitionsByName.get(typeName) ?? [];
-            const typeDef = typeDefs[0];
-            if (!typeDef) return false;
+            const typeDef = this.namespaceResolver.resolveNameFrom(current, typeName, indexes);
+            if (!typeDef || !isDefinition(typeDef.kind)) return false;
 
-            const member = (indexes.byParent.get(namespaceKeyOf(typeDef)) ?? [])
+            const member = this.getConstraintScopeMembers(typeDef, indexes)
                 .find(s => s.name === path[i]);
             if (!member) return false;
-            typeName = member.typeNames[0] ?? member.typeName;
+            current = member;
         }
 
         return true;
+    }
+
+    private getConstraintScopeMembers(scope: SysMLSymbol, indexes: SymbolIndexes): SysMLSymbol[] {
+        const membersByName = new Map<string, SysMLSymbol>();
+        const addMembers = (namespace: SysMLSymbol, inherited = false) => {
+            for (const member of indexes.byParent.get(namespaceKeyOf(namespace)) ?? []) {
+                if (inherited && member.visibility === 'private') continue;
+                if (!membersByName.has(member.name)) membersByName.set(member.name, member);
+            }
+        };
+
+        addMembers(scope);
+        const visited = new Set<SysMLSymbol>([scope]);
+        let frontier = [scope];
+        while (frontier.length > 0 && visited.size < MAX_CONSTRAINT_INHERITANCE_NODES) {
+            const next: SysMLSymbol[] = [];
+            for (const current of frontier) {
+                for (const typeName of current.typeNames) {
+                    const supertype = this.namespaceResolver.resolveNameFrom(current, typeName, indexes);
+                    if (!supertype || !isDefinition(supertype.kind) || visited.has(supertype)) continue;
+
+                    visited.add(supertype);
+                    addMembers(supertype, true);
+                    next.push(supertype);
+                    if (visited.size >= MAX_CONSTRAINT_INHERITANCE_NODES) break;
+                }
+                if (visited.size >= MAX_CONSTRAINT_INHERITANCE_NODES) break;
+            }
+            frontier = next;
+        }
+
+        return [...membersByName.values()];
     }
 
     private findContainingSymbolByLine(symbols: SysMLSymbol[], line: number): SysMLSymbol | undefined {
@@ -1133,7 +1166,7 @@ export class SemanticValidator {
     ): SysMLSymbol | undefined {
         let scope = this.findContainingSymbolByLine(symbolsInUri, line);
         while (scope) {
-            const members = indexes.byParent.get(namespaceKeyOf(scope)) ?? [];
+            const members = this.getConstraintScopeMembers(scope, indexes);
             if (members.length > 0) return scope;
             if (!scope.parentId) return scope;
             scope = ownerOf(scope, indexes);
