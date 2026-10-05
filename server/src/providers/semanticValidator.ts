@@ -11,7 +11,6 @@ const CONSTRAINT_KEYWORDS = new Set([
     'and', 'or', 'not', 'xor', 'implies', 'if', 'then', 'else', 'true', 'false', 'null',
     'require', 'constraint', 'subject', 'return', 'doc', 'comment', 'assert', 'assume',
 ]);
-const MAX_CONSTRAINT_INHERITANCE_NODES = 64;
 
 /**
  * Semantic validator for SysML v2 documents.
@@ -1108,7 +1107,9 @@ export class SemanticValidator {
             const typeDef = this.namespaceResolver.resolveNameFrom(current, typeName, indexes);
             if (!typeDef || !isDefinition(typeDef.kind)) return false;
 
-            const member = this.getConstraintScopeMembers(typeDef, indexes)
+            // SysML v2.0 §7.6.6 feature-chain segments after the root must resolve
+            // as public members of the preceding feature's type.
+            const member = this.getConstraintScopeMembers(typeDef, indexes, true)
                 .find(s => s.name === path[i]);
             if (!member) return false;
             current = member;
@@ -1117,19 +1118,15 @@ export class SemanticValidator {
         return true;
     }
 
-    private getConstraintScopeMembers(scope: SysMLSymbol, indexes: SymbolIndexes): SysMLSymbol[] {
-        const membersByName = new Map<string, SysMLSymbol>();
-        const addMembers = (namespace: SysMLSymbol, inherited = false) => {
-            for (const member of indexes.byParent.get(namespaceKeyOf(namespace)) ?? []) {
-                if (inherited && member.visibility === 'private') continue;
-                if (!membersByName.has(member.name)) membersByName.set(member.name, member);
-            }
-        };
-
-        addMembers(scope);
+    private getConstraintScopeMembers(
+        scope: SysMLSymbol,
+        indexes: SymbolIndexes,
+        publicOnly = false,
+    ): SysMLSymbol[] {
+        const hierarchy = [[scope]];
         const visited = new Set<SysMLSymbol>([scope]);
         let frontier = [scope];
-        while (frontier.length > 0 && visited.size < MAX_CONSTRAINT_INHERITANCE_NODES) {
+        while (frontier.length > 0) {
             const next: SysMLSymbol[] = [];
             for (const current of frontier) {
                 for (const typeName of current.typeNames) {
@@ -1137,13 +1134,61 @@ export class SemanticValidator {
                     if (!supertype || !isDefinition(supertype.kind) || visited.has(supertype)) continue;
 
                     visited.add(supertype);
-                    addMembers(supertype, true);
                     next.push(supertype);
-                    if (visited.size >= MAX_CONSTRAINT_INHERITANCE_NODES) break;
                 }
-                if (visited.size >= MAX_CONSTRAINT_INHERITANCE_NODES) break;
             }
+            if (next.length > 0) hierarchy.push(next);
             frontier = next;
+        }
+
+        const membersByLevel = hierarchy.map(level =>
+            level.flatMap(namespace => indexes.byParent.get(namespaceKeyOf(namespace)) ?? []));
+        const hiddenMembers = new Set<string>();
+
+        // KerML v1.0 §7.3.4.5 removes redefined inherited features from the
+        // effective feature set. SysML v2.0 §7.21.2 applies this to requirement
+        // subjects even when the derived requirement gives its subject a new name.
+        for (let level = 0; level < membersByLevel.length; level++) {
+            for (const redefining of membersByLevel[level]) {
+                for (const target of redefining.redefinedFeatureTargets ?? []) {
+                    if (target.includes('.')) continue;
+                    const targetName = target.split('::').pop()?.replace(/^'|'$/g, '');
+                    if (!targetName) continue;
+                    const resolvedTarget = target.includes('::')
+                        ? this.namespaceResolver.resolveNameFrom(redefining, target, indexes)
+                        : undefined;
+                    let matchingTargets: SysMLSymbol[] = [];
+                    if (resolvedTarget) {
+                        const exactTarget = membersByLevel
+                            .slice(level + 1)
+                            .flat()
+                            .find(candidate => candidate.symbolId === resolvedTarget.symbolId);
+                        if (exactTarget) matchingTargets = [exactTarget];
+                    }
+                    if (matchingTargets.length === 0) {
+                        for (const candidatesAtLevel of membersByLevel.slice(level + 1)) {
+                            matchingTargets = candidatesAtLevel.filter(candidate => candidate.name === targetName);
+                            if (matchingTargets.length > 0) break;
+                        }
+                    }
+                    for (const candidate of matchingTargets) hiddenMembers.add(candidate.symbolId);
+                }
+                if (redefining.kind === SysMLElementKind.SubjectUsage) {
+                    for (const candidate of membersByLevel.slice(level + 1).flat()) {
+                        if (candidate.kind === SysMLElementKind.SubjectUsage) hiddenMembers.add(candidate.symbolId);
+                    }
+                }
+            }
+        }
+
+        const membersByName = new Map<string, SysMLSymbol>();
+        for (let level = 0; level < membersByLevel.length; level++) {
+            for (const member of membersByLevel[level]) {
+                if (level > 0 && member.visibility === 'private') continue;
+                if (publicOnly && member.visibility !== undefined && member.visibility !== 'public') continue;
+                if (hiddenMembers.has(member.symbolId) || membersByName.has(member.name)) continue;
+                membersByName.set(member.name, member);
+            }
         }
 
         return [...membersByName.values()];
