@@ -16,6 +16,12 @@ export function canonicalUri(uri: string): string {
     return uri.replace(/^file:\/\/\/([A-Za-z])(?::|%3[Aa])(?=\/|$)/, (_m, drive: string) => `file:///${drive.toLowerCase()}:`);
 }
 
+/** Whether the document `uri` is inside the folder `folderUri` (see `canonicalUri`). */
+export function isInFolder(uri: string, folderUri: string): boolean {
+    const folder = canonicalUri(folderUri);
+    return canonicalUri(uri).startsWith(folder.endsWith('/') ? folder : `${folder}/`);
+}
+
 /** Whether two URIs name the same document (see `canonicalUri`). */
 export function isSameDocumentUri(a: string, b: string): boolean {
     return a === b || canonicalUri(a) === canonicalUri(b);

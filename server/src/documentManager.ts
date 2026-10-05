@@ -210,6 +210,18 @@ export class DocumentManager {
     }
 
     /**
+     * Rebuild the symbol tables of `uris` on next use, e.g. after their projectId
+     * changed, which changes their symbol IDs (see `setFolderProjectIds`).
+     */
+    invalidateSymbols(uris: readonly string[]): void {
+        for (const uri of uris) {
+            const cached = this.cache.get(uri);
+            if (cached) cached.symbolTable = undefined;
+            this.wsBuiltVersions.delete(uri);
+        }
+    }
+
+    /**
      * Cache semantic diagnostics for the current document version.
      */
     setSemanticDiagnostics(uri: string, diagnostics: Diagnostic[]): void {
