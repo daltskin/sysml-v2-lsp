@@ -131,6 +131,15 @@ let skipDirs: ReadonlySet<string> = new Set(DEFAULT_SKIP_DIRS);
 
 /** Set to true after onInitialized completes (DFA loaded, library indexed). */
 let serverReady = false;
+
+let resolveInitialization!: () => void;
+/**
+ * Resolves when the `initialized` phase is done: settings and each folder's
+ * projectId pulled from the client, library indexed, DFA loaded. A request
+ * whose answer depends on it, such as one reporting symbol IDs, waits for it
+ * rather than answer with symbol IDs that change once the projectIds arrive.
+ */
+const initialization = new Promise<void>(resolve => { resolveInitialization = resolve; });
 /** URIs of documents opened before the server was ready. */
 const earlyOpenUris = new Set<string>();
 
@@ -441,6 +450,7 @@ connection.onInitialized(async () => {
     // cross-file type references resolve even before files are opened.
     // Server is marked ready immediately; scan runs asynchronously.
     serverReady = true;
+    resolveInitialization();
     spawnParseWorker();
 
     if (workspaceRoots.length > 0
@@ -1019,7 +1029,8 @@ connection.onDocumentRangeFormatting(
  * `sysml/model` — returns the parsed semantic model for a document.
  * Drives the Model Explorer, Dashboard, Feature Inspector, and status bar metrics.
  */
-connection.onRequest('sysml/model', (params: SysMLModelParams) => {
+connection.onRequest('sysml/model', async (params: SysMLModelParams) => {
+    await initialization;
     return modelProvider.getModel(
         params.textDocument.uri,
         documentManager.getVersion(params.textDocument.uri),
@@ -1032,7 +1043,8 @@ connection.onRequest('sysml/model', (params: SysMLModelParams) => {
  * across the whole workspace. Unscoped: no import/namespace-aware
  * resolution, no fuzzy/substring matching -- see `elementLookupTypes.ts`.
  */
-connection.onRequest('sysml/elementLookup', (params: SysMLElementLookupParams) => {
+connection.onRequest('sysml/elementLookup', async (params: SysMLElementLookupParams) => {
+    await initialization;
     return elementLookupProvider.elementLookup(params);
 });
 

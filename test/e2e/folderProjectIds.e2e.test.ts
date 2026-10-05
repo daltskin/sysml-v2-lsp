@@ -24,13 +24,21 @@ const topLevelId = (name: string, projectId?: string) =>
     uuidV5(NAMESPACE_URL, `${projectId ? `urn:uuid:${projectId}/` : DEFAULT_URL_PREFIX}${name}`);
 
 /** Starts the real server on the workspace folders `folders`, answering `sysml.project` from `projectOf`. */
-async function startServer(folders: string[], projectOf: (folderUri: string) => string | undefined, initializationOptions: object = {}) {
+async function startServer(
+    folders: string[],
+    projectOf: (folderUri: string) => string | undefined,
+    initializationOptions: object = {},
+    answerDelayMs = 0,
+    beforeScan?: (connection: import('vscode-jsonrpc').MessageConnection) => Promise<void>,
+) {
     const rpc = await import('../../server/node_modules/vscode-jsonrpc/lib/node/main.js');
     const child = fork(serverPath, ['--node-ipc'], { silent: true });
     const connection = rpc.createMessageConnection(new rpc.IPCMessageReader(child), new rpc.IPCMessageWriter(child));
     connection.onRequest('client/registerCapability', () => null);
-    connection.onRequest('workspace/configuration', (params: { items: { scopeUri?: string; section?: string }[] }) =>
-        params.items.map(item => (item.section === 'sysml.project' && item.scopeUri ? { projectId: projectOf(item.scopeUri) } : {})));
+    connection.onRequest('workspace/configuration', async (params: { items: { scopeUri?: string; section?: string }[] }) => {
+        await new Promise(resolve => setTimeout(resolve, answerDelayMs));
+        return params.items.map(item => (item.section === 'sysml.project' && item.scopeUri ? { projectId: projectOf(item.scopeUri) } : {}));
+    });
     const logs: string[] = [];
     connection.onNotification('window/logMessage', (params: { message: string }) => { logs.push(params.message); });
 
@@ -52,6 +60,7 @@ async function startServer(folders: string[], projectOf: (folderUri: string) => 
         initializationOptions: { isWorkspaceFile: true, ...initializationOptions },
     });
     await connection.sendNotification('initialized', {});
+    await beforeScan?.(connection);
     await logged('Workspace scan:');
 
     /** The symbol ID of the first top-level element `sysml/model` reports for the file `path`. */
@@ -224,4 +233,23 @@ describe('a projectId per workspace folder (sysml.project)', () => {
 
         expect(await server.firstSymbolId(join(folderB, 'y.sysml'))).toBe(topLevelId('Shared', PROJECT_B));
     }, 30_000);
+
+    it("answers sysml/model asked during initialization, before the projectIds arrive, with the projectId's symbol IDs", async () => {
+        const { folderA, projectOf } = await workspace();
+        const uri = pathToFileURL(join(folderA, 'x.sysml')).toString();
+        let early: string | undefined;
+
+        // Every workspace/configuration answer is slow, so the request arrives while the server
+        // is still in its `initialized` phase, before it knows the folder's projectId.
+        server = await startServer([folderA], projectOf, {}, 500, async connection => {
+            await connection.sendNotification('textDocument/didOpen', {
+                textDocument: { uri, languageId: 'sysml', version: 1, text: 'package Shared;\n' },
+            });
+            const model = await connection.sendRequest<{ elements?: { symbolId: string }[] }>('sysml/model', { textDocument: { uri }, scope: ['elements'] });
+            early = model.elements?.[0]?.symbolId;
+        });
+
+        expect(early).toBe(topLevelId('Shared', PROJECT_A));
+    }, 30_000);
 });
+
