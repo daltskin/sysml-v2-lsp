@@ -551,6 +551,28 @@ package Generic {
             expect(unresolved).toEqual([]);
         });
 
+        it('should terminate inherited feature lookup safely through specialization cycles', async () => {
+            const text = `
+package Generic {
+    part def LevelA :> LevelB;
+    part def LevelB :> LevelA {
+        attribute metric : Real;
+    }
+
+    requirement def CyclicRequirement {
+        subject component : LevelA;
+        require constraint {
+            component.metric >= 0
+        }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unresolved = diags.filter(d => d.code === 'unresolved-constraint-reference');
+
+            expect(unresolved).toEqual([]);
+        });
+
         it('should resolve constraint references from an anonymous interface\'s own members', async () => {
             const text = `
 package Test {
