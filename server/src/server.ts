@@ -414,15 +414,18 @@ connection.onInitialized(async () => {
             DidChangeConfigurationNotification.type,
             undefined
         );
-        // Pull initial settings from the client
-        await pullSettings().catch(() => { /* best effort */ });
-        // Each folder's projectId, before any of its documents is scanned
-        await pullFolderProjectIds().catch(() => { /* best effort */ });
     }
+    // Before awaiting the client, so a folder change made meanwhile isn't missed
     if (hasWorkspaceFolderCapability) {
         connection.workspace.onDidChangeWorkspaceFolders(event => {
             onWorkspaceFoldersChanged(event).catch(e => connection.console.error(`Workspace folder change failed: ${e}`));
         });
+    }
+    if (hasConfigurationCapability) {
+        // Pull initial settings from the client
+        await pullSettings().catch(() => { /* best effort */ });
+        // Each folder's projectId, before any of its documents is scanned
+        await pullFolderProjectIds().catch(() => { /* best effort */ });
     }
 
     // Bootstrap the standard library index for Go-to-Definition on
@@ -456,12 +459,10 @@ connection.onInitialized(async () => {
     if (workspaceRoots.length > 0
         && (preloadOnOpen === 'always'
             || (preloadOnOpen === 'workspaceOnly' && isWorkspaceFile))) {
-        documentManager.setWorkspaceScanComplete(false);
-        scanWorkspaceFoldersAsync(workspaceRoots).then(({ fileCount, scanMs }) => {
+        scanWorkspaceFolders(workspaceRoots).then(({ fileCount, scanMs }) => {
             connection.console.log(
                 `Workspace scan: pre-parsed ${fileCount} .sysml files in ${scanMs} ms`
             );
-            documentManager.setWorkspaceScanComplete(true);
             // Re-validate open documents now that cross-file symbols are available
             revalidateOpenDocuments();
         });
@@ -521,17 +522,38 @@ connection.onDidChangeConfiguration((_change) => {
 });
 
 /**
+ * Wrap `task` so that the latest call wins: a call that a later one superseded
+ * resolves with that later call instead of its own result. `task` is given
+ * `isSuperseded`, to check after each await and drop work that would apply an
+ * outdated answer.
+ */
+function latestWins(task: (isSuperseded: () => boolean) => Promise<void>): () => Promise<void> {
+    let calls = 0;
+    let latest: Promise<void> = Promise.resolve();
+    return () => {
+        const call = ++calls;
+        const isSuperseded = () => call !== calls;
+        const run = task(isSuperseded).then(() => (isSuperseded() ? latest : undefined));
+        latest = run;
+        return run;
+    };
+}
+
+/**
  * Ask the client for each workspace folder's projectId (`sysml.project`,
  * scoped to the folder: `{ projectId }`), so a document in a folder gets symbol
  * IDs unique to that folder's projectId (KerML 9.1). A folder without an answer
  * uses `initializationOptions.projectId`. Documents whose projectId changed get their
- * symbol tables rebuilt.
+ * symbol tables rebuilt. The latest call wins: an answer that arrives after a later
+ * call started is dropped, since the folders or settings may have changed meanwhile.
  */
-async function pullFolderProjectIds(): Promise<void> {
+const pullFolderProjectIds = latestWins(async isSuperseded => {
     if (!hasConfigurationCapability) return;
-    const answers: unknown[] = workspaceFolderUris.length === 0 ? []
-        : await connection.workspace.getConfiguration(workspaceFolderUris.map(scopeUri => ({ scopeUri, section: 'sysml.project' })));
-    const projectIds = workspaceFolderUris.flatMap((folderUri, i): FolderProjectId[] => {
+    const folderUris = [...workspaceFolderUris];
+    const answers: unknown[] = folderUris.length === 0 ? []
+        : await connection.workspace.getConfiguration(folderUris.map(scopeUri => ({ scopeUri, section: 'sysml.project' })));
+    if (isSuperseded()) return;
+    const projectIds = folderUris.flatMap((folderUri, i): FolderProjectId[] => {
         const projectId = (answers[i] as { projectId?: unknown } | null | undefined)?.projectId;
         return typeof projectId === 'string' ? [{ folderUri, projectId }] : [];
     });
@@ -544,7 +566,7 @@ async function pullFolderProjectIds(): Promise<void> {
     }
     documentManager.invalidateSymbols(uris.filter(uri => getUrlPrefix(uri) !== prefixBefore.get(uri)));
     logFolderPrefixes(new Set(projectIds.filter(p => !rejected.includes(p)).map(p => p.folderUri)));
-}
+});
 
 /** The URL prefix each folder's documents were last logged with (`logFolderPrefixes`). */
 const loggedFolderPrefixes = new Map<string, string>();
@@ -575,27 +597,42 @@ function logFolderPrefixes(ownProjectIds: ReadonlySet<string>): void {
  * removed folder, ask for the projectIds, and scan the added folders.
  */
 async function onWorkspaceFoldersChanged(event: WorkspaceFoldersChangeEvent): Promise<void> {
+    // Before the initial scan, which then scans the folders as changed here
+    const initialScanPending = !serverReady;
     const removed = new Set(event.removed.map(f => f.uri));
     workspaceFolderUris = [...workspaceFolderUris.filter(uri => !removed.has(uri)), ...event.added.map(f => f.uri)];
     workspaceRoots = rootsOf(workspaceFolderUris);
-
-    for (const uri of documentManager.getUris()) {
-        if (openDocumentFor(uri)) continue;
-        if (event.removed.some(f => isInFolder(uri, f.uri)) && !workspaceFolderUris.some(f => isInFolder(uri, f))) {
-            documentManager.remove(uri);
-        }
-    }
+    dropDocumentsOutsideWorkspace(event.removed.map(f => f.uri));
 
     await pullFolderProjectIds().catch(() => { /* best effort */ });
+    if (initialScanPending) return;
 
-    const addedRoots = rootsOf(event.added.map(f => f.uri));
+    // A folder removed while its projectId was asked for isn't scanned
+    const addedRoots = rootsOf(event.added.map(f => f.uri).filter(uri => workspaceFolderUris.includes(uri)));
     if (addedRoots.length > 0 && (preloadOnOpen === 'always' || (preloadOnOpen === 'workspaceOnly' && isWorkspaceFile))) {
-        documentManager.setWorkspaceScanComplete(false);
-        const { fileCount, scanMs } = await scanWorkspaceFoldersAsync(addedRoots);
+        const { fileCount, scanMs } = await scanWorkspaceFolders(addedRoots);
         connection.console.log(`Workspace scan: pre-parsed ${fileCount} .sysml files of ${addedRoots.length} added folder(s) in ${scanMs} ms`);
-        documentManager.setWorkspaceScanComplete(true);
     }
     revalidateOpenDocuments();
+}
+
+/**
+ * Forget the documents scanned from the folders `folderUris` that no current
+ * workspace folder contains; open documents stay.
+ */
+function dropDocumentsOutsideWorkspace(folderUris: readonly string[]): void {
+    for (const uri of documentManager.getUris()) {
+        if (openDocumentFor(uri)) continue;
+        if (folderUris.some(f => isInFolder(uri, f)) && !isInWorkspace(uri)) {
+            documentManager.remove(uri);
+            modelProvider.removeUri(uri);
+        }
+    }
+}
+
+/** Whether the document `uri` is inside a current workspace root. */
+function isInWorkspace(uri: string): boolean {
+    return workspaceRoots.some(root => isInFolder(uri, pathToFileURL(root).toString()));
 }
 
 // --------------------------------------------------------------------------
@@ -648,6 +685,24 @@ function parseWorkspaceFile(filePath: string, uri: string = pathToFileURL(filePa
     return true;
 }
 
+/** Number of workspace scans running; the workspace is fully indexed only when none is. */
+let runningScans = 0;
+
+/**
+ * Scan the folders `roots` (`scanWorkspaceFoldersAsync`). The workspace scan is
+ * reported complete only once every running scan is done, e.g. when a folder is
+ * added while the initial scan still runs.
+ */
+async function scanWorkspaceFolders(roots: string[]): Promise<{ fileCount: number; scanMs: number }> {
+    runningScans++;
+    documentManager.setWorkspaceScanComplete(false);
+    try {
+        return await scanWorkspaceFoldersAsync(roots);
+    } finally {
+        if (--runningScans === 0) documentManager.setWorkspaceScanComplete(true);
+    }
+}
+
 /**
  * Asynchronously scan workspace folders with concurrent file discovery
  * and reading, then parse sequentially using the batch parser.
@@ -675,6 +730,8 @@ async function scanWorkspaceFoldersAsync(
         const uri = pathToFileURL(filePath).toString();
         // Don't overwrite documents the editor has open
         if (openDocumentFor(uri)) continue;
+        // Nor bring back a document of a folder removed during the scan
+        if (!isInWorkspace(uri)) continue;
         const content = fileContents.get(filePath);
         if (content === undefined) continue;
 
