@@ -2787,6 +2787,21 @@ package Hazards {
             expect(diags.filter(d => d.code === 'ambiguous-namespace-name')).toEqual([]);
         });
 
+        it('does not flag same-named features declared in the bodies of two framed concerns', async () => {
+            const text = `
+package Hazards {
+    private import ScalarValues::*;
+    concern def Hazard;
+    requirement def Safety {
+        frame concern thermal : Hazard { attribute limit : Natural; }
+        frame concern voltage : Hazard { attribute limit : Natural; }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            expect(diags.filter(d => d.code === 'ambiguous-namespace-name')).toEqual([]);
+        });
+
         it('does not flag a legitimate package reopened across files as a conflict', async () => {
             const pkgFile1 = `
 package Shared {
