@@ -1,4 +1,4 @@
-import { Diagnostic, DiagnosticSeverity } from 'vscode-languageserver/node';
+import { Diagnostic, DiagnosticSeverity, Position, Range } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
 import { getLibraryPackageNames, resolveLibraryType } from '../library/libraryIndex.js';
 import { SysMLModelProvider } from '../model/sysmlModelProvider.js';
@@ -10,6 +10,15 @@ import { stripComments } from '../utils/identUtils.js';
 const CONSTRAINT_KEYWORDS = new Set([
     'and', 'or', 'not', 'xor', 'implies', 'if', 'then', 'else', 'true', 'false', 'null',
     'require', 'constraint', 'subject', 'return', 'doc', 'comment', 'assert', 'assume',
+]);
+
+/** Usages that connect features: never the namespace their ends are resolved in. */
+const CONNECTOR_KINDS: ReadonlySet<SysMLElementKind> = new Set([
+    SysMLElementKind.ConnectionUsage,
+    SysMLElementKind.InterfaceUsage,
+    SysMLElementKind.AllocationUsage,
+    SysMLElementKind.FlowUsage,
+    SysMLElementKind.SuccessionFlowUsage,
 ]);
 
 /**
@@ -128,7 +137,7 @@ export class SemanticValidator {
         diagnostics.push(...this.checkAmbiguousNamespaceName(symbols, allSymbols));
         diagnostics.push(...this.checkUnusedDefinitions(allSymbols, uri));
         diagnostics.push(...this.checkRedefinitionMultiplicity(symbols, indexes, text));
-        diagnostics.push(...this.checkPortCompatibility(text, uri, indexes));
+        diagnostics.push(...this.checkPortCompatibility(text, uri, symbols, indexes));
         diagnostics.push(...this.checkConstraintBodyReferences(text, uri, symbols, indexes));
         diagnostics.push(...this.checkCircularSpecialization(symbols, indexes));
         diagnostics.push(...this.checkUnsatisfiedRequirements(symbols, indexes));
@@ -407,7 +416,7 @@ export class SemanticValidator {
         ));
 
         if (opts?.text && opts.uri) {
-            diagnostics.push(...instance.checkPortCompatibility(opts.text, opts.uri, indexes));
+            diagnostics.push(...instance.checkPortCompatibility(opts.text, opts.uri, symbolsInUri, indexes));
             diagnostics.push(...instance.checkConstraintBodyReferences(opts.text, opts.uri, symbolsInUri, indexes));
         }
 
@@ -884,7 +893,7 @@ export class SemanticValidator {
      * - The connection is within an interface usage
      * - Both ports are untyped (empty port defs with no features)
      */
-    private checkPortCompatibility(text: string, uri: string, indexes: SymbolIndexes): Diagnostic[] {
+    private checkPortCompatibility(text: string, uri: string, symbolsInUri: SysMLSymbol[], indexes: SymbolIndexes): Diagnostic[] {
         if (!text) return [];
         const diagnostics: Diagnostic[] = [];
         const lines = text.split('\n');
@@ -892,11 +901,14 @@ export class SemanticValidator {
         const re = /\bconnect\s+([A-Za-z_][\w.]*)\s+to\s+([A-Za-z_][\w.]*)/g;
         let m: RegExpExecArray | null;
         while ((m = re.exec(text)) !== null) {
-            const left = m[1].split('.').pop()!;
-            const right = m[2].split('.').pop()!;
+            const leftPath = m[1].split('.');
+            const rightPath = m[2].split('.');
+            const left = leftPath[leftPath.length - 1];
+            const right = rightPath[rightPath.length - 1];
 
-            const lSym = (indexes.portsByName.get(left) ?? [])[0];
-            const rSym = (indexes.portsByName.get(right) ?? [])[0];
+            const scope = this.connectorScope(symbolsInUri, this.indexToRange(text, m.index, 0).start, indexes);
+            const lSym = this.resolveConnectorEnd(leftPath, scope, indexes);
+            const rSym = this.resolveConnectorEnd(rightPath, scope, indexes);
             if (!lSym || !rSym) continue;
 
             const lType = lSym.typeNames[0] ?? lSym.typeName;
@@ -964,6 +976,58 @@ export class SemanticValidator {
         }
 
         return diagnostics;
+    }
+
+    /**
+     * The innermost element around `position` that owns a connector declared
+     * there: the connector's own symbol, when it has one, is skipped.
+     */
+    private connectorScope(symbols: SysMLSymbol[], position: Position, indexes: SymbolIndexes): SysMLSymbol | undefined {
+        const before = (a: Position, b: Position) => a.line < b.line || (a.line === b.line && a.character <= b.character);
+        const size = (r: Range) => (r.end.line - r.start.line) * 1_000_000 + (r.end.character - r.start.character);
+        let scope: SysMLSymbol | undefined;
+        for (const s of symbols) {
+            if (!before(s.range.start, position) || !before(position, s.range.end)) continue;
+            if (!scope || size(s.range) < size(scope.range)) scope = s;
+        }
+        while (scope && CONNECTOR_KINDS.has(scope.kind)) scope = ownerOf(scope, indexes);
+        return scope;
+    }
+
+    /**
+     * The port that a connector end (`a.p`, `a.p.q`) names, resolved from
+     * `scope` outward: its first segment is a feature of `scope` or of one of
+     * its owners, each next one a feature of the one before. Two parts can each
+     * have a port of the same name, so an end is never matched by its last
+     * segment alone, except when the path does not resolve and the workspace
+     * has only one port of that name.
+     */
+    private resolveConnectorEnd(path: string[], scope: SysMLSymbol | undefined, indexes: SymbolIndexes): SysMLSymbol | undefined {
+        let feature: SysMLSymbol | undefined;
+        for (let namespace = scope; namespace && !feature; namespace = ownerOf(namespace, indexes)) {
+            feature = this.findFeature(namespace, path[0], indexes);
+        }
+        for (const name of path.slice(1)) {
+            feature = feature && this.findFeature(feature, name, indexes);
+        }
+        if (feature) return feature.kind === SysMLElementKind.PortUsage ? feature : undefined;
+        const sameName = indexes.portsByName.get(path[path.length - 1]) ?? [];
+        return sameName.length === 1 ? sameName[0] : undefined;
+    }
+
+    /** The feature `name` of `owner`: its own member, else a member of one of its types or their supertypes. */
+    private findFeature(owner: SysMLSymbol, name: string, indexes: SymbolIndexes): SysMLSymbol | undefined {
+        const own = (indexes.byParent.get(namespaceKeyOf(owner)) ?? []).find(s => s.name === name);
+        if (own) return own;
+        for (const typeName of owner.typeNames) {
+            for (const type of this.resolveTypeHierarchy(typeName, indexes)) {
+                for (const def of indexes.definitionsByName.get(type.split('::').pop()!) ?? []) {
+                    const member = (indexes.byParent.get(namespaceKeyOf(def)) ?? []).find(s => s.name === name);
+                    if (member) return member;
+                }
+            }
+        }
+        return undefined;
     }
 
     /**
