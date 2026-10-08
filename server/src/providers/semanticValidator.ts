@@ -1148,30 +1148,14 @@ export class SemanticValidator {
         // KerML v1.0 §7.3.4.5 removes redefined inherited features from the
         // effective feature set. SysML v2.0 §7.21.2 applies this to requirement
         // subjects even when the derived requirement gives its subject a new name.
-        for (let level = 0; level < membersByLevel.length; level++) {
+        for (let level = membersByLevel.length - 1; level >= 0; level--) {
             for (const redefining of membersByLevel[level]) {
                 for (const target of redefining.redefinedFeatureTargets ?? []) {
-                    if (target.includes('.')) continue;
-                    const targetName = target.split('::').pop()?.replace(/^'|'$/g, '');
-                    if (!targetName) continue;
-                    const resolvedTarget = target.includes('::')
-                        ? this.namespaceResolver.resolveNameFrom(redefining, target, indexes)
-                        : undefined;
-                    let matchingTargets: SysMLSymbol[] = [];
-                    if (resolvedTarget) {
-                        const exactTarget = membersByLevel
-                            .slice(level + 1)
-                            .flat()
-                            .find(candidate => candidate.symbolId === resolvedTarget.symbolId);
-                        if (exactTarget) matchingTargets = [exactTarget];
+                    const owner = ownerOf(redefining, indexes);
+                    if (!owner) continue;
+                    for (const candidate of this.resolveInheritedRedefinitionTarget(owner, target, hiddenMembers, indexes)) {
+                        hiddenMembers.add(candidate.symbolId);
                     }
-                    if (matchingTargets.length === 0) {
-                        for (const candidatesAtLevel of membersByLevel.slice(level + 1)) {
-                            matchingTargets = candidatesAtLevel.filter(candidate => candidate.name === targetName);
-                            if (matchingTargets.length > 0) break;
-                        }
-                    }
-                    for (const candidate of matchingTargets) hiddenMembers.add(candidate.symbolId);
                 }
                 if (redefining.kind === SysMLElementKind.SubjectUsage) {
                     for (const candidate of membersByLevel.slice(level + 1).flat()) {
@@ -1192,6 +1176,90 @@ export class SemanticValidator {
         }
 
         return [...membersByName.values()];
+    }
+
+    private resolveInheritedRedefinitionTarget(
+        owner: SysMLSymbol,
+        target: string,
+        alreadyRedefined: ReadonlySet<string>,
+        indexes: SymbolIndexes,
+    ): SysMLSymbol[] {
+        if (target.includes('.')) return [];
+        const segments = target.split('::');
+        const targetName = segments.pop()?.replace(/^'|'$/g, '');
+        if (!targetName) return [];
+        const qualifier = segments.join('::').replace(/^'|'$/g, '');
+        const matches = new Map<string, SysMLSymbol>();
+
+        // KerML v1.0 §7.3.4.5 resolves an owned redefinition target from the
+        // redefining type's direct supertypes, not from its local namespace.
+        for (const supertype of this.resolveDirectSupertypes(owner, indexes)) {
+            const branch = this.getSpecializationHierarchy(supertype, indexes);
+            const anchors = qualifier
+                ? branch.flat().filter(type => this.matchesSpecializationQualifier(type, qualifier))
+                : [supertype];
+            for (const anchor of anchors) {
+                let frontier = [anchor];
+                const visited = new Set<SysMLSymbol>(frontier);
+                const candidates: SysMLSymbol[] = [];
+                while (frontier.length > 0 && candidates.length === 0) {
+                    for (const type of frontier) {
+                        for (const member of indexes.byParent.get(namespaceKeyOf(type)) ?? []) {
+                            if (member.name === targetName && member.visibility !== 'private'
+                                && !alreadyRedefined.has(member.symbolId)) {
+                                candidates.push(member);
+                            }
+                        }
+                    }
+                    if (candidates.length > 0) break;
+
+                    const next = new Map<string, SysMLSymbol>();
+                    for (const type of frontier) {
+                        for (const parent of this.resolveDirectSupertypes(type, indexes)) {
+                            if (visited.has(parent)) continue;
+                            visited.add(parent);
+                            next.set(parent.symbolId, parent);
+                        }
+                    }
+                    frontier = [...next.values()];
+                }
+
+                for (const candidate of candidates) matches.set(candidate.symbolId, candidate);
+            }
+        }
+
+        // An unqualified target shared by unrelated inheritance branches is
+        // ambiguous here; do not guess and suppress an arbitrary same-named feature.
+        return matches.size === 1 ? [...matches.values()] : [];
+    }
+
+    private resolveDirectSupertypes(scope: SysMLSymbol, indexes: SymbolIndexes): SysMLSymbol[] {
+        const supertypes = new Map<string, SysMLSymbol>();
+        for (const typeName of scope.typeNames) {
+            const supertype = this.namespaceResolver.resolveNameFrom(scope, typeName, indexes);
+            if (supertype && isDefinition(supertype.kind)) supertypes.set(supertype.symbolId, supertype);
+        }
+        return [...supertypes.values()];
+    }
+
+    private getSpecializationHierarchy(scope: SysMLSymbol, indexes: SymbolIndexes): SysMLSymbol[][] {
+        const levels = [[scope]];
+        const visited = new Set<SysMLSymbol>([scope]);
+        let frontier = [scope];
+        while (frontier.length > 0) {
+            const next = frontier.flatMap(type => this.resolveDirectSupertypes(type, indexes))
+                .filter(type => !visited.has(type));
+            for (const type of next) visited.add(type);
+            if (next.length > 0) levels.push(next);
+            frontier = next;
+        }
+        return levels;
+    }
+
+    private matchesSpecializationQualifier(type: SysMLSymbol, qualifier: string): boolean {
+        return type.name === qualifier
+            || type.qualifiedName === qualifier
+            || type.qualifiedName?.endsWith(`::${qualifier}`) === true;
     }
 
     private findContainingSymbolByLine(symbols: SysMLSymbol[], line: number): SysMLSymbol | undefined {
