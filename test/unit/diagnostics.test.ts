@@ -324,6 +324,48 @@ package Test {
             const torqueDiag = unresolvedDiags.find(d => d.message.includes("'Torque'"));
             expect(torqueDiag).toBeUndefined();
         });
+
+        it('should resolve the payload type of a transition trigger followed by a guard', async () => {
+            const text = `
+package Test {
+    private import ScalarValues::*;
+    item def Command {
+        attribute code : Natural;
+    }
+    state def Controller {
+        entry; then idle;
+        state idle;
+        state busy;
+        transition go
+            first idle
+            accept cmd : Command
+            if cmd.code == 0
+            then busy;
+        transition
+            first busy
+            accept cmd : Command
+            then idle;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            expect(diags.filter(d => d.code === 'unresolved-type')).toEqual([]);
+        });
+
+        it('should still flag an undefined payload type of a transition trigger', async () => {
+            const text = `
+package Test {
+    state def Controller {
+        state idle;
+        state busy;
+        transition go first idle accept cmd : Missing then busy;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const messages = diags.filter(d => d.code === 'unresolved-type').map(d => d.message);
+            expect(messages).toEqual(["Type 'Missing' is not defined in the current document or standard library"]);
+        });
     });
 
     describe('invalid multiplicity bounds', () => {

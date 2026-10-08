@@ -379,6 +379,30 @@ package Demo {
         });
     });
 
+    it('should type a transition by its accepted payload, apart from the guard, effect or target after it', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    item def Command;
+    state def Machine {
+        state a;
+        state b;
+        transition plain first a accept cmd : Command then b;
+        transition guarded first a accept cmd : Command if true then b;
+        transition withEffect first a accept cmd : Command do action reply then b;
+        transition untypedName first a accept Command then b;
+        transition first b accept cmd : Command then a;
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        const transitions = st.getAllSymbols().filter(s => s.kind === 'transition');
+        expect(transitions).toHaveLength(5);
+        for (const transition of transitions) {
+            expect(transition.typeNames).toEqual(['Command']);
+        }
+    });
+
     it('should extract explicit branching successions on their owning action', async () => {
         const { st, result } = await buildST(`
 package Demo {
