@@ -1483,6 +1483,32 @@ describe('anonymous elements indexed by symbol ID', () => {
     });
 });
 
+describe('quoted names with a colon or keyword', () => {
+    it('should take no type from a quoted name, and keep a quoted type whole', async () => {
+        const { st, result } = await buildST(`
+package P {
+    package 'Structure: System Context' {
+        part def 'Unit: Main';
+        part def 'Spare: Unit then more' :> 'Unit: Main';
+        part 'unit: main' : 'Unit: Main';
+        attribute def 'Mode: A';
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        const typesOf = (name: string) => {
+            const symbol = st.getAllSymbols().find(s => s.name === name);
+            return [symbol?.typeNames, symbol?.specializationNames];
+        };
+        expect(typesOf('Structure: System Context')).toEqual([[], []]);
+        expect(typesOf('Unit: Main')).toEqual([[], []]);
+        expect(typesOf('Mode: A')).toEqual([[], []]);
+        expect(typesOf('Spare: Unit then more')).toEqual([['Unit: Main'], ['Unit: Main']]);
+        expect(typesOf('unit: main')[0]).toEqual(['Unit: Main']);
+    });
+});
+
 describe('isAnonymous and displayName', () => {
     const base = { kind: 'connection' as SysMLSymbol['kind'], symbolId: 'id', range: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, selectionRange: { start: { line: 0, character: 0 }, end: { line: 0, character: 1 } }, uri: 'test://t.sysml', typeNames: [], specializationNames: [], children: [] };
 
