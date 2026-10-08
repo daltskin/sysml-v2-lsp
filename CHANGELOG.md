@@ -15,6 +15,7 @@
 
 - A transition is typed by the payload its trigger accepts, read from the parse tree. The payload type ran into whatever followed it in the whitespace-free text (`accept cmd : Command if cmd.code == 0 then busy` gave `Commandifcmd`, `accept cmd : Command then busy` gave `Commandthenbusy`), reported as `unresolved-type`.
 - A state's `entry`, `do` and `exit` actions (`exit action leave : WriteSafeState;`, `exit leave;`) get a symbol, as a `perform action` (the `StatePerformActionUsage` production). They had none, so they were missing from the outline, and an action definition that only typed one was reported as `unused-definition`.
+- `incompatible-port-types` resolves each end of a `connect` through the features its path names (`a.p.q`: `a` in the connector's namespace or an owner, then members of each feature or its types), not by the port's name alone. When two parts each had a port of the same name, the first one declared in the workspace stood in for both: a correct connection was flagged (`'signal' (CablePort) is connected to 'core' (LinePort)`) and a wrong one was missed, depending on declaration order. A path that does not resolve still falls back to the name, when only one port has it.
 
 ## [0.34.0]
 

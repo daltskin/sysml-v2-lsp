@@ -427,6 +427,58 @@ package Test {
             const portDiags = diags.filter(d => d.code === 'incompatible-port-types');
             expect(portDiags.length).toBeGreaterThanOrEqual(1);
         });
+
+        // Device and Source each have a port `signal`, of different types; the
+        // ends must resolve through `source` and `device`, not by name alone.
+        const sameNamePorts = (connect: string, sourceFirst: boolean) => {
+            const device = 'part def Device { port signal : CablePort; }';
+            const source = 'part def Source { port signal : LinePort; }';
+            return `
+package Test {
+    private import ScalarValues::*;
+    port def LinePort { attribute level : Real; }
+    port def CablePort { port core : LinePort; }
+    ${sourceFirst ? source : device}
+    ${sourceFirst ? device : source}
+    part system {
+        part source : Source;
+        part device : Device;
+        ${connect}
+    }
+}
+`;
+        };
+
+        it.each([true, false])('should resolve each end through its own part (Source declared first: %s)', async (sourceFirst) => {
+            const diags = await getSemanticDiagnostics(sameNamePorts('connect source.signal to device.signal.core;', sourceFirst));
+            expect(diags.filter(d => d.code === 'incompatible-port-types')).toEqual([]);
+        });
+
+        it.each([true, false])('should still flag ends of different types with the same name (Source declared first: %s)', async (sourceFirst) => {
+            const diags = await getSemanticDiagnostics(sameNamePorts('connect source.signal to device.signal;', sourceFirst));
+            expect(diags.filter(d => d.code === 'incompatible-port-types').map(d => d.message)).toEqual([
+                "Port compatibility issue: 'signal' (LinePort) is connected to 'signal' (CablePort)",
+            ]);
+        });
+
+        it('should resolve an end to a port declared in the body of a part usage', async () => {
+            const text = `
+package Test {
+    private import ScalarValues::*;
+    port def LinePort { attribute level : Real; }
+    port def CablePort { port core : LinePort; }
+    part def Device { port signal : CablePort; }
+    part def Source;
+    part system {
+        part device : Device;
+        part source : Source { port signal : LinePort; }
+        connect source.signal to device.signal.core;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            expect(diags.filter(d => d.code === 'incompatible-port-types')).toEqual([]);
+        });
     });
 
     describe('constraint body reference validation', () => {
