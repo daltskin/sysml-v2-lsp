@@ -11,6 +11,10 @@
 
 - `sysml/model` and `sysml/elementLookup` answer only once the server's `initialized` phase is done (settings and each folder's projectId pulled from the client, library indexed, DFA loaded). A request sent earlier now waits, instead of being answered with symbol IDs that might change once the projectIds arrive. A client that declares the `workspace/configuration` capability must answer those requests.
 
+### Fixed
+
+- A transition is typed by the payload its trigger accepts, read from the parse tree. The payload type ran into whatever followed it in the whitespace-free text (`accept cmd : Command if cmd.code == 0 then busy` gave `Commandifcmd`, `accept cmd : Command then busy` gave `Commandthenbusy`), reported as `unresolved-type`.
+
 ## [0.34.0]
 
 ### Added

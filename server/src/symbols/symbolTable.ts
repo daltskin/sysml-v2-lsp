@@ -170,6 +170,7 @@ const TYPE_RECURSE_RULE_INDICES: ReadonlySet<number> = new Set([
     SysMLv2Parser.RULE_usageCompletion,           // 210
     SysMLv2Parser.RULE_definition,                // 192
     SysMLv2Parser.RULE_usage,                     // 208
+    SysMLv2Parser.RULE_payloadFeatureSpecializationPart, // 157
 ]);
 
 /** Rules containing documentation */
@@ -979,7 +980,9 @@ export class SymbolTable {
         // Extract type names for both usages (typing) and definitions (specialization)
         const typeNames = isFlowUsage(kind)
             ? this.extractFlowTypeNames(ctx)
-            : this.extractTypeNames(ctx);
+            : transition
+                ? this.extractTransitionTypeNames(ctx)
+                : this.extractTypeNames(ctx);
         const specializationNames = this.extractSpecializationNames(ctx);
         const typeName = typeNames[0];
         const documentation = this.extractDocumentation(ctx);
@@ -1129,6 +1132,26 @@ export class SymbolTable {
             ?? this.findOwnHeaderRule(declaration, SysMLv2Parser.RULE_usageDeclaration)
         );
         return typeDeclaration ? this.extractTypeNames(typeDeclaration) : [];
+    }
+
+    /**
+     * A transition's own typing, then the types of the payload its trigger
+     * accepts (`accept cmd : Command`, `accept Command`; TriggerAction ->
+     * AcceptParameterPart -> PayloadParameter). Read from the parse tree only:
+     * the regex fallback of `extractTypeNames` runs on whitespace-free text, where
+     * the payload type runs into the guard, effect or target that follows it
+     * (`Commandifcmd`, `Commandthenbusy`).
+     */
+    private extractTransitionTypeNames(ctx: ParserRuleContext): string[] {
+        const names: string[] = [];
+        this.collectTypeNamesFromTree(ctx, names, 0);
+        const trigger = this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_triggerActionMember);
+        const parameter = trigger && this.findRuleContext(trigger, SysMLv2Parser.RULE_payloadParameter);
+        if (parameter) {
+            const payload = this.findRuleContext(parameter, SysMLv2Parser.RULE_payloadFeature) ?? parameter;
+            this.collectTypeNamesFromTree(payload, names, 0);
+        }
+        return names;
     }
 
     /** Find the first descendant of `ctx` with rule `ruleIndex`, in source order. */
@@ -1302,7 +1325,7 @@ export class SymbolTable {
         transition: { source?: string; target?: string } | undefined,
     ): string | undefined {
         if (!isDefinition(kind) && !isUsageKind(kind)) return undefined;
-        if (transition && !(transition.source && transition.target) && this.extractTypeNames(ctx).length === 0) return undefined;
+        if (transition && !(transition.source && transition.target) && this.extractTransitionTypeNames(ctx).length === 0) return undefined;
         return this.declarationText(ctx);
     }
 
