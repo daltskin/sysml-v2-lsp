@@ -255,6 +255,19 @@ package Test {
             expect(unresolvedDiags[0].message).toContain("'Engine'");
         });
 
+        it('should not read a colon inside a quoted name as a typing', async () => {
+            const text = `
+package QuotedColonName {
+    package 'Structure: System Context' {
+        part def 'Unit: Main';
+        part 'unit: main' : 'Unit: Main';
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            expect(diags.filter(d => d.code === 'unresolved-type')).toEqual([]);
+        });
+
         it('should not flag types that are defined in the document', async () => {
             const text = `
 package Test {

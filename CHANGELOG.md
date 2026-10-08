@@ -15,6 +15,7 @@
 
 - A transition is typed by the payload its trigger accepts, read from the parse tree. The payload type ran into whatever followed it in the whitespace-free text (`accept cmd : Command if cmd.code == 0 then busy` gave `Commandifcmd`, `accept cmd : Command then busy` gave `Commandthenbusy`), reported as `unresolved-type`.
 - A state's `entry`, `do` and `exit` actions (`exit action leave : WriteSafeState;`, `exit leave;`) get a symbol, as a `perform action` (the `StatePerformActionUsage` production). They had none, so they were missing from the outline, and an action definition that only typed one was reported as `unused-definition`.
+- A colon, `:>`, `{` or keyword inside a quoted name is no longer read as part of a declaration: `package 'Structure: System Context'` was typed `System` and reported as `unresolved-type`, and `part def 'Unit: Main'` was typed `Main`. The regex fallback of type and specialization extraction now sees each quoted name as a placeholder.
 
 ## [0.34.0]
 

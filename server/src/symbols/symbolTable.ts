@@ -228,6 +228,12 @@ const MAX_RULE_SEARCH_DEPTH = 6;
 
 const RE_TYPING = /:(?![:>])\s*('[^']+'|[A-Za-z_]\w*(?:::\w+)*)/;
 const RE_QUOTED_NAME = /'([^']+)'/;
+/**
+ * Every quoted name (`STRING` in the lexer grammar) as group 1, escapes
+ * included; a double-quoted string is matched without a group, so that a
+ * quote inside it does not start a name.
+ */
+const RE_QUOTED_NAMES = /"(?:\\.|[^"\\])*"|'((?:\\.|[^'\\])*)'/g;
 const RE_IDENT_START = /^([A-Za-z_]\w*(?:::\w+)*)/;
 
 /**
@@ -1598,9 +1604,8 @@ export class SymbolTable {
 
         // Fallback: regex on the declaration portion only (before '{').
         // This avoids matching types from nested body content.
-        const fullText = ctx.getText();
-        const braceIdx = fullText.indexOf('{');
-        let text = braceIdx >= 0 ? fullText.substring(0, braceIdx) : fullText;
+        const { text: declarationText, quotedName } = this.maskedDeclaration(ctx);
+        let text = declarationText;
 
         // Truncate at SysML keywords that follow a usage declaration but appear
         // concatenated (getText() strips whitespace).  This prevents the regex
@@ -1615,8 +1620,8 @@ export class SymbolTable {
         if (specMatch) {
             const specStr = text.substring(text.indexOf(specMatch[0]) + specMatch[0].indexOf(specMatch[1]));
             for (const part of specStr.split(',')) {
-                const qm = part.match(RE_QUOTED_NAME);
-                if (qm) { names.push(qm[1]); continue; }
+                const quoted = quotedName(part);
+                if (quoted !== undefined) { names.push(quoted); continue; }
                 const m = part.trim().match(RE_IDENT_START);
                 if (m) names.push(m[1]);
             }
@@ -1640,8 +1645,8 @@ export class SymbolTable {
             const fullMatchIdx = text.indexOf(typingMatch[0]);
             const afterColon = text.substring(fullMatchIdx + 1).trim();
             for (const part of afterColon.split(',')) {
-                const qm = part.match(RE_QUOTED_NAME);
-                if (qm) { names.push(qm[1]); continue; }
+                const quoted = quotedName(part);
+                if (quoted !== undefined) { names.push(quoted); continue; }
                 const m = part.trim().match(RE_IDENT_START);
                 if (m) names.push(m[1]);
             }
@@ -1649,6 +1654,28 @@ export class SymbolTable {
         }
 
         return names;
+    }
+
+    /**
+     * The declaration part of `ctx`'s text (before its body's `{`), with each
+     * quoted name replaced by a numbered placeholder (`'0'`, `'1'`, ...), and
+     * `quotedName`, which turns a placeholder in a part of that text back into
+     * the name. A quoted name may hold any character but an unescaped quote
+     * (`'Structure: System Context'`), so the fallback regexes must never see
+     * its `:`, `:>`, `{` or keywords.
+     */
+    private maskedDeclaration(ctx: ParserRuleContext): { text: string; quotedName: (part: string) => string | undefined } {
+        const quoted: string[] = [];
+        const masked = ctx.getText().replace(RE_QUOTED_NAMES, (match, inner: string | undefined) =>
+            inner === undefined ? match : `'${quoted.push(inner) - 1}'`);
+        const braceIdx = masked.indexOf('{');
+        return {
+            text: braceIdx >= 0 ? masked.substring(0, braceIdx) : masked,
+            quotedName: (part) => {
+                const qm = part.match(RE_QUOTED_NAME);
+                return qm ? quoted[Number(qm[1])] : undefined;
+            },
+        };
     }
 
     /**
@@ -1665,17 +1692,15 @@ export class SymbolTable {
         // Regex fallback: look for :> / specializes / :>> / subsets.
         // Use the spec-aware truncate variant so that `subsets <name>` is not
         // stripped before we have a chance to match it.
-        const fullText = ctx.getText();
-        const braceIdx = fullText.indexOf('{');
-        let text = braceIdx >= 0 ? fullText.substring(0, braceIdx) : fullText;
-        text = text.replace(RE_KEYWORD_TRUNCATE_SPEC, '');
+        const { text: declarationText, quotedName } = this.maskedDeclaration(ctx);
+        const text = declarationText.replace(RE_KEYWORD_TRUNCATE_SPEC, '');
 
         const specMatch = text.match(RE_SPEC_WITH_SUBSETS);
         if (specMatch) {
             const specStr = text.substring(text.indexOf(specMatch[0]) + specMatch[0].indexOf(specMatch[1]));
             for (const part of specStr.split(',')) {
-                const qm = part.match(RE_QUOTED_NAME);
-                if (qm) { names.push(qm[1]); continue; }
+                const quoted = quotedName(part);
+                if (quoted !== undefined) { names.push(quoted); continue; }
                 const m = part.trim().match(RE_IDENT_START);
                 if (m) names.push(m[1]);
             }
