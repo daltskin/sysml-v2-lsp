@@ -1178,6 +1178,33 @@ package Demo {
     });
 });
 
+describe('state entry, do and exit actions', () => {
+    it('should extract entry, do and exit actions declared in a state', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    action def Arrive;
+    action def Work;
+    action def Leave;
+    state def Machine {
+        state running {
+            entry action arrive : Arrive;
+            do action work : Work;
+            exit action leave : Leave;
+        }
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        const running = st.getSymbol('Demo::Machine::running')!;
+        expect(['arrive', 'work', 'leave'].map(name => st.getSymbol(`Demo::Machine::running::${name}`))).toMatchObject([
+            { kind: 'perform action', typeNames: ['Arrive'], parentId: running.symbolId },
+            { kind: 'perform action', typeNames: ['Work'], parentId: running.symbolId },
+            { kind: 'perform action', typeNames: ['Leave'], parentId: running.symbolId },
+        ]);
+    });
+});
+
 describe('anonymous transitions', () => {
     // Two anonymous transitions between the same states on one line, and a declared one quoted like
     // their declaration.

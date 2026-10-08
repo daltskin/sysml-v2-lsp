@@ -571,6 +571,26 @@ package B {
             expect(unused.length).toBe(0);
         });
 
+        it('should count action definitions that type a state\'s entry, do or exit action', async () => {
+            const text = `
+package Demo {
+    action def Arrive;
+    action def Work;
+    action def WriteSafeState;
+    state def Controller {
+        entry; then running;
+        state running {
+            entry action arrive : Arrive;
+            do action work : Work;
+            exit action leave : WriteSafeState;
+        }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            expect(diags.filter(d => d.code === 'unused-definition')).toEqual([]);
+        });
+
         it('should count part usages used as connect sources and targets', async () => {
             const text = `
 package Demo {

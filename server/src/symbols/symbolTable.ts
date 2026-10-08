@@ -62,6 +62,9 @@ const RULE_INDEX_TO_KIND = new Map<number, SysMLElementKind>([
     [SysMLv2Parser.RULE_referenceUsage, SysMLElementKind.RefUsage],               // 213
     [SysMLv2Parser.RULE_interfaceUsage, SysMLElementKind.InterfaceUsage],         // 268
     [SysMLv2Parser.RULE_performActionUsage, SysMLElementKind.PerformActionUsage], // 298
+    // A state's `entry`/`do`/`exit` action (`exit action a : A;`, `exit a;`): the
+    // StatePerformActionUsage production, a PerformActionUsage without `perform`.
+    [SysMLv2Parser.RULE_statePerformActionUsage, SysMLElementKind.PerformActionUsage], // 352
     [SysMLv2Parser.RULE_exhibitStateUsage, SysMLElementKind.ExhibitStateUsage],   // 359
     [SysMLv2Parser.RULE_transitionUsage, SysMLElementKind.TransitionUsage],       // 360
     [SysMLv2Parser.RULE_occurrenceDefinition, SysMLElementKind.OccurrenceDef],    // 231

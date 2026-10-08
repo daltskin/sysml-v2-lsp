@@ -11,6 +11,10 @@
 
 - `sysml/model` and `sysml/elementLookup` answer only once the server's `initialized` phase is done (settings and each folder's projectId pulled from the client, library indexed, DFA loaded). A request sent earlier now waits, instead of being answered with symbol IDs that might change once the projectIds arrive. A client that declares the `workspace/configuration` capability must answer those requests.
 
+### Fixed
+
+- A state's `entry`, `do` and `exit` actions (`exit action leave : WriteSafeState;`, `exit leave;`) get a symbol, as a `perform action` (the `StatePerformActionUsage` production). They had none, so they were missing from the outline, and an action definition that only typed one was reported as `unused-definition`.
+
 ## [0.34.0]
 
 ### Added
