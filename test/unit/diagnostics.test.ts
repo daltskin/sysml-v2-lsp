@@ -573,6 +573,50 @@ package Generic {
             expect(unresolved).toEqual([]);
         });
 
+        it('should hide the exact redefined feature in a multi-parent hierarchy', async () => {
+            const text = `
+package Generic {
+    part def OldType {
+        attribute onlyOld : Real;
+    }
+
+    part def NewType {
+        attribute onlyBranchB : Real;
+    }
+
+    part def GrandBase {
+        attribute metric : OldType;
+    }
+
+    part def BranchA :> GrandBase;
+
+    part def BranchB {
+        attribute metric : NewType;
+    }
+
+    part def Derived :> BranchA, BranchB {
+        attribute replacement : OldType redefines BranchA::metric;
+    }
+
+    requirement def MultiParentRequirement {
+        subject target : Derived;
+        require constraint {
+            target.metric.onlyBranchB >= 0
+        }
+        require constraint {
+            target.metric.onlyOld >= 0
+        }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unresolved = diags.filter(d => d.code === 'unresolved-constraint-reference');
+
+            expect(unresolved.map(d => d.message)).toEqual([
+                "Unresolved constraint reference 'target.metric.onlyOld' in scope 'MultiParentRequirement'",
+            ]);
+        });
+
         it('should resolve constraint references from an anonymous interface\'s own members', async () => {
             const text = `
 package Test {
