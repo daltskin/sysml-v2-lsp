@@ -26,6 +26,8 @@ const RULE_INDEX_TO_KIND = new Map<number, SysMLElementKind>([
     [SysMLv2Parser.RULE_actionDefinition, SysMLElementKind.ActionDef],            // 287
     [SysMLv2Parser.RULE_stateDefinition, SysMLElementKind.StateDef],              // 343
     [SysMLv2Parser.RULE_requirementDefinition, SysMLElementKind.RequirementDef],  // 384
+    [SysMLv2Parser.RULE_concernDefinition, SysMLElementKind.ConcernDef],          // 405
+    [SysMLv2Parser.RULE_concernUsage, SysMLElementKind.ConcernUsage],             // 406
     [SysMLv2Parser.RULE_constraintDefinition, SysMLElementKind.ConstraintDef],    // 380
     [SysMLv2Parser.RULE_itemDefinition, SysMLElementKind.ItemDef],                // 244
     [SysMLv2Parser.RULE_allocationDefinition, SysMLElementKind.AllocationDef],    // 275

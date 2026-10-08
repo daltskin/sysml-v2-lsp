@@ -64,6 +64,8 @@ export function toSysMLSymbolKind(kind: SysMLElementKind): SymbolKind {
         // Requirements → Object
         case SysMLElementKind.RequirementDef:
         case SysMLElementKind.RequirementUsage:
+        case SysMLElementKind.ConcernDef:
+        case SysMLElementKind.ConcernUsage:
         case SysMLElementKind.ActorUsage:
         case SysMLElementKind.SubjectUsage:
         case SysMLElementKind.StakeholderUsage:

@@ -1589,3 +1589,29 @@ describe('anonymous usages and definitions', () => {
         expect(members.map((s) => [s.name, s.qualifiedName])).toEqual([['m', undefined], ['n', undefined]]);
     });
 });
+
+describe('concern definitions and usages', () => {
+    it('should extract concern definitions and usages as namespaces of their own', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    part def Unit;
+    concern def Hazard {
+        subject unit : Unit;
+        attribute severity;
+    }
+    concern overTemperature : Hazard {
+        attribute limit;
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        const hazard = st.getSymbol('Demo::Hazard');
+        const overTemperature = st.getSymbol('Demo::overTemperature');
+        expect(hazard).toMatchObject({ kind: 'concern def' });
+        expect(overTemperature).toMatchObject({ kind: 'concern', typeNames: ['Hazard'] });
+        expect(st.getSymbol('Demo::Hazard::severity')?.parentId).toBe(hazard?.symbolId);
+        expect(st.getSymbol('Demo::overTemperature::limit')?.parentId).toBe(overTemperature?.symbolId);
+        expect(st.getSymbol('Demo::limit')).toBeUndefined();
+    });
+});

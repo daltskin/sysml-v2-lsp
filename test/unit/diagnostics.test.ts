@@ -2768,6 +2768,25 @@ part def A {
             expect(ambiguous.every(d => /also declared as part def in this document \(line \d+\)\.$/.test(d.message))).toBe(true);
         });
 
+        it('does not flag same-named features declared in the bodies of two concern usages', async () => {
+            const text = `
+package Hazards {
+    private import ScalarValues::*;
+    concern def Hazard {
+        attribute severity : Natural;
+    }
+    concern overTemperature : Hazard {
+        attribute limit : Natural = 85;
+    }
+    concern underVoltage : Hazard {
+        attribute limit : Natural = 9;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            expect(diags.filter(d => d.code === 'ambiguous-namespace-name')).toEqual([]);
+        });
+
         it('does not flag a legitimate package reopened across files as a conflict', async () => {
             const pkgFile1 = `
 package Shared {

@@ -30,6 +30,8 @@ export enum SysMLElementKind {
     TransitionUsage = 'transition',
     RequirementDef = 'requirement def',
     RequirementUsage = 'requirement',
+    ConcernDef = 'concern def',
+    ConcernUsage = 'concern',
     ConstraintDef = 'constraint def',
     ConstraintUsage = 'constraint',
     ItemDef = 'item def',
@@ -292,6 +294,8 @@ export function toMetaclassName(kind: SysMLElementKind): string {
         case SysMLElementKind.TransitionUsage: return 'TransitionUsage';
         case SysMLElementKind.RequirementDef: return 'RequirementDefinition';
         case SysMLElementKind.RequirementUsage: return 'RequirementUsage';
+        case SysMLElementKind.ConcernDef: return 'ConcernDefinition';
+        case SysMLElementKind.ConcernUsage: return 'ConcernUsage';
         case SysMLElementKind.ConstraintDef: return 'ConstraintDefinition';
         case SysMLElementKind.ConstraintUsage: return 'ConstraintUsage';
         case SysMLElementKind.ItemDef: return 'ItemDefinition';
