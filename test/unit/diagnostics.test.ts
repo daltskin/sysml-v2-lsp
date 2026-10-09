@@ -450,6 +450,215 @@ package Test {
             expect(constraintDiags.length).toBeGreaterThanOrEqual(1);
         });
 
+        it('should resolve inherited requirement subjects and their typed feature paths', async () => {
+            const text = `
+package Generic {
+    part def MainComponent {
+        attribute throughput : Real;
+    }
+
+    requirement def ThroughputRequirement {
+        subject transferringComponent : MainComponent;
+        attribute rate : Real;
+    }
+
+    requirement def specificThroughputRequirementUse :> ThroughputRequirement {
+        require constraint {
+            transferringComponent.throughput >= rate
+        }
+        require constraint {
+            transferringComponent.missing >= rate
+        }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unresolved = diags.filter(d => d.code === 'unresolved-constraint-reference');
+
+            expect(unresolved.map(d => d.message)).toEqual([
+                "Unresolved constraint reference 'transferringComponent.missing' in scope 'specificThroughputRequirementUse'",
+            ]);
+        });
+
+        it('should not resolve a base requirement subject after the specialized requirement renames it', async () => {
+            const text = `
+package Generic {
+    part def MainComponent {
+        attribute throughput : Real;
+    }
+
+    requirement def ThroughputRequirement {
+        subject subj : MainComponent;
+        attribute rate : Real;
+    }
+
+    requirement def SpecificThroughputRequirement :> ThroughputRequirement {
+        subject transferringComponent : MainComponent;
+        require constraint {
+            transferringComponent.throughput >= rate
+        }
+        require constraint {
+            subj.throughput >= rate
+        }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unresolved = diags.filter(d => d.code === 'unresolved-constraint-reference');
+
+            expect(unresolved.map(d => d.message)).toEqual([
+                "Unresolved constraint reference 'subj.throughput' in scope 'SpecificThroughputRequirement'",
+            ]);
+        });
+
+        it('should hide explicitly redefined inherited feature names in typed paths', async () => {
+            const text = `
+package Generic {
+    part def BaseComponent {
+        attribute oldMetric : Real;
+    }
+
+    part def SpecializedComponent :> BaseComponent {
+        attribute newMetric : Real redefines oldMetric;
+    }
+
+    requirement def MetricRequirement {
+        subject component : SpecializedComponent;
+        require constraint {
+            component.newMetric >= 0
+        }
+        require constraint {
+            component.oldMetric >= 0
+        }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unresolved = diags.filter(d => d.code === 'unresolved-constraint-reference');
+
+            expect(unresolved.map(d => d.message)).toEqual([
+                "Unresolved constraint reference 'component.oldMetric' in scope 'MetricRequirement'",
+            ]);
+        });
+
+        it('should only allow public features after the first segment of a typed path', async () => {
+            const text = `
+package Generic {
+    part def BaseComponent {
+        protected attribute internalMetric : Real;
+        attribute publicMetric : Real;
+    }
+
+    part def SpecializedComponent :> BaseComponent;
+
+    requirement def MetricRequirement {
+        subject component : SpecializedComponent;
+        require constraint {
+            component.publicMetric >= 0
+        }
+        require constraint {
+            component.internalMetric >= 0
+        }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unresolved = diags.filter(d => d.code === 'unresolved-constraint-reference');
+
+            expect(unresolved.map(d => d.message)).toEqual([
+                "Unresolved constraint reference 'component.internalMetric' in scope 'MetricRequirement'",
+            ]);
+        });
+
+        it('should resolve inherited typed feature paths beyond 64 specialization levels', async () => {
+            const definitions = [
+                'part def Level0 { attribute metric : Real; }',
+                ...Array.from({ length: 80 }, (_, index) =>
+                    `part def Level${index + 1} :> Level${index};`),
+            ].join('\n');
+            const text = `
+package Generic {
+    ${definitions}
+    requirement def DeepRequirement {
+        subject component : Level80;
+        require constraint {
+            component.metric >= 0
+        }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unresolved = diags.filter(d => d.code === 'unresolved-constraint-reference');
+
+            expect(unresolved).toEqual([]);
+        });
+
+        it('should terminate inherited feature lookup safely through specialization cycles', async () => {
+            const text = `
+package Generic {
+    part def LevelA :> LevelB;
+    part def LevelB :> LevelA {
+        attribute metric : Real;
+    }
+
+    requirement def CyclicRequirement {
+        subject component : LevelA;
+        require constraint {
+            component.metric >= 0
+        }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unresolved = diags.filter(d => d.code === 'unresolved-constraint-reference');
+
+            expect(unresolved).toEqual([]);
+        });
+
+        it('should hide the exact redefined feature in a multi-parent hierarchy', async () => {
+            const text = `
+package Generic {
+    part def OldType {
+        attribute onlyOld : Real;
+    }
+
+    part def NewType {
+        attribute onlyBranchB : Real;
+    }
+
+    part def GrandBase {
+        attribute metric : OldType;
+    }
+
+    part def BranchA :> GrandBase;
+
+    part def BranchB {
+        attribute metric : NewType;
+    }
+
+    part def Derived :> BranchA, BranchB {
+        attribute replacement : OldType redefines BranchA::metric;
+    }
+
+    requirement def MultiParentRequirement {
+        subject target : Derived;
+        require constraint {
+            target.metric.onlyBranchB >= 0
+        }
+        require constraint {
+            target.metric.onlyOld >= 0
+        }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unresolved = diags.filter(d => d.code === 'unresolved-constraint-reference');
+
+            expect(unresolved.map(d => d.message)).toEqual([
+                "Unresolved constraint reference 'target.metric.onlyOld' in scope 'MultiParentRequirement'",
+            ]);
+        });
+
         it('should resolve constraint references from an anonymous interface\'s own members', async () => {
             const text = `
 package Test {

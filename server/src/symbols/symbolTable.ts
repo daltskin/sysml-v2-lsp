@@ -990,6 +990,7 @@ export class SymbolTable {
                 ? this.extractTransitionTypeNames(ctx)
                 : this.extractTypeNames(ctx);
         const specializationNames = this.extractSpecializationNames(ctx);
+        const redefinedFeatureTargets = this.extractRedefinedFeatureTargets(ctx);
         const typeName = typeNames[0];
         const documentation = this.extractDocumentation(ctx);
         const visibility = this.extractVisibility(ctx);
@@ -1029,6 +1030,7 @@ export class SymbolTable {
             typeName,
             typeNames,
             specializationNames,
+            redefinedFeatureTargets: redefinedFeatureTargets.length > 0 ? redefinedFeatureTargets : undefined,
             documentation,
             visibility,
             source: transition?.source,
@@ -1362,18 +1364,38 @@ export class SymbolTable {
      * such as `#metadata`.
      */
     private findOwnHeaderRule(ctx: ParserRuleContext, ruleIndex: number): ParserRuleContext | undefined {
+        const matches: ParserRuleContext[] = [];
+        this.findOwnHeaderRules(ctx, ruleIndex, matches, true);
+        return matches[0];
+    }
+
+    private findOwnHeaderRules(
+        ctx: ParserRuleContext,
+        ruleIndex: number,
+        matches: ParserRuleContext[],
+        firstOnly = false,
+    ): void {
         for (let i = 0; i < ctx.getChildCount(); i++) {
             const child = ctx.getChild(i);
             if (!(child instanceof ParserRuleContext)) continue;
-            if (child.ruleIndex === ruleIndex) return child;
+            if (child.ruleIndex === ruleIndex) {
+                matches.push(child);
+                if (firstOnly) return;
+                continue;
+            }
             if (RULE_INDEX_TO_KIND.has(child.ruleIndex) || BODY_RULE_INDICES.has(child.ruleIndex)
                 || child.ruleIndex === SysMLv2Parser.RULE_valuePart || FLOW_PART_RULE_INDICES.has(child.ruleIndex)
                 || child.ruleIndex === SysMLv2Parser.RULE_ownedCrossMultiplicityMember
                 || this.isPrefixOrExtensionContext(child)) continue;
-            const found = this.findOwnHeaderRule(child, ruleIndex);
-            if (found) return found;
+            this.findOwnHeaderRules(child, ruleIndex, matches, firstOnly);
+            if (firstOnly && matches.length > 0) return;
         }
-        return undefined;
+    }
+
+    private extractRedefinedFeatureTargets(ctx: ParserRuleContext): string[] {
+        const targets: ParserRuleContext[] = [];
+        this.findOwnHeaderRules(ctx, SysMLv2Parser.RULE_ownedRedefinition, targets);
+        return targets.map(target => target.getText());
     }
 
     /**

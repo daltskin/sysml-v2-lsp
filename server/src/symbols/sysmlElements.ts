@@ -124,6 +124,8 @@ export interface SysMLSymbol {
     typeNames: string[];
     /** Names referenced via :> / specializes / subsets (distinct from : typing). */
     specializationNames: string[];
+    /** Feature paths targeted by owned redefinitions, as written in the declaration. */
+    redefinedFeatureTargets?: string[];
     /** Documentation string if available */
     documentation?: string;
     /** Visibility declared on the owning membership; omitted for default public visibility. */
