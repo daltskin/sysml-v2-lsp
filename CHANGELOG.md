@@ -4,6 +4,7 @@
 
 ### Added
 
+- Add Copilot guidance to check generated and upstream-managed files during changes and reviews, fix their source of truth rather than editing overwritten artifacts, and validate fixes after regeneration.
 - A projectId per workspace folder: before scanning a folder, the server asks the client for its `sysml.project` setting (`workspace/configuration`, scoped to the folder), `{ projectId }`. A top-level element of a document in that folder (the innermost one, if nested) gets the URL `urn:uuid:<projectId>/<name>`, so the same name in two folders with different projectIds gives two symbol IDs (KerML 9.1). A folder without one uses an enclosing folder's projectId, else `initializationOptions.projectId`; one whose `projectId` isn't a UUID is reported and left out. The projectIds are asked for again on `workspace/didChangeConfiguration`, and documents already indexed under another projectId get new symbol IDs. Each folder's prefix, and where it comes from, is logged when it changes (`Folder <uri>: top-level elements' URLs start with urn:uuid:<projectId>/ (its projectId)`).
 - Follow workspace folders added or removed while running (`workspace/didChangeWorkspaceFolders`, now requested): an added folder is scanned, as at start, and the documents scanned from a removed folder are dropped.
 
