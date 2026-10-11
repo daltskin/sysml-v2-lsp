@@ -25,6 +25,7 @@ import {
     TextDocumentSyncKind,
     TextEdit,
     WorkspaceEdit,
+    WorkspaceFoldersChangeEvent,
 } from 'vscode-languageserver/node';
 
 import * as fs from 'node:fs';
@@ -53,9 +54,9 @@ import { ReferencesProvider } from './providers/referencesProvider.js';
 import { RenameProvider } from './providers/renameProvider.js';
 import { SemanticTokensProvider, tokenModifiers, tokenTypes } from './providers/semanticTokensProvider.js';
 import { SemanticValidator } from './providers/semanticValidator.js';
+import { isInFolder, isSameDocumentUri } from './utils/documentUri.js';
 import { DEFAULT_SKIP_DIRS, findSysMLFilesAsync, readFilesBatch } from './utils/fileDiscovery.js';
-import { isSameDocumentUri } from './utils/documentUri.js';
-import { setProjectId } from './utils/uuid.js';
+import { DEFAULT_URL_PREFIX, type FolderProjectId, getUrlPrefix, setFolderProjectIds, setProjectId } from './utils/uuid.js';
 
 /** Convert a file:// URI to a filesystem path, returning undefined for non-file URIs. */
 function toFsPath(uri: string): string | undefined {
@@ -99,8 +100,16 @@ hoverProvider.setSemanticValidator(semanticValidator);
 let hasConfigurationCapability = false;
 let hasWorkspaceFolderCapability = false;
 
-/** Workspace folder roots (file-system paths) captured during initialization. */
+/** Workspace folder roots (file-system paths), kept in step with `workspaceFolderUris`. */
 let workspaceRoots: string[] = [];
+
+/** Workspace folder URIs, from initialization and `workspace/didChangeWorkspaceFolders`. */
+let workspaceFolderUris: string[] = [];
+
+/** The file-system paths of `folderUris`, skipping any that aren't files. */
+function rootsOf(folderUris: readonly string[]): string[] {
+    return folderUris.map(uri => toFsPath(uri)).filter((p): p is string => p !== undefined);
+}
 
 /** True when the client opened a `.code-workspace` file (multi-file project). */
 let isWorkspaceFile = false;
@@ -122,6 +131,15 @@ let skipDirs: ReadonlySet<string> = new Set(DEFAULT_SKIP_DIRS);
 
 /** Set to true after onInitialized completes (DFA loaded, library indexed). */
 let serverReady = false;
+
+let resolveInitialization!: () => void;
+/**
+ * Resolves when the `initialized` phase is done: settings and each folder's
+ * projectId pulled from the client, library indexed, DFA loaded. A request
+ * whose answer depends on it, such as one reporting symbol IDs, waits for it
+ * rather than answer with symbol IDs that change once the projectIds arrive.
+ */
+const initialization = new Promise<void>(resolve => { resolveInitialization = resolve; });
 /** URIs of documents opened before the server was ready. */
 const earlyOpenUris = new Set<string>();
 
@@ -317,9 +335,8 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
 
     // Capture workspace folder roots for background file scanning.
     if (params.workspaceFolders) {
-        workspaceRoots = params.workspaceFolders
-            .map(f => toFsPath(f.uri))
-            .filter((p): p is string => p !== undefined);
+        workspaceFolderUris = params.workspaceFolders.map(f => f.uri);
+        workspaceRoots = rootsOf(workspaceFolderUris);
     } else if (params.rootUri) {
         const root = toFsPath(params.rootUri);
         if (root) workspaceRoots = [root];
@@ -383,6 +400,7 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
         result.capabilities.workspace = {
             workspaceFolders: {
                 supported: true,
+                changeNotifications: true,
             },
         };
     }
@@ -396,8 +414,18 @@ connection.onInitialized(async () => {
             DidChangeConfigurationNotification.type,
             undefined
         );
+    }
+    // Before awaiting the client, so a folder change made meanwhile isn't missed
+    if (hasWorkspaceFolderCapability) {
+        connection.workspace.onDidChangeWorkspaceFolders(event => {
+            onWorkspaceFoldersChanged(event).catch(e => connection.console.error(`Workspace folder change failed: ${e}`));
+        });
+    }
+    if (hasConfigurationCapability) {
         // Pull initial settings from the client
         await pullSettings().catch(() => { /* best effort */ });
+        // Each folder's projectId, before any of its documents is scanned
+        await pullFolderProjectIds().catch(() => { /* best effort */ });
     }
 
     // Bootstrap the standard library index for Go-to-Definition on
@@ -425,17 +453,16 @@ connection.onInitialized(async () => {
     // cross-file type references resolve even before files are opened.
     // Server is marked ready immediately; scan runs asynchronously.
     serverReady = true;
+    resolveInitialization();
     spawnParseWorker();
 
     if (workspaceRoots.length > 0
         && (preloadOnOpen === 'always'
             || (preloadOnOpen === 'workspaceOnly' && isWorkspaceFile))) {
-        documentManager.setWorkspaceScanComplete(false);
-        scanWorkspaceFoldersAsync(workspaceRoots).then(({ fileCount, scanMs }) => {
+        scanWorkspaceFolders(workspaceRoots).then(({ fileCount, scanMs }) => {
             connection.console.log(
                 `Workspace scan: pre-parsed ${fileCount} .sysml files in ${scanMs} ms`
             );
-            documentManager.setWorkspaceScanComplete(true);
             // Re-validate open documents now that cross-file symbols are available
             revalidateOpenDocuments();
         });
@@ -491,8 +518,123 @@ function applySettings(config: Record<string, unknown> | undefined): void {
 connection.onDidChangeConfiguration((_change) => {
     // Re-fetch settings from the client (LSP spec says the notification
     // payload format varies by client, so always pull explicitly).
-    pullSettings().then(() => revalidateOpenDocuments()).catch(() => { /* best effort */ });
+    pullSettings().then(() => pullFolderProjectIds()).then(() => revalidateOpenDocuments()).catch(() => { /* best effort */ });
 });
+
+/**
+ * Wrap `task` so that the latest call wins: a call that a later one superseded
+ * resolves with that later call instead of its own result. `task` is given
+ * `isSuperseded`, to check after each await and drop work that would apply an
+ * outdated answer.
+ */
+function latestWins(task: (isSuperseded: () => boolean) => Promise<void>): () => Promise<void> {
+    let calls = 0;
+    let latest: Promise<void> = Promise.resolve();
+    return () => {
+        const call = ++calls;
+        const isSuperseded = () => call !== calls;
+        const run = task(isSuperseded).then(() => (isSuperseded() ? latest : undefined));
+        latest = run;
+        return run;
+    };
+}
+
+/**
+ * Ask the client for each workspace folder's projectId (`sysml.project`,
+ * scoped to the folder: `{ projectId }`), so a document in a folder gets symbol
+ * IDs unique to that folder's projectId (KerML 9.1). A folder without an answer
+ * uses `initializationOptions.projectId`. Documents whose projectId changed get their
+ * symbol tables rebuilt. The latest call wins: an answer that arrives after a later
+ * call started is dropped, since the folders or settings may have changed meanwhile.
+ */
+const pullFolderProjectIds = latestWins(async isSuperseded => {
+    if (!hasConfigurationCapability) return;
+    const folderUris = [...workspaceFolderUris];
+    const answers: unknown[] = folderUris.length === 0 ? []
+        : await connection.workspace.getConfiguration(folderUris.map(scopeUri => ({ scopeUri, section: 'sysml.project' })));
+    if (isSuperseded()) return;
+    const projectIds = folderUris.flatMap((folderUri, i): FolderProjectId[] => {
+        const projectId = (answers[i] as { projectId?: unknown } | null | undefined)?.projectId;
+        return typeof projectId === 'string' ? [{ folderUri, projectId }] : [];
+    });
+
+    const uris = documentManager.getUris();
+    const prefixBefore = new Map(uris.map(uri => [uri, getUrlPrefix(uri)]));
+    const rejected = setFolderProjectIds(projectIds);
+    for (const entry of rejected) {
+        connection.console.warn(`projectId of ${entry.folderUri} is not a UUID: ${entry.projectId}; ignored, so its documents use the projectId of an enclosing folder, else initializationOptions.projectId, else the default prefix`);
+    }
+    documentManager.invalidateSymbols(uris.filter(uri => getUrlPrefix(uri) !== prefixBefore.get(uri)));
+    logFolderPrefixes(new Set(projectIds.filter(p => !rejected.includes(p)).map(p => p.folderUri)));
+});
+
+/** The URL prefix each folder's documents were last logged with (`logFolderPrefixes`). */
+const loggedFolderPrefixes = new Map<string, string>();
+
+/**
+ * Log, for each workspace folder whose prefix changed, the URL prefix of its
+ * top-level elements and where it comes from, so a client can see which
+ * projectId its symbol IDs are derived from.
+ */
+function logFolderPrefixes(ownProjectIds: ReadonlySet<string>): void {
+    for (const folderUri of workspaceFolderUris) {
+        // The prefix of a document directly in the folder
+        const prefix = getUrlPrefix(`${folderUri.endsWith('/') ? folderUri : `${folderUri}/`}_.sysml`);
+        if (loggedFolderPrefixes.get(folderUri) === prefix) continue;
+        loggedFolderPrefixes.set(folderUri, prefix);
+        const source = ownProjectIds.has(folderUri) ? 'its projectId'
+            : prefix === getUrlPrefix() ? (prefix === DEFAULT_URL_PREFIX ? 'the default prefix, no projectId' : 'initializationOptions.projectId')
+            : "an enclosing folder's projectId";
+        const folderPath = toFsPath(folderUri) ?? folderUri;
+        connection.console.debug(`Folder ${folderPath}: element ID namespace ${prefix} (${source}; ID namespace only, no network access)`);
+    }
+    for (const folderUri of loggedFolderPrefixes.keys()) {
+        if (!workspaceFolderUris.includes(folderUri)) loggedFolderPrefixes.delete(folderUri);
+    }
+}
+
+/**
+ * Follow the client's workspace folders: forget the documents scanned from a
+ * removed folder, ask for the projectIds, and scan the added folders.
+ */
+async function onWorkspaceFoldersChanged(event: WorkspaceFoldersChangeEvent): Promise<void> {
+    // Before the initial scan, which then scans the folders as changed here
+    const initialScanPending = !serverReady;
+    const removed = new Set(event.removed.map(f => f.uri));
+    workspaceFolderUris = [...workspaceFolderUris.filter(uri => !removed.has(uri)), ...event.added.map(f => f.uri)];
+    workspaceRoots = rootsOf(workspaceFolderUris);
+    dropDocumentsOutsideWorkspace(event.removed.map(f => f.uri));
+
+    await pullFolderProjectIds().catch(() => { /* best effort */ });
+    if (initialScanPending) return;
+
+    // A folder removed while its projectId was asked for isn't scanned
+    const addedRoots = rootsOf(event.added.map(f => f.uri).filter(uri => workspaceFolderUris.includes(uri)));
+    if (addedRoots.length > 0 && (preloadOnOpen === 'always' || (preloadOnOpen === 'workspaceOnly' && isWorkspaceFile))) {
+        const { fileCount, scanMs } = await scanWorkspaceFolders(addedRoots);
+        connection.console.log(`Workspace scan: pre-parsed ${fileCount} .sysml files of ${addedRoots.length} added folder(s) in ${scanMs} ms`);
+    }
+    revalidateOpenDocuments();
+}
+
+/**
+ * Forget the documents scanned from the folders `folderUris` that no current
+ * workspace folder contains; open documents stay.
+ */
+function dropDocumentsOutsideWorkspace(folderUris: readonly string[]): void {
+    for (const uri of documentManager.getUris()) {
+        if (openDocumentFor(uri)) continue;
+        if (folderUris.some(f => isInFolder(uri, f)) && !isInWorkspace(uri)) {
+            documentManager.remove(uri);
+            modelProvider.removeUri(uri);
+        }
+    }
+}
+
+/** Whether the document `uri` is inside a current workspace root. */
+function isInWorkspace(uri: string): boolean {
+    return workspaceRoots.some(root => isInFolder(uri, pathToFileURL(root).toString()));
+}
 
 // --------------------------------------------------------------------------
 // Workspace file scanning
@@ -544,6 +686,24 @@ function parseWorkspaceFile(filePath: string, uri: string = pathToFileURL(filePa
     return true;
 }
 
+/** Number of workspace scans running; the workspace is fully indexed only when none is. */
+let runningScans = 0;
+
+/**
+ * Scan the folders `roots` (`scanWorkspaceFoldersAsync`). The workspace scan is
+ * reported complete only once every running scan is done, e.g. when a folder is
+ * added while the initial scan still runs.
+ */
+async function scanWorkspaceFolders(roots: string[]): Promise<{ fileCount: number; scanMs: number }> {
+    runningScans++;
+    documentManager.setWorkspaceScanComplete(false);
+    try {
+        return await scanWorkspaceFoldersAsync(roots);
+    } finally {
+        if (--runningScans === 0) documentManager.setWorkspaceScanComplete(true);
+    }
+}
+
 /**
  * Asynchronously scan workspace folders with concurrent file discovery
  * and reading, then parse sequentially using the batch parser.
@@ -571,6 +731,8 @@ async function scanWorkspaceFoldersAsync(
         const uri = pathToFileURL(filePath).toString();
         // Don't overwrite documents the editor has open
         if (openDocumentFor(uri)) continue;
+        // Nor bring back a document of a folder removed during the scan
+        if (!isInWorkspace(uri)) continue;
         const content = fileContents.get(filePath);
         if (content === undefined) continue;
 
@@ -925,7 +1087,8 @@ connection.onDocumentRangeFormatting(
  * `sysml/model` — returns the parsed semantic model for a document.
  * Drives the Model Explorer, Dashboard, Feature Inspector, and status bar metrics.
  */
-connection.onRequest('sysml/model', (params: SysMLModelParams) => {
+connection.onRequest('sysml/model', async (params: SysMLModelParams) => {
+    await initialization;
     return modelProvider.getModel(
         params.textDocument.uri,
         documentManager.getVersion(params.textDocument.uri),
@@ -938,7 +1101,8 @@ connection.onRequest('sysml/model', (params: SysMLModelParams) => {
  * across the whole workspace. Unscoped: no import/namespace-aware
  * resolution, no fuzzy/substring matching -- see `elementLookupTypes.ts`.
  */
-connection.onRequest('sysml/elementLookup', (params: SysMLElementLookupParams) => {
+connection.onRequest('sysml/elementLookup', async (params: SysMLElementLookupParams) => {
+    await initialization;
     return elementLookupProvider.elementLookup(params);
 });
 

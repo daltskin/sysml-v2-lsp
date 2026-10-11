@@ -6,6 +6,27 @@
 
 - Visit each specialization ancestor only once when resolving inherited constraint features, preventing exponential queue growth through layered diamond inheritance (#127).
 - Hide implicitly redefined requirement subjects according to the declaring requirement's specialization ancestors, including redundant direct bases in multiple inheritance, while preserving subjects from unrelated branches.
+- Display decoded filesystem paths in workspace-folder logs and clarify that
+  element ID namespaces are used locally, without network access. Emit this
+  internal namespace information at debug level instead of info.
+
+## [0.35.0]
+
+### Added
+
+- Add Copilot guidance to check generated and upstream-managed files during changes and reviews, fix their source of truth rather than editing overwritten artifacts, and validate fixes after regeneration.
+- A projectId per workspace folder: before scanning a folder, the server asks the client for its `sysml.project` setting (`workspace/configuration`, scoped to the folder), `{ projectId }`. A top-level element of a document in that folder (the innermost one, if nested) gets the URL `urn:uuid:<projectId>/<name>`, so the same name in two folders with different projectIds gives two symbol IDs (KerML 9.1). A folder without one uses an enclosing folder's projectId, else `initializationOptions.projectId`; one whose `projectId` isn't a UUID is reported and left out. The projectIds are asked for again on `workspace/didChangeConfiguration`, and documents already indexed under another projectId get new symbol IDs. Each folder's prefix, and where it comes from, is logged when it changes (`Folder <uri>: top-level elements' URLs start with urn:uuid:<projectId>/ (its projectId)`).
+- Follow workspace folders added or removed while running (`workspace/didChangeWorkspaceFolders`, now requested): an added folder is scanned, as at start, and the documents scanned from a removed folder are dropped.
+
+### Changed
+
+- `sysml/model` and `sysml/elementLookup` answer only once the server's `initialized` phase is done (settings and each folder's projectId pulled from the client, library indexed, DFA loaded). A request sent earlier now waits, instead of being answered with symbol IDs that might change once the projectIds arrive. A client that declares the `workspace/configuration` capability must answer those requests.
+
+### Fixed
+
+- A transition is typed by the payload its trigger accepts, read from the parse tree. The payload type ran into whatever followed it in the whitespace-free text (`accept cmd : Command if cmd.code == 0 then busy` gave `Commandifcmd`, `accept cmd : Command then busy` gave `Commandthenbusy`), reported as `unresolved-type`.
+- A state's `entry`, `do` and `exit` actions (`exit action leave : WriteSafeState;`, `exit leave;`) get a symbol, as a `perform action` (the `StatePerformActionUsage` production). They had none, so they were missing from the outline, and an action definition that only typed one was reported as `unused-definition`.
+- Concern definitions and usages (`concern def H { ... }`, `concern c : H { ... }`, and a requirement's framed concerns, `frame concern c : H { ... }`) get a symbol, of the new kinds `concern def` and `concern` (metaclasses `ConcernDefinition`, `ConcernUsage`). They had none, so their members were attributed to the enclosing namespace: two concerns, or two framed concerns of one requirement, that each declared `attribute limit` were reported as `ambiguous-namespace-name`, and concerns were missing from the outline and `sysml/model`.
 
 ## [0.34.0]
 

@@ -379,6 +379,30 @@ package Demo {
         });
     });
 
+    it('should type a transition by its accepted payload, apart from the guard, effect or target after it', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    item def Command;
+    state def Machine {
+        state a;
+        state b;
+        transition plain first a accept cmd : Command then b;
+        transition guarded first a accept cmd : Command if true then b;
+        transition withEffect first a accept cmd : Command do action reply then b;
+        transition untypedName first a accept Command then b;
+        transition first b accept cmd : Command then a;
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        const transitions = st.getAllSymbols().filter(s => s.kind === 'transition');
+        expect(transitions).toHaveLength(5);
+        for (const transition of transitions) {
+            expect(transition.typeNames).toEqual(['Command']);
+        }
+    });
+
     it('should extract explicit branching successions on their owning action', async () => {
         const { st, result } = await buildST(`
 package Demo {
@@ -1178,6 +1202,33 @@ package Demo {
     });
 });
 
+describe('state entry, do and exit actions', () => {
+    it('should extract entry, do and exit actions declared in a state', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    action def Arrive;
+    action def Work;
+    action def Leave;
+    state def Machine {
+        state running {
+            entry action arrive : Arrive;
+            do action work : Work;
+            exit action leave : Leave;
+        }
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        const running = st.getSymbol('Demo::Machine::running')!;
+        expect(['arrive', 'work', 'leave'].map(name => st.getSymbol(`Demo::Machine::running::${name}`))).toMatchObject([
+            { kind: 'perform action', typeNames: ['Arrive'], parentId: running.symbolId },
+            { kind: 'perform action', typeNames: ['Work'], parentId: running.symbolId },
+            { kind: 'perform action', typeNames: ['Leave'], parentId: running.symbolId },
+        ]);
+    });
+});
+
 describe('anonymous transitions', () => {
     // Two anonymous transitions between the same states on one line, and a declared one quoted like
     // their declaration.
@@ -1536,5 +1587,59 @@ describe('anonymous usages and definitions', () => {
         const anonymous = membersOfW(st).find((s) => isAnonymous(s))!;
         const members = st.getAllSymbols().filter((s) => s.parentId === anonymous.symbolId);
         expect(members.map((s) => [s.name, s.qualifiedName])).toEqual([['m', undefined], ['n', undefined]]);
+    });
+});
+
+describe('concern definitions and usages', () => {
+    it('should extract concern definitions and usages as namespaces of their own', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    part def Unit;
+    concern def Hazard {
+        subject unit : Unit;
+        attribute severity;
+    }
+    concern overTemperature : Hazard {
+        attribute limit;
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        const hazard = st.getSymbol('Demo::Hazard');
+        const overTemperature = st.getSymbol('Demo::overTemperature');
+        expect(hazard).toMatchObject({ kind: 'concern def' });
+        expect(overTemperature).toMatchObject({ kind: 'concern', typeNames: ['Hazard'] });
+        expect(st.getSymbol('Demo::Hazard::severity')?.parentId).toBe(hazard?.symbolId);
+        expect(st.getSymbol('Demo::overTemperature::limit')?.parentId).toBe(overTemperature?.symbolId);
+        expect(st.getSymbol('Demo::limit')).toBeUndefined();
+    });
+
+    it('should extract framed concerns as concern usages that own their members', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    concern def Hazard;
+    concern overTemperature : Hazard;
+    requirement def Safety {
+        frame concern thermal : Hazard { attribute limit; }
+        frame concern voltage : Hazard { attribute limit; }
+        frame overTemperature { attribute margin; }
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        const safety = st.getSymbol('Demo::Safety')!;
+        for (const name of ['thermal', 'voltage']) {
+            const framed = st.getSymbol(`Demo::Safety::${name}`);
+            expect(framed).toMatchObject({ kind: 'concern', typeNames: ['Hazard'], parentId: safety.symbolId });
+            expect(st.getSymbol(`Demo::Safety::${name}::limit`)?.parentId).toBe(framed?.symbolId);
+        }
+        expect(st.getSymbol('Demo::Safety::limit')).toBeUndefined();
+
+        // `frame overTemperature` refers to a concern declared elsewhere: it declares no name of its own.
+        const referenced = st.getAllSymbols().find(s => s.kind === 'concern' && s.parentId === safety.symbolId && !s.name);
+        expect(referenced).toMatchObject({ declaration: 'overTemperature' });
+        expect(st.getAllSymbols().find(s => s.name === 'margin')?.parentId).toBe(referenced?.symbolId);
     });
 });

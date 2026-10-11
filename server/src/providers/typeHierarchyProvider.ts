@@ -99,7 +99,8 @@ export class TypeHierarchyProvider {
             case SysMLElementKind.ConnectionDef: return SymbolKind.Interface;
             case SysMLElementKind.EnumDef: return SymbolKind.Enum;
             case SysMLElementKind.CalcDef: return SymbolKind.Function;
-            case SysMLElementKind.RequirementDef: return SymbolKind.Object;
+            case SysMLElementKind.RequirementDef:
+            case SysMLElementKind.ConcernDef: return SymbolKind.Object;
             case SysMLElementKind.ConstraintDef: return SymbolKind.Constant;
             default: return SymbolKind.Class;
         }

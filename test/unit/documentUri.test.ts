@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canonicalUri, isSameDocumentUri } from '../../server/src/utils/documentUri.js';
+import { canonicalUri, isInFolder, isSameDocumentUri } from '../../server/src/utils/documentUri.js';
 
 describe('canonicalUri', () => {
     it('maps an encoded-colon and a plain-colon Windows URI to the same key', () => {
@@ -42,5 +42,21 @@ describe('isSameDocumentUri', () => {
     it('distinguishes different documents', () => {
         expect(isSameDocumentUri('file:///c:/a/x.sysml', 'file:///c:/a/y.sysml')).toBe(false);
         expect(isSameDocumentUri('file:///c:/a/x.sysml', 'https://example.com/c:/a/x.sysml')).toBe(false);
+    });
+});
+
+describe('isInFolder', () => {
+    it('contains the documents below a folder, with or without its trailing slash', () => {
+        expect(isInFolder('file:///w/a/x.sysml', 'file:///w/a')).toBe(true);
+        expect(isInFolder('file:///w/a/sub/x.sysml', 'file:///w/a/')).toBe(true);
+    });
+
+    it('matches whole folder names only', () => {
+        expect(isInFolder('file:///w/ab/x.sysml', 'file:///w/a')).toBe(false);
+        expect(isInFolder('file:///w/x.sysml', 'file:///w/a')).toBe(false);
+    });
+
+    it('matches the spellings of one Windows folder', () => {
+        expect(isInFolder('file:///c%3A/w/x.sysml', 'file:///C:/w')).toBe(true);
     });
 });

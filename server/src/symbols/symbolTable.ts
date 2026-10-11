@@ -26,6 +26,9 @@ const RULE_INDEX_TO_KIND = new Map<number, SysMLElementKind>([
     [SysMLv2Parser.RULE_actionDefinition, SysMLElementKind.ActionDef],            // 287
     [SysMLv2Parser.RULE_stateDefinition, SysMLElementKind.StateDef],              // 343
     [SysMLv2Parser.RULE_requirementDefinition, SysMLElementKind.RequirementDef],  // 384
+    [SysMLv2Parser.RULE_concernDefinition, SysMLElementKind.ConcernDef],          // 405
+    [SysMLv2Parser.RULE_concernUsage, SysMLElementKind.ConcernUsage],             // 406
+    [SysMLv2Parser.RULE_framedConcernUsage, SysMLElementKind.ConcernUsage],       // 394
     [SysMLv2Parser.RULE_constraintDefinition, SysMLElementKind.ConstraintDef],    // 380
     [SysMLv2Parser.RULE_itemDefinition, SysMLElementKind.ItemDef],                // 244
     [SysMLv2Parser.RULE_allocationDefinition, SysMLElementKind.AllocationDef],    // 275
@@ -62,6 +65,9 @@ const RULE_INDEX_TO_KIND = new Map<number, SysMLElementKind>([
     [SysMLv2Parser.RULE_referenceUsage, SysMLElementKind.RefUsage],               // 213
     [SysMLv2Parser.RULE_interfaceUsage, SysMLElementKind.InterfaceUsage],         // 268
     [SysMLv2Parser.RULE_performActionUsage, SysMLElementKind.PerformActionUsage], // 298
+    // A state's `entry`/`do`/`exit` action (`exit action a : A;`, `exit a;`): the
+    // StatePerformActionUsage production, a PerformActionUsage without `perform`.
+    [SysMLv2Parser.RULE_statePerformActionUsage, SysMLElementKind.PerformActionUsage], // 352
     [SysMLv2Parser.RULE_exhibitStateUsage, SysMLElementKind.ExhibitStateUsage],   // 359
     [SysMLv2Parser.RULE_transitionUsage, SysMLElementKind.TransitionUsage],       // 360
     [SysMLv2Parser.RULE_occurrenceDefinition, SysMLElementKind.OccurrenceDef],    // 231
@@ -170,6 +176,7 @@ const TYPE_RECURSE_RULE_INDICES: ReadonlySet<number> = new Set([
     SysMLv2Parser.RULE_usageCompletion,           // 210
     SysMLv2Parser.RULE_definition,                // 192
     SysMLv2Parser.RULE_usage,                     // 208
+    SysMLv2Parser.RULE_payloadFeatureSpecializationPart, // 157
 ]);
 
 /** Rules containing documentation */
@@ -979,7 +986,9 @@ export class SymbolTable {
         // Extract type names for both usages (typing) and definitions (specialization)
         const typeNames = isFlowUsage(kind)
             ? this.extractFlowTypeNames(ctx)
-            : this.extractTypeNames(ctx);
+            : transition
+                ? this.extractTransitionTypeNames(ctx)
+                : this.extractTypeNames(ctx);
         const specializationNames = this.extractSpecializationNames(ctx);
         const redefinedFeatureTargets = this.extractRedefinedFeatureTargets(ctx);
         const typeName = typeNames[0];
@@ -1131,6 +1140,26 @@ export class SymbolTable {
             ?? this.findOwnHeaderRule(declaration, SysMLv2Parser.RULE_usageDeclaration)
         );
         return typeDeclaration ? this.extractTypeNames(typeDeclaration) : [];
+    }
+
+    /**
+     * A transition's own typing, then the types of the payload its trigger
+     * accepts (`accept cmd : Command`, `accept Command`; TriggerAction ->
+     * AcceptParameterPart -> PayloadParameter). Read from the parse tree only:
+     * the regex fallback of `extractTypeNames` runs on whitespace-free text, where
+     * the payload type runs into the guard, effect or target that follows it
+     * (`Commandifcmd`, `Commandthenbusy`).
+     */
+    private extractTransitionTypeNames(ctx: ParserRuleContext): string[] {
+        const names: string[] = [];
+        this.collectTypeNamesFromTree(ctx, names, 0);
+        const trigger = this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_triggerActionMember);
+        const parameter = trigger && this.findRuleContext(trigger, SysMLv2Parser.RULE_payloadParameter);
+        if (parameter) {
+            const payload = this.findRuleContext(parameter, SysMLv2Parser.RULE_payloadFeature) ?? parameter;
+            this.collectTypeNamesFromTree(payload, names, 0);
+        }
+        return names;
     }
 
     /** Find the first descendant of `ctx` with rule `ruleIndex`, in source order. */
@@ -1304,7 +1333,7 @@ export class SymbolTable {
         transition: { source?: string; target?: string } | undefined,
     ): string | undefined {
         if (!isDefinition(kind) && !isUsageKind(kind)) return undefined;
-        if (transition && !(transition.source && transition.target) && this.extractTypeNames(ctx).length === 0) return undefined;
+        if (transition && !(transition.source && transition.target) && this.extractTransitionTypeNames(ctx).length === 0) return undefined;
         return this.declarationText(ctx);
     }
 

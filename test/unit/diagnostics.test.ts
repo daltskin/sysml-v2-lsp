@@ -324,6 +324,48 @@ package Test {
             const torqueDiag = unresolvedDiags.find(d => d.message.includes("'Torque'"));
             expect(torqueDiag).toBeUndefined();
         });
+
+        it('should resolve the payload type of a transition trigger followed by a guard', async () => {
+            const text = `
+package Test {
+    private import ScalarValues::*;
+    item def Command {
+        attribute code : Natural;
+    }
+    state def Controller {
+        entry; then idle;
+        state idle;
+        state busy;
+        transition go
+            first idle
+            accept cmd : Command
+            if cmd.code == 0
+            then busy;
+        transition
+            first busy
+            accept cmd : Command
+            then idle;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            expect(diags.filter(d => d.code === 'unresolved-type')).toEqual([]);
+        });
+
+        it('should still flag an undefined payload type of a transition trigger', async () => {
+            const text = `
+package Test {
+    state def Controller {
+        state idle;
+        state busy;
+        transition go first idle accept cmd : Missing then busy;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const messages = diags.filter(d => d.code === 'unresolved-type').map(d => d.message);
+            expect(messages).toEqual(["Type 'Missing' is not defined in the current document or standard library"]);
+        });
     });
 
     describe('invalid multiplicity bounds', () => {
@@ -852,6 +894,26 @@ package B {
 
             const unused = diags.filter(d => d.code === 'unused-definition');
             expect(unused.length).toBe(0);
+        });
+
+        it('should count action definitions that type a state\'s entry, do or exit action', async () => {
+            const text = `
+package Demo {
+    action def Arrive;
+    action def Work;
+    action def WriteSafeState;
+    state def Controller {
+        entry; then running;
+        state running {
+            entry action arrive : Arrive;
+            do action work : Work;
+            exit action leave : WriteSafeState;
+        }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            expect(diags.filter(d => d.code === 'unused-definition')).toEqual([]);
         });
 
         it('should count part usages used as connect sources and targets', async () => {
@@ -2987,6 +3049,40 @@ part def A {
             expect(ambiguous.length).toBe(2);
             // Same document: named as "this document", with the other declaration's line.
             expect(ambiguous.every(d => /also declared as part def in this document \(line \d+\)\.$/.test(d.message))).toBe(true);
+        });
+
+        it('does not flag same-named features declared in the bodies of two concern usages', async () => {
+            const text = `
+package Hazards {
+    private import ScalarValues::*;
+    concern def Hazard {
+        attribute severity : Natural;
+    }
+    concern overTemperature : Hazard {
+        attribute limit : Natural = 85;
+    }
+    concern underVoltage : Hazard {
+        attribute limit : Natural = 9;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            expect(diags.filter(d => d.code === 'ambiguous-namespace-name')).toEqual([]);
+        });
+
+        it('does not flag same-named features declared in the bodies of two framed concerns', async () => {
+            const text = `
+package Hazards {
+    private import ScalarValues::*;
+    concern def Hazard;
+    requirement def Safety {
+        frame concern thermal : Hazard { attribute limit : Natural; }
+        frame concern voltage : Hazard { attribute limit : Natural; }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            expect(diags.filter(d => d.code === 'ambiguous-namespace-name')).toEqual([]);
         });
 
         it('does not flag a legitimate package reopened across files as a conflict', async () => {

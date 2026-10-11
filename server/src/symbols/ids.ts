@@ -12,8 +12,8 @@ import { SysMLElementKind, SysMLSymbol, isAnonymous } from './sysmlElements.js';
  *
  * It is derived from:
  *
- * - a top-level element: its URL (the project's URL prefix and its name) in
- *   the URL namespace;
+ * - a top-level element: its URL (the URL prefix of its document's projectId
+ *   and its name) in the URL namespace;
  * - any other element: its path in the namespace of its top-level element's
  *   UUID. The path is its qualified name as written in the notation; without
  *   one, its owner's path, `/` and its declaration as written (KerML uses a
@@ -90,7 +90,7 @@ export class IdRegistry {
             ? this.qualifiedNameAsWritten(declaration)
             : owner ? `${this.paths.get(owner)}/${segmentOf(declaration)}` : segmentOf(declaration);
         const namespace = owner ? this.topLevelOf(owner).symbolId : NAMESPACE_URL;
-        const key = owner ? path : getUrlPrefix() + encodeURIComponent(path);
+        const key = owner ? path : getUrlPrefix(declaration.uri) + encodeURIComponent(path);
         const groupId = this.uuidOf(namespace, key);
         this.groupKeys.set(groupId, { namespace, key, path });
         this.groupOf.set(declaration, groupId);
