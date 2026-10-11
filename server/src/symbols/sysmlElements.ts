@@ -30,6 +30,8 @@ export enum SysMLElementKind {
     TransitionUsage = 'transition',
     RequirementDef = 'requirement def',
     RequirementUsage = 'requirement',
+    ConcernDef = 'concern def',
+    ConcernUsage = 'concern',
     ConstraintDef = 'constraint def',
     ConstraintUsage = 'constraint',
     ItemDef = 'item def',
@@ -122,6 +124,8 @@ export interface SysMLSymbol {
     typeNames: string[];
     /** Names referenced via :> / specializes / subsets (distinct from : typing). */
     specializationNames: string[];
+    /** Feature paths targeted by owned redefinitions, as written in the declaration. */
+    redefinedFeatureTargets?: string[];
     /** Documentation string if available */
     documentation?: string;
     /** Visibility declared on the owning membership; omitted for default public visibility. */
@@ -292,6 +296,8 @@ export function toMetaclassName(kind: SysMLElementKind): string {
         case SysMLElementKind.TransitionUsage: return 'TransitionUsage';
         case SysMLElementKind.RequirementDef: return 'RequirementDefinition';
         case SysMLElementKind.RequirementUsage: return 'RequirementUsage';
+        case SysMLElementKind.ConcernDef: return 'ConcernDefinition';
+        case SysMLElementKind.ConcernUsage: return 'ConcernUsage';
         case SysMLElementKind.ConstraintDef: return 'ConstraintDefinition';
         case SysMLElementKind.ConstraintUsage: return 'ConstraintUsage';
         case SysMLElementKind.ItemDef: return 'ItemDefinition';

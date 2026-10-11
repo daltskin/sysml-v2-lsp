@@ -26,6 +26,9 @@ const RULE_INDEX_TO_KIND = new Map<number, SysMLElementKind>([
     [SysMLv2Parser.RULE_actionDefinition, SysMLElementKind.ActionDef],            // 287
     [SysMLv2Parser.RULE_stateDefinition, SysMLElementKind.StateDef],              // 343
     [SysMLv2Parser.RULE_requirementDefinition, SysMLElementKind.RequirementDef],  // 384
+    [SysMLv2Parser.RULE_concernDefinition, SysMLElementKind.ConcernDef],          // 405
+    [SysMLv2Parser.RULE_concernUsage, SysMLElementKind.ConcernUsage],             // 406
+    [SysMLv2Parser.RULE_framedConcernUsage, SysMLElementKind.ConcernUsage],       // 394
     [SysMLv2Parser.RULE_constraintDefinition, SysMLElementKind.ConstraintDef],    // 380
     [SysMLv2Parser.RULE_itemDefinition, SysMLElementKind.ItemDef],                // 244
     [SysMLv2Parser.RULE_allocationDefinition, SysMLElementKind.AllocationDef],    // 275
@@ -228,12 +231,6 @@ const MAX_RULE_SEARCH_DEPTH = 6;
 
 const RE_TYPING = /:(?![:>])\s*('[^']+'|[A-Za-z_]\w*(?:::\w+)*)/;
 const RE_QUOTED_NAME = /'([^']+)'/;
-/**
- * Every quoted name (`STRING` in the lexer grammar) as group 1, escapes
- * included; a double-quoted string is matched without a group, so that a
- * quote inside it does not start a name.
- */
-const RE_QUOTED_NAMES = /"(?:\\.|[^"\\])*"|'((?:\\.|[^'\\])*)'/g;
 const RE_IDENT_START = /^([A-Za-z_]\w*(?:::\w+)*)/;
 
 /**
@@ -993,6 +990,7 @@ export class SymbolTable {
                 ? this.extractTransitionTypeNames(ctx)
                 : this.extractTypeNames(ctx);
         const specializationNames = this.extractSpecializationNames(ctx);
+        const redefinedFeatureTargets = this.extractRedefinedFeatureTargets(ctx);
         const typeName = typeNames[0];
         const documentation = this.extractDocumentation(ctx);
         const visibility = this.extractVisibility(ctx);
@@ -1032,6 +1030,7 @@ export class SymbolTable {
             typeName,
             typeNames,
             specializationNames,
+            redefinedFeatureTargets: redefinedFeatureTargets.length > 0 ? redefinedFeatureTargets : undefined,
             documentation,
             visibility,
             source: transition?.source,
@@ -1365,18 +1364,38 @@ export class SymbolTable {
      * such as `#metadata`.
      */
     private findOwnHeaderRule(ctx: ParserRuleContext, ruleIndex: number): ParserRuleContext | undefined {
+        const matches: ParserRuleContext[] = [];
+        this.findOwnHeaderRules(ctx, ruleIndex, matches, true);
+        return matches[0];
+    }
+
+    private findOwnHeaderRules(
+        ctx: ParserRuleContext,
+        ruleIndex: number,
+        matches: ParserRuleContext[],
+        firstOnly = false,
+    ): void {
         for (let i = 0; i < ctx.getChildCount(); i++) {
             const child = ctx.getChild(i);
             if (!(child instanceof ParserRuleContext)) continue;
-            if (child.ruleIndex === ruleIndex) return child;
+            if (child.ruleIndex === ruleIndex) {
+                matches.push(child);
+                if (firstOnly) return;
+                continue;
+            }
             if (RULE_INDEX_TO_KIND.has(child.ruleIndex) || BODY_RULE_INDICES.has(child.ruleIndex)
                 || child.ruleIndex === SysMLv2Parser.RULE_valuePart || FLOW_PART_RULE_INDICES.has(child.ruleIndex)
                 || child.ruleIndex === SysMLv2Parser.RULE_ownedCrossMultiplicityMember
                 || this.isPrefixOrExtensionContext(child)) continue;
-            const found = this.findOwnHeaderRule(child, ruleIndex);
-            if (found) return found;
+            this.findOwnHeaderRules(child, ruleIndex, matches, firstOnly);
+            if (firstOnly && matches.length > 0) return;
         }
-        return undefined;
+    }
+
+    private extractRedefinedFeatureTargets(ctx: ParserRuleContext): string[] {
+        const targets: ParserRuleContext[] = [];
+        this.findOwnHeaderRules(ctx, SysMLv2Parser.RULE_ownedRedefinition, targets);
+        return targets.map(target => target.getText());
     }
 
     /**
@@ -1412,13 +1431,7 @@ export class SymbolTable {
         return segment ? this.unquoteName(segment) : undefined;
     }
 
-    /**
-     * An element's declaration as written, without its body: its tokens up to
-     * its body or closing `;`, each exactly as written (a quoted name keeps its
-     * spaces), with one space wherever the source has whitespace or a comment
-     * between two of them (`connect a.p to b.p`, `connection : Conn`).
-     */
-    private declarationText(ctx: ParserRuleContext): string | undefined {
+    private declarationTokens(ctx: ParserRuleContext): Token[] {
         const tokens: Token[] = [];
         const visit = (node: ParserRuleContext): boolean => {
             for (let i = 0; i < node.getChildCount(); i++) {
@@ -1433,6 +1446,17 @@ export class SymbolTable {
             return false;
         };
         visit(ctx);
+        return tokens;
+    }
+
+    /**
+     * An element's declaration as written, without its body: its tokens up to
+     * its body or closing `;`, each exactly as written (a quoted name keeps its
+     * spaces), with one space wherever the source has whitespace or a comment
+     * between two of them (`connect a.p to b.p`, `connection : Conn`).
+     */
+    private declarationText(ctx: ParserRuleContext): string | undefined {
+        const tokens = this.declarationTokens(ctx);
         let text = '';
         tokens.forEach((token, i) => {
             if (i > 0 && token.start > tokens[i - 1].stop + 1) text += ' ';
@@ -1657,20 +1681,21 @@ export class SymbolTable {
     }
 
     /**
-     * The declaration part of `ctx`'s text (before its body's `{`), with each
-     * quoted name replaced by a numbered placeholder (`'0'`, `'1'`, ...), and
+     * The declaration tokens before the body, with each lexer STRING token
+     * replaced by a numbered placeholder (`'0'`, `'1'`, ...), and
      * `quotedName`, which turns a placeholder in a part of that text back into
-     * the name. A quoted name may hold any character but an unescaped quote
-     * (`'Structure: System Context'`), so the fallback regexes must never see
-     * its `:`, `:>`, `{` or keywords.
+     * the name. SysML 2.0 section 7.2.2 permits punctuation in unrestricted
+     * names (the STRING lexer production), so fallback regexes must never see
+     * their `:`, `:>`, `{` or keywords. Documentation is not a name token.
      */
     private maskedDeclaration(ctx: ParserRuleContext): { text: string; quotedName: (part: string) => string | undefined } {
         const quoted: string[] = [];
-        const masked = ctx.getText().replace(RE_QUOTED_NAMES, (match, inner: string | undefined) =>
-            inner === undefined ? match : `'${quoted.push(inner) - 1}'`);
-        const braceIdx = masked.indexOf('{');
+        const masked = this.declarationTokens(ctx).map(token => {
+            const text = token.text ?? '';
+            return token.type === SysMLv2Lexer.STRING ? `'${quoted.push(text.slice(1, -1)) - 1}'` : text;
+        }).join('');
         return {
-            text: braceIdx >= 0 ? masked.substring(0, braceIdx) : masked,
+            text: masked,
             quotedName: (part) => {
                 const qm = part.match(RE_QUOTED_NAME);
                 return qm ? quoted[Number(qm[1])] : undefined;
