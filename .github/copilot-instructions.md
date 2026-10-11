@@ -10,6 +10,17 @@ Every change that affects how SysML or KerML is parsed, named, resolved, validat
 4. Add a regression test for the specified behaviour that fails without the change.
 5. Where the server knowingly departs from the specification, document the departure in the changelog and code rather than leaving it implicit.
 
+## Generated and upstream-managed files
+
+Every change and review must check whether affected files are generated or replaced by an update workflow. A fix that exists only in an overwritten file will be lost on the next grammar, OMG library or dependency update.
+
+1. Before editing, identify the source of truth and the command that produces or downloads each affected artifact. Check file headers, the [Makefile](../Makefile), package scripts and generation scripts; being tracked in Git does not make a file safe to hand-edit.
+2. Treat the downloaded grammar files under `grammar/`, ANTLR outputs under `server/src/generated/` (including TypeScript, token and interpreter files), `server/src/parser/dfaSnapshot.ts`, the downloaded models under `sysml.library/`, bundled-library outputs and compiled/package outputs as managed artifacts. This list is not exhaustive. Handwritten helpers such as `server/src/parser/dfaLoader.ts` and generator scripts are not generated merely because they work with these artifacts.
+3. Do not manually fix generated or downloaded artifacts. Change the handwritten implementation, generator or upstream source instead, and regenerate or refresh the artifacts. Grammar fixes belong in `daltskin/sysml-v2-grammar` and its pinned release; standard-library fixes belong in the upstream library source. Follow the specification-conformance rules for language changes.
+4. If an upstream workaround is unavoidable, make it an explicitly documented, reproducible patch applied by the update/generation workflow, not an edit to the refreshed copy alone. Patch application must fail visibly if a newer upstream release no longer matches; do not silently skip it. Record its upstream issue, rationale and removal conditions.
+5. Validate fixes after running the applicable workflow with the intended pinned inputs: `make update-grammar` for a grammar refresh, `npm run generate` for parser generation, `make dfa` for the DFA snapshot, `make update-library` for a library refresh, and the applicable bundle/build commands for their outputs. Add or reuse a focused regression test and run it after regeneration so success cannot depend on a manual artifact edit. Review the resulting diff for unexpected changes.
+6. In code reviews, flag manual artifact edits without a corresponding source-of-truth change or reproducible update step. Report the artifact's origin, regeneration command and checks performed; if regeneration cannot be run, state that limitation rather than claiming the fix survives future updates.
+
 ## Security and abuse prevention
 
 Treat security as a requirement for every change, including generated code, dependencies, build scripts and CI workflows. Instructions and passing tests do not guarantee the absence of vulnerabilities; report the checks performed and any unresolved risks rather than claiming the code is completely secure.

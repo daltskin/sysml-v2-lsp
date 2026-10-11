@@ -255,6 +255,19 @@ package Test {
             expect(unresolvedDiags[0].message).toContain("'Engine'");
         });
 
+        it('should not read a colon inside a quoted name as a typing', async () => {
+            const text = `
+package QuotedColonName {
+    package 'Structure: System Context' {
+        part def 'Unit: Main';
+        part 'unit: main' : 'Unit: Main';
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            expect(diags.filter(d => d.code === 'unresolved-type')).toEqual([]);
+        });
+
         it('should not flag types that are defined in the document', async () => {
             const text = `
 package Test {
@@ -461,6 +474,37 @@ package Test {
             ]);
         });
 
+        it.each([
+            ['qualified', 'Correct::Device', false],
+            ['local', 'Device', false],
+            ['qualified inherited', 'Correct::SpecializedDevice', true],
+            ['local inherited', 'SpecializedDevice', true],
+        ] as const)('should resolve connector member types in their own namespace (%s)', async (_, deviceType, inherited) => {
+            const text = `
+package Other {
+    part def Device { attribute signal : Real; }
+    part def SpecializedDevice :> Device;
+}
+package Correct {
+    port def LinePort { attribute level : Real; }
+    port def CablePort { port core : LinePort; }
+    part def Source { port signal : LinePort; }
+    part def Device { port signal : CablePort; }
+    ${inherited ? 'part def SpecializedDevice :> Device;' : ''}
+    part system {
+        part source : Source;
+        part device : ${deviceType};
+        connect source.signal to device.signal;
+        connect source.signal to device.signal.core;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            expect(diags.filter(d => d.code === 'incompatible-port-types').map(d => d.message)).toEqual([
+                "Port compatibility issue: 'signal' (LinePort) is connected to 'signal' (CablePort)",
+            ]);
+        });
+
         it('should resolve an end to a port declared in the body of a part usage', async () => {
             const text = `
 package Test {
@@ -500,6 +544,289 @@ package Test {
             const diags = await getSemanticDiagnostics(text);
             const constraintDiags = diags.filter(d => d.code === 'unresolved-constraint-reference');
             expect(constraintDiags.length).toBeGreaterThanOrEqual(1);
+        });
+
+        it('should resolve inherited requirement subjects and their typed feature paths', async () => {
+            const text = `
+package Generic {
+    part def MainComponent {
+        attribute throughput : Real;
+    }
+
+    requirement def ThroughputRequirement {
+        subject transferringComponent : MainComponent;
+        attribute rate : Real;
+    }
+
+    requirement def specificThroughputRequirementUse :> ThroughputRequirement {
+        require constraint {
+            transferringComponent.throughput >= rate
+        }
+        require constraint {
+            transferringComponent.missing >= rate
+        }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unresolved = diags.filter(d => d.code === 'unresolved-constraint-reference');
+
+            expect(unresolved.map(d => d.message)).toEqual([
+                "Unresolved constraint reference 'transferringComponent.missing' in scope 'specificThroughputRequirementUse'",
+            ]);
+        });
+
+        it('should not resolve a base requirement subject after the specialized requirement renames it', async () => {
+            const text = `
+package Generic {
+    part def MainComponent {
+        attribute throughput : Real;
+    }
+
+    requirement def ThroughputRequirement {
+        subject subj : MainComponent;
+        attribute rate : Real;
+    }
+
+    requirement def SpecificThroughputRequirement :> ThroughputRequirement {
+        subject transferringComponent : MainComponent;
+        require constraint {
+            transferringComponent.throughput >= rate
+        }
+        require constraint {
+            subj.throughput >= rate
+        }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unresolved = diags.filter(d => d.code === 'unresolved-constraint-reference');
+
+            expect(unresolved.map(d => d.message)).toEqual([
+                "Unresolved constraint reference 'subj.throughput' in scope 'SpecificThroughputRequirement'",
+            ]);
+        });
+
+        it.each(['Base, Right, Left', 'Left, Right, Base'])(
+            'should hide a renamed subject inherited through a redundant direct base (%s)',
+            async (parents) => {
+                const text = `
+package Generic {
+    part def Component {
+        attribute metric : Real;
+    }
+    requirement def Base {
+        subject oldSubject : Component;
+    }
+    requirement def Right :> Base {
+        subject newSubject : Component;
+    }
+    requirement def Left {
+        subject unrelatedSubject : Component;
+    }
+    requirement def Combined :> ${parents} {
+        require constraint { newSubject.metric >= 0 }
+        require constraint { unrelatedSubject.metric >= 0 }
+        require constraint { oldSubject.metric >= 0 }
+    }
+}
+`;
+                const diags = await getSemanticDiagnostics(text);
+                const unresolved = diags.filter(d => d.code === 'unresolved-constraint-reference');
+
+                expect(unresolved.map(d => d.message)).toEqual([
+                    "Unresolved constraint reference 'oldSubject.metric' in scope 'Combined'",
+                ]);
+            });
+
+        it('should hide explicitly redefined inherited feature names in typed paths', async () => {
+            const text = `
+package Generic {
+    part def BaseComponent {
+        attribute oldMetric : Real;
+    }
+
+    part def SpecializedComponent :> BaseComponent {
+        attribute newMetric : Real redefines oldMetric;
+    }
+
+    requirement def MetricRequirement {
+        subject component : SpecializedComponent;
+        require constraint {
+            component.newMetric >= 0
+        }
+        require constraint {
+            component.oldMetric >= 0
+        }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unresolved = diags.filter(d => d.code === 'unresolved-constraint-reference');
+
+            expect(unresolved.map(d => d.message)).toEqual([
+                "Unresolved constraint reference 'component.oldMetric' in scope 'MetricRequirement'",
+            ]);
+        });
+
+        it('should only allow public features after the first segment of a typed path', async () => {
+            const text = `
+package Generic {
+    part def BaseComponent {
+        protected attribute internalMetric : Real;
+        attribute publicMetric : Real;
+    }
+
+    part def SpecializedComponent :> BaseComponent;
+
+    requirement def MetricRequirement {
+        subject component : SpecializedComponent;
+        require constraint {
+            component.publicMetric >= 0
+        }
+        require constraint {
+            component.internalMetric >= 0
+        }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unresolved = diags.filter(d => d.code === 'unresolved-constraint-reference');
+
+            expect(unresolved.map(d => d.message)).toEqual([
+                "Unresolved constraint reference 'component.internalMetric' in scope 'MetricRequirement'",
+            ]);
+        });
+
+        it('should resolve inherited typed feature paths beyond 64 specialization levels', async () => {
+            const definitions = [
+                'part def Level0 { attribute metric : Real; }',
+                ...Array.from({ length: 80 }, (_, index) =>
+                    `part def Level${index + 1} :> Level${index};`),
+            ].join('\n');
+            const text = `
+package Generic {
+    ${definitions}
+    requirement def DeepRequirement {
+        subject component : Level80;
+        require constraint {
+            component.metric >= 0
+        }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unresolved = diags.filter(d => d.code === 'unresolved-constraint-reference');
+
+            expect(unresolved).toEqual([]);
+        });
+
+        it('should terminate inherited feature lookup safely through specialization cycles', async () => {
+            const text = `
+package Generic {
+    part def LevelA :> LevelB;
+    part def LevelB :> LevelA {
+        attribute metric : Real;
+    }
+
+    requirement def CyclicRequirement {
+        subject component : LevelA;
+        require constraint {
+            component.metric >= 0
+        }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unresolved = diags.filter(d => d.code === 'unresolved-constraint-reference');
+
+            expect(unresolved).toEqual([]);
+        });
+
+        it('should hide the exact redefined feature in a multi-parent hierarchy', async () => {
+            const text = `
+package Generic {
+    part def OldType {
+        attribute onlyOld : Real;
+    }
+
+    part def NewType {
+        attribute onlyBranchB : Real;
+    }
+
+    part def GrandBase {
+        attribute metric : OldType;
+    }
+
+    part def BranchA :> GrandBase;
+
+    part def BranchB {
+        attribute metric : NewType;
+    }
+
+    part def Derived :> BranchA, BranchB {
+        attribute replacement : OldType redefines BranchA::metric;
+    }
+
+    requirement def MultiParentRequirement {
+        subject target : Derived;
+        require constraint {
+            target.metric.onlyBranchB >= 0
+        }
+        require constraint {
+            target.metric.onlyOld >= 0
+        }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const unresolved = diags.filter(d => d.code === 'unresolved-constraint-reference');
+
+            expect(unresolved.map(d => d.message)).toEqual([
+                "Unresolved constraint reference 'target.metric.onlyOld' in scope 'MultiParentRequirement'",
+            ]);
+        });
+
+        it('should visit each specialization ancestor once in a layered diamond', async () => {
+            const { DocumentManager } = await import('../../server/src/documentManager.js');
+            const { SemanticValidator } = await import('../../server/src/providers/semanticValidator.js');
+            const { buildSymbolIndexes } = await import('../../server/src/symbols/namespaceResolver.js');
+            const definitions = ['part def Base { attribute oldMetric : Real; }'];
+            for (let level = 1; level <= 12; level++) {
+                const parents = level === 1 ? 'Base' : `Level${level - 1}A, Level${level - 1}B`;
+                definitions.push(`part def Level${level}A :> ${parents};`);
+                definitions.push(`part def Level${level}B :> ${parents};`);
+            }
+            const text = `
+package Generic {
+    ${definitions.join('\n')}
+    part def Derived :> Level12A, Level12B {
+        attribute newMetric : Real redefines Base::oldMetric;
+    }
+    requirement def DiamondRequirement {
+        subject component : Derived;
+        require constraint { component.newMetric >= 0 }
+        require constraint { component.oldMetric >= 0 }
+    }
+}
+`;
+            const manager = new DocumentManager();
+            const uri = 'file:///diamond.sysml';
+            const parsed = manager.parse(await makeDoc(text, uri));
+            expect(parsed.errors).toEqual([]);
+            const symbols = manager.getWorkspaceSymbolTable().getAllSymbols();
+            const derived = symbols.find(symbol => symbol.name === 'Derived');
+            expect(derived).toBeDefined();
+            const validator = new SemanticValidator(manager);
+            const hierarchy = validator['getSpecializationHierarchy'](derived!, buildSymbolIndexes(symbols)).flat();
+
+            expect(hierarchy).toHaveLength(26);
+            expect(new Set(hierarchy.map(symbol => symbol.symbolId)).size).toBe(hierarchy.length);
+            const unresolved = validator.validate(uri)
+                .filter(diagnostic => diagnostic.code === 'unresolved-constraint-reference');
+            expect(unresolved.map(diagnostic => diagnostic.message)).toEqual([
+                "Unresolved constraint reference 'component.oldMetric' in scope 'DiamondRequirement'",
+            ]);
         });
 
         it('should resolve constraint references from an anonymous interface\'s own members', async () => {
@@ -2818,6 +3145,40 @@ part def A {
             expect(ambiguous.length).toBe(2);
             // Same document: named as "this document", with the other declaration's line.
             expect(ambiguous.every(d => /also declared as part def in this document \(line \d+\)\.$/.test(d.message))).toBe(true);
+        });
+
+        it('does not flag same-named features declared in the bodies of two concern usages', async () => {
+            const text = `
+package Hazards {
+    private import ScalarValues::*;
+    concern def Hazard {
+        attribute severity : Natural;
+    }
+    concern overTemperature : Hazard {
+        attribute limit : Natural = 85;
+    }
+    concern underVoltage : Hazard {
+        attribute limit : Natural = 9;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            expect(diags.filter(d => d.code === 'ambiguous-namespace-name')).toEqual([]);
+        });
+
+        it('does not flag same-named features declared in the bodies of two framed concerns', async () => {
+            const text = `
+package Hazards {
+    private import ScalarValues::*;
+    concern def Hazard;
+    requirement def Safety {
+        frame concern thermal : Hazard { attribute limit : Natural; }
+        frame concern voltage : Hazard { attribute limit : Natural; }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            expect(diags.filter(d => d.code === 'ambiguous-namespace-name')).toEqual([]);
         });
 
         it('does not flag a legitimate package reopened across files as a conflict', async () => {

@@ -2,8 +2,21 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `incompatible-port-types` resolves each end of a `connect` through the features its path names (`a.p.q`), not by the port's name alone. Feature types and their supertypes are resolved in their declaring namespace, so unrelated same-named definitions cannot hide a real mismatch. When two parts each had a port of the same name, the first one declared stood in for both, causing false warnings or missed mismatches. An unresolved path still falls back to the name when only one port has it (#135).
+- A colon, `:>`, `{` or keyword inside a quoted name is no longer read as part of a declaration: `package 'Structure: System Context'` was typed `System` and reported as `unresolved-type`, and `part def 'Unit: Main'` was typed `Main`. Type and specialization fallback extraction masks the declaration's lexer `STRING` tokens, without scanning documentation or nested members, avoiding quadratic regex backtracking on quote-heavy comments (#134).
+- Visit each specialization ancestor only once when resolving inherited constraint features, preventing exponential queue growth through layered diamond inheritance (#127).
+- Hide implicitly redefined requirement subjects according to the declaring requirement's specialization ancestors, including redundant direct bases in multiple inheritance, while preserving subjects from unrelated branches.
+- Display decoded filesystem paths in workspace-folder logs and clarify that
+  element ID namespaces are used locally, without network access. Emit this
+  internal namespace information at debug level instead of info.
+
+## [0.35.0]
+
 ### Added
 
+- Add Copilot guidance to check generated and upstream-managed files during changes and reviews, fix their source of truth rather than editing overwritten artifacts, and validate fixes after regeneration.
 - A projectId per workspace folder: before scanning a folder, the server asks the client for its `sysml.project` setting (`workspace/configuration`, scoped to the folder), `{ projectId }`. A top-level element of a document in that folder (the innermost one, if nested) gets the URL `urn:uuid:<projectId>/<name>`, so the same name in two folders with different projectIds gives two symbol IDs (KerML 9.1). A folder without one uses an enclosing folder's projectId, else `initializationOptions.projectId`; one whose `projectId` isn't a UUID is reported and left out. The projectIds are asked for again on `workspace/didChangeConfiguration`, and documents already indexed under another projectId get new symbol IDs. Each folder's prefix, and where it comes from, is logged when it changes (`Folder <uri>: top-level elements' URLs start with urn:uuid:<projectId>/ (its projectId)`).
 - Follow workspace folders added or removed while running (`workspace/didChangeWorkspaceFolders`, now requested): an added folder is scanned, as at start, and the documents scanned from a removed folder are dropped.
 
@@ -15,7 +28,7 @@
 
 - A transition is typed by the payload its trigger accepts, read from the parse tree. The payload type ran into whatever followed it in the whitespace-free text (`accept cmd : Command if cmd.code == 0 then busy` gave `Commandifcmd`, `accept cmd : Command then busy` gave `Commandthenbusy`), reported as `unresolved-type`.
 - A state's `entry`, `do` and `exit` actions (`exit action leave : WriteSafeState;`, `exit leave;`) get a symbol, as a `perform action` (the `StatePerformActionUsage` production). They had none, so they were missing from the outline, and an action definition that only typed one was reported as `unused-definition`.
-- `incompatible-port-types` resolves each end of a `connect` through the features its path names (`a.p.q`: `a` in the connector's namespace or an owner, then members of each feature or its types), not by the port's name alone. When two parts each had a port of the same name, the first one declared in the workspace stood in for both: a correct connection was flagged (`'signal' (CablePort) is connected to 'core' (LinePort)`) and a wrong one was missed, depending on declaration order. A path that does not resolve still falls back to the name, when only one port has it.
+- Concern definitions and usages (`concern def H { ... }`, `concern c : H { ... }`, and a requirement's framed concerns, `frame concern c : H { ... }`) get a symbol, of the new kinds `concern def` and `concern` (metaclasses `ConcernDefinition`, `ConcernUsage`). They had none, so their members were attributed to the enclosing namespace: two concerns, or two framed concerns of one requirement, that each declared `attribute limit` were reported as `ambiguous-namespace-name`, and concerns were missing from the outline and `sysml/model`.
 
 ## [0.34.0]
 

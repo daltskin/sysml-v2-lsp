@@ -73,7 +73,11 @@ async function startServer(
         return answer;
     });
     const logs: string[] = [];
-    connection.onNotification('window/logMessage', (params: { message: string }) => { logs.push(params.message); });
+    const logLevels = new Map<string, number>();
+    connection.onNotification('window/logMessage', (params: { message: string; type: number }) => {
+        logs.push(params.message);
+        logLevels.set(params.message, params.type);
+    });
 
     /** Resolves once a log message starting with `prefix` arrives after the first `seen` ones. */
     async function logged(prefix: string, seen = 0) {
@@ -105,12 +109,13 @@ async function startServer(
 
     /**
      * The URL prefix and its source the server last logged for the folder `path`
-     * (`Folder <uri>: top-level elements' URLs start with <prefix> (<source>)`).
+    * (`Folder <path>: element ID namespace <prefix> (<source>; ID namespace only, no network access)`).
      */
     function loggedPrefix(path: string) {
-        const line = `Folder ${pathToFileURL(path).toString()}: top-level elements' URLs start with `;
+        const line = `Folder ${path}: element ID namespace `;
         const message = logs.filter(m => m.startsWith(line)).at(-1);
-        const match = message?.slice(line.length).match(/^(\S+) \((.+)\)$/);
+        if (message) expect(logLevels.get(message)).toBe(5);
+        const match = message?.slice(line.length).match(/^(\S+) \((.+); ID namespace only, no network access\)$/);
         return match ? { prefix: match[1], source: match[2] } : undefined;
     }
 
@@ -166,7 +171,7 @@ describe('a projectId per workspace folder (sysml.project)', () => {
 
     async function workspace(): Promise<{ folderA: string; folderB: string; projectOf: (folderUri: string) => string | undefined; projects: Record<string, string> }> {
         root = await mkdtemp(join(tmpdir(), 'sysml-folder-projects-'));
-        const folderA = join(root, 'a');
+        const folderA = join(root, 'Camera 100% Example');
         const folderB = join(root, 'b');
         await mkdir(folderA);
         await mkdir(folderB);

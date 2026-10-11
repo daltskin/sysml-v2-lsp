@@ -54,8 +54,8 @@ import { ReferencesProvider } from './providers/referencesProvider.js';
 import { RenameProvider } from './providers/renameProvider.js';
 import { SemanticTokensProvider, tokenModifiers, tokenTypes } from './providers/semanticTokensProvider.js';
 import { SemanticValidator } from './providers/semanticValidator.js';
-import { DEFAULT_SKIP_DIRS, findSysMLFilesAsync, readFilesBatch } from './utils/fileDiscovery.js';
 import { isInFolder, isSameDocumentUri } from './utils/documentUri.js';
+import { DEFAULT_SKIP_DIRS, findSysMLFilesAsync, readFilesBatch } from './utils/fileDiscovery.js';
 import { DEFAULT_URL_PREFIX, type FolderProjectId, getUrlPrefix, setFolderProjectIds, setProjectId } from './utils/uuid.js';
 
 /** Convert a file:// URI to a filesystem path, returning undefined for non-file URIs. */
@@ -585,7 +585,8 @@ function logFolderPrefixes(ownProjectIds: ReadonlySet<string>): void {
         const source = ownProjectIds.has(folderUri) ? 'its projectId'
             : prefix === getUrlPrefix() ? (prefix === DEFAULT_URL_PREFIX ? 'the default prefix, no projectId' : 'initializationOptions.projectId')
             : "an enclosing folder's projectId";
-        connection.console.info(`Folder ${folderUri}: top-level elements' URLs start with ${prefix} (${source})`);
+        const folderPath = toFsPath(folderUri) ?? folderUri;
+        connection.console.debug(`Folder ${folderPath}: element ID namespace ${prefix} (${source}; ID namespace only, no network access)`);
     }
     for (const folderUri of loggedFolderPrefixes.keys()) {
         if (!workspaceFolderUris.includes(folderUri)) loggedFolderPrefixes.delete(folderUri);
