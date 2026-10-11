@@ -2,6 +2,12 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Display decoded filesystem paths in workspace-folder logs and clarify that
+  element ID namespaces are used locally, without network access. Emit this
+  internal namespace information at debug level instead of info.
+
 ## [0.35.0]
 
 ### Added
