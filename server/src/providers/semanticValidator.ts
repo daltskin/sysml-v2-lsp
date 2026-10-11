@@ -1147,7 +1147,8 @@ export class SemanticValidator {
 
         // KerML v1.0 §7.3.4.5 removes redefined inherited features from the
         // effective feature set. SysML v2.0 §7.21.2 applies this to requirement
-        // subjects even when the derived requirement gives its subject a new name.
+        // subjects of actual ancestors, regardless of their depth in a combined
+        // hierarchy or whether the derived requirement gives its subject a new name.
         for (let level = membersByLevel.length - 1; level >= 0; level--) {
             for (const redefining of membersByLevel[level]) {
                 for (const target of redefining.redefinedFeatureTargets ?? []) {
@@ -1158,8 +1159,12 @@ export class SemanticValidator {
                     }
                 }
                 if (redefining.kind === SysMLElementKind.SubjectUsage) {
-                    for (const candidate of membersByLevel.slice(level + 1).flat()) {
-                        if (candidate.kind === SysMLElementKind.SubjectUsage) hiddenMembers.add(candidate.symbolId);
+                    const owner = ownerOf(redefining, indexes);
+                    if (!owner) continue;
+                    for (const ancestor of this.getSpecializationHierarchy(owner, indexes).slice(1).flat()) {
+                        for (const candidate of indexes.byParent.get(namespaceKeyOf(ancestor)) ?? []) {
+                            if (candidate.kind === SysMLElementKind.SubjectUsage) hiddenMembers.add(candidate.symbolId);
+                        }
                     }
                 }
             }
@@ -1247,9 +1252,14 @@ export class SemanticValidator {
         const visited = new Set<SysMLSymbol>([scope]);
         let frontier = [scope];
         while (frontier.length > 0) {
-            const next = frontier.flatMap(type => this.resolveDirectSupertypes(type, indexes))
-                .filter(type => !visited.has(type));
-            for (const type of next) visited.add(type);
+            const next: SysMLSymbol[] = [];
+            for (const type of frontier) {
+                for (const parent of this.resolveDirectSupertypes(type, indexes)) {
+                    if (visited.has(parent)) continue;
+                    visited.add(parent);
+                    next.push(parent);
+                }
+            }
             if (next.length > 0) levels.push(next);
             frontier = next;
         }

@@ -469,6 +469,38 @@ package Generic {
             ]);
         });
 
+        it.each(['Base, Right, Left', 'Left, Right, Base'])(
+            'should hide a renamed subject inherited through a redundant direct base (%s)',
+            async (parents) => {
+                const text = `
+package Generic {
+    part def Component {
+        attribute metric : Real;
+    }
+    requirement def Base {
+        subject oldSubject : Component;
+    }
+    requirement def Right :> Base {
+        subject newSubject : Component;
+    }
+    requirement def Left {
+        subject unrelatedSubject : Component;
+    }
+    requirement def Combined :> ${parents} {
+        require constraint { newSubject.metric >= 0 }
+        require constraint { unrelatedSubject.metric >= 0 }
+        require constraint { oldSubject.metric >= 0 }
+    }
+}
+`;
+                const diags = await getSemanticDiagnostics(text);
+                const unresolved = diags.filter(d => d.code === 'unresolved-constraint-reference');
+
+                expect(unresolved.map(d => d.message)).toEqual([
+                    "Unresolved constraint reference 'oldSubject.metric' in scope 'Combined'",
+                ]);
+            });
+
         it('should hide explicitly redefined inherited feature names in typed paths', async () => {
             const text = `
 package Generic {
@@ -614,6 +646,48 @@ package Generic {
 
             expect(unresolved.map(d => d.message)).toEqual([
                 "Unresolved constraint reference 'target.metric.onlyOld' in scope 'MultiParentRequirement'",
+            ]);
+        });
+
+        it('should visit each specialization ancestor once in a layered diamond', async () => {
+            const { DocumentManager } = await import('../../server/src/documentManager.js');
+            const { SemanticValidator } = await import('../../server/src/providers/semanticValidator.js');
+            const { buildSymbolIndexes } = await import('../../server/src/symbols/namespaceResolver.js');
+            const definitions = ['part def Base { attribute oldMetric : Real; }'];
+            for (let level = 1; level <= 12; level++) {
+                const parents = level === 1 ? 'Base' : `Level${level - 1}A, Level${level - 1}B`;
+                definitions.push(`part def Level${level}A :> ${parents};`);
+                definitions.push(`part def Level${level}B :> ${parents};`);
+            }
+            const text = `
+package Generic {
+    ${definitions.join('\n')}
+    part def Derived :> Level12A, Level12B {
+        attribute newMetric : Real redefines Base::oldMetric;
+    }
+    requirement def DiamondRequirement {
+        subject component : Derived;
+        require constraint { component.newMetric >= 0 }
+        require constraint { component.oldMetric >= 0 }
+    }
+}
+`;
+            const manager = new DocumentManager();
+            const uri = 'file:///diamond.sysml';
+            const parsed = manager.parse(await makeDoc(text, uri));
+            expect(parsed.errors).toEqual([]);
+            const symbols = manager.getWorkspaceSymbolTable().getAllSymbols();
+            const derived = symbols.find(symbol => symbol.name === 'Derived');
+            expect(derived).toBeDefined();
+            const validator = new SemanticValidator(manager);
+            const hierarchy = validator['getSpecializationHierarchy'](derived!, buildSymbolIndexes(symbols)).flat();
+
+            expect(hierarchy).toHaveLength(26);
+            expect(new Set(hierarchy.map(symbol => symbol.symbolId)).size).toBe(hierarchy.length);
+            const unresolved = validator.validate(uri)
+                .filter(diagnostic => diagnostic.code === 'unresolved-constraint-reference');
+            expect(unresolved.map(diagnostic => diagnostic.message)).toEqual([
+                "Unresolved constraint reference 'component.oldMetric' in scope 'DiamondRequirement'",
             ]);
         });
 
