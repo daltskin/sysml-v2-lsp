@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { resolve } from 'path';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 describe('Diagnostics', () => {
     it('should produce diagnostics for syntax errors', async () => {
@@ -253,6 +254,72 @@ package Test {
             const unresolvedDiags = diags.filter(d => d.code === 'unresolved-type');
             expect(unresolvedDiags.length).toBeGreaterThanOrEqual(1);
             expect(unresolvedDiags[0].message).toContain("'Engine'");
+        });
+
+        it('should not read a quoted name in a feature value as a type (a short name like \'Ω\')', async () => {
+            const text = `
+library package NIUnits {
+    private import SI::'Ω';
+
+    attribute <'MΩ'> megohm : ResistanceUnit {
+        doc /* Resistance unit equal to one million ohms. */
+
+        attribute :>> unitConversion : ConversionByPrefix {
+            attribute :>> prefix = mega;
+            attribute :>> referenceUnit = 'Ω';
+        }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const messages = diags.filter(d => d.code === 'unresolved-type').map(d => d.message);
+            expect(messages.filter(m => m.includes("'Ω'"))).toEqual([]);
+        });
+
+        it.each([
+            ['a colon', "'A : B'"],
+            ['a greater-than sign', "'A > B'"],
+            ['an escaped quote', "'A\\'B'"],
+            ['a subsetting symbol', "'A :> B'"],
+            ['a redefinition symbol', "'A :>> B'"],
+        ])('should resolve a local quoted name with %s, as a value, subsetting and qualified', async (_case, name) => {
+            const text = `
+package P {
+    attribute def Unit;
+    attribute ${name} : Unit;
+    attribute def X {
+        attribute :>> ${name} = ${name};
+    }
+    attribute narrower :> ${name};
+    attribute qualified :> P::${name};
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            expect(diags.filter(d => d.code === 'unresolved-type').map(d => d.message)).toEqual([]);
+        });
+
+        it('should still flag a quoted name with a colon that does not exist', async () => {
+            const text = `
+package P {
+    attribute def Unit;
+    attribute 'A : B' : Unit;
+    attribute narrower :> 'A : C';
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const messages = diags.filter(d => d.code === 'unresolved-type').map(d => d.message);
+            expect(messages).toEqual(["Type 'A : C' is not defined in the current document or standard library"]);
+        });
+
+        it('should still flag a quoted type that does not exist, next to a quoted feature value', async () => {
+            const text = `
+package Test {
+    attribute resistance : 'Missing Unit' = 'Ω';
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const messages = diags.filter(d => d.code === 'unresolved-type').map(d => d.message);
+            expect(messages).toEqual(["Type 'Missing Unit' is not defined in the current document or standard library"]);
         });
 
         it('should not read a colon inside a quoted name as a typing', async () => {
@@ -3591,5 +3658,71 @@ package Demo {
     connection 'a.p-b.p';
 }
 `)).toEqual(['a.p-b.p', 'a.p-b.p']);
+    });
+});
+
+// Last in this file: loading the standard library changes how later tests' references resolve.
+describe('quoted short names of standard-library elements (SI.sysml: attribute <\'Ω\'> ohm)', () => {
+    beforeAll(async () => {
+        const { initLibraryIndex } = await import('../../server/src/library/libraryIndex.js');
+        initLibraryIndex(resolve(__dirname, '..', '..', 'dist', 'server'));
+    });
+
+    /** The `unresolved-type` messages of `member`, declared in a definition whose package imports SI and ISQ. */
+    async function unresolved(member: string): Promise<string[]> {
+        const text = `
+package P {
+    private import SI::*;
+    private import ISQ::*;
+    attribute def X {
+        ${member}
+    }
+}
+`;
+        const diags = await getSemanticDiagnostics(text);
+        return diags.filter(d => d.code === 'unresolved-type').map(d => d.message);
+    }
+
+    it('reports nothing for the model of the issue, with the library loaded', async () => {
+        const text = `
+library package NIUnits {
+    private import SI::'Ω';
+    private import ISQ::*;
+    private import MeasurementReferences::*;
+    private import SIPrefixes::*;
+
+    attribute <'MΩ'> megohm : ResistanceUnit {
+        attribute :>> unitConversion : ConversionByPrefix {
+            attribute :>> prefix = mega;
+            attribute :>> referenceUnit = 'Ω';
+        }
+    }
+}
+`;
+        const diags = await getSemanticDiagnostics(text);
+        expect(diags.filter(d => d.code === 'unresolved-type').map(d => d.message)).toEqual([]);
+    });
+
+    it.each([
+        ['a value', "attribute :>> referenceUnit = 'Ω';"],
+        ['a qualified value', "attribute :>> referenceUnit = SI::'Ω';"],
+        ['a globally qualified value', "attribute :>> referenceUnit = $::SI::'Ω';"],
+        ['an initial value', "attribute :>> referenceUnit := 'Ω';"],
+        ['an expression starting with it', "attribute :>> referenceUnit = 'Ω' * 1000;"],
+        ['an expression ending with it', "attribute :>> referenceUnit = 1E6 * 'Ω';"],
+        ['a power of it, as in SI.sysml', "attribute :>> referenceUnit = 'Ω'^-1;"],
+        ['the unit of a quantity literal', "attribute r : ResistanceValue = 10 ['Ω'];"],
+        ['arguments of a call', "attribute r : ResistanceValue = f('Ω', 'V');"],
+        ['a subsetting', "attribute r :> 'Ω';"],
+        ['a qualified subsetting', "attribute r :> SI::'Ω';"],
+        ['a redefinition', "attribute :>> 'Ω';"],
+    ])('resolves it in %s', async (_case, member) => {
+        expect(await unresolved(member)).toEqual([]);
+    });
+
+    it('still reports a quoted short name the library does not have', async () => {
+        expect(await unresolved("attribute r :> 'NoSuchUnit';")).toEqual([
+            "Type 'NoSuchUnit' is not defined in the current document or standard library",
+        ]);
     });
 });

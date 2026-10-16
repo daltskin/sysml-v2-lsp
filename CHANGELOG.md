@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- A quoted name in a feature value (`:>> referenceUnit = 'Ω'`) is no longer read as the feature's type and reported as `unresolved-type`.
+- The standard-library index finds quoted short names (`<'Ω'>`, `<'A > B'>`) and quoted names with spaces (`'circular mil'`) by the name inside the quotes.
+
 ## [0.36.0]
 
 ### Fixed

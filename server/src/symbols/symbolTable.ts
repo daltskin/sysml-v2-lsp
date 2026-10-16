@@ -230,7 +230,14 @@ const RE_DEFINED_BY = /definedby\s*([A-Za-z_]\w*(?:::\w+)*(?:\s*,\s*[A-Za-z_]\w*
 const MAX_RULE_SEARCH_DEPTH = 6;
 
 const RE_TYPING = /:(?![:>])\s*('[^']+'|[A-Za-z_]\w*(?:::\w+)*)/;
-const RE_QUOTED_NAME = /'([^']+)'/;
+/**
+ * A masked quoted name (`'0'`) ending the qualified name a part of a masked
+ * declaration starts with (`'0'`, `SI::'0'`, `$::SI::'0'`), so a quoted name
+ * in a feature value (`referenceUnit = '0'`) is never taken for a type. The
+ * other segments are basic names (KerML 8.2.2.3): any other name is quoted,
+ * so masked as well.
+ */
+const RE_QUOTED_NAME = /^\s*(?:\$::)?(?:(?:[A-Za-z_]\w*|'\d+')::)*'(\d+)'/;
 const RE_IDENT_START = /^([A-Za-z_]\w*(?:::\w+)*)/;
 
 /**
@@ -1684,9 +1691,10 @@ export class SymbolTable {
      * The declaration tokens before the body, with each lexer STRING token
      * replaced by a numbered placeholder (`'0'`, `'1'`, ...), and
      * `quotedName`, which turns a placeholder in a part of that text back into
-     * the name. SysML 2.0 section 7.2.2 permits punctuation in unrestricted
-     * names (the STRING lexer production), so fallback regexes must never see
-     * their `:`, `:>`, `{` or keywords. Documentation is not a name token.
+     * the name, when it ends the qualified name the part starts with. SysML
+     * 2.0 section 7.2.2 permits punctuation in unrestricted names (the STRING
+     * lexer production), so fallback regexes must never see their `:`, `:>`,
+     * `{` or keywords. Documentation is not a name token.
      */
     private maskedDeclaration(ctx: ParserRuleContext): { text: string; quotedName: (part: string) => string | undefined } {
         const quoted: string[] = [];

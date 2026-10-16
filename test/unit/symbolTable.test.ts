@@ -1555,6 +1555,55 @@ package P {
         expect(typesOf('Spare: Unit then more')).toEqual([['Unit: Main'], ['Unit: Main']]);
         expect(typesOf('unit: main')[0]).toEqual(['Unit: Main']);
     });
+
+    it('should take no type from a quoted name in a feature value, as from an unquoted one', async () => {
+        const { st, result } = await buildST(`
+package P {
+    attribute def 'Unit: Main';
+    attribute byName :>> referenceUnit = ohm;
+    attribute byShortName :>> referenceUnit = 'Ω';
+    attribute byQualifiedShortName :>> referenceUnit = SI::'Ω';
+    attribute resistance : 'Unit: Main' = 'Ω';
+    attribute <'A :> B'> subsetLike : 'Unit: Main';
+    attribute <'A :>> B'> redefineLike :> 'A :> B' = 'A :>> B';
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        const typesOf = (name: string) => st.getAllSymbols().find(s => s.name === name)?.typeNames;
+        expect(typesOf('byName')).toEqual(['referenceUnit']);
+        expect(typesOf('byShortName')).toEqual(['referenceUnit']);
+        expect(typesOf('byQualifiedShortName')).toEqual(['referenceUnit']);
+        expect(typesOf('resistance')).toEqual(['Unit: Main']);
+        expect(typesOf('subsetLike')).toEqual(['Unit: Main']);
+        expect(typesOf('redefineLike')).toEqual(['A :> B']);
+    });
+
+    it('should read a masked quoted name only where it ends the leading qualified name', async () => {
+        const { SysMLv2Parser } = await import('../../server/src/generated/SysMLv2Parser.js');
+        const { st, result } = await buildST(`package P { attribute :>> referenceUnit = 'Ω'; }`);
+        expect(result.errors).toHaveLength(0);
+        const pending = [result.tree!];
+        let attribute;
+        while (pending.length > 0 && !attribute) {
+            const current = pending.pop()!;
+            if (current.ruleIndex === SysMLv2Parser.RULE_attributeUsage) attribute = current;
+            for (let index = 0; index < current.getChildCount(); index++) {
+                const child = current.getChild(index);
+                if (child && 'ruleIndex' in child) pending.push(child as typeof current);
+            }
+        }
+        expect(attribute).toBeDefined();
+        const masked = st['maskedDeclaration'](attribute!);
+        expect(masked.text).toContain("referenceUnit='0'");
+        expect(masked.quotedName("'0'")).toBe('Ω');
+        expect(masked.quotedName(" SI::'0'")).toBe('Ω');
+        expect(masked.quotedName("$::SI::'0'")).toBe('Ω');
+        expect(masked.quotedName("SI::'0'::'0'")).toBe('Ω');
+        expect(masked.quotedName("A::'0'::B::C::D::'0'='0'")).toBe('Ω');
+        expect(masked.quotedName("referenceUnit='0'")).toBeUndefined();
+        expect(masked.quotedName("A::B='0'")).toBeUndefined();
+    });
 });
 
 describe('isAnonymous and displayName', () => {

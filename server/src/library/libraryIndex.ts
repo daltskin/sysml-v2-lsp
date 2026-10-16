@@ -27,33 +27,42 @@ function readWord(line: string, pos: number): [string, number] | undefined {
     return pos > start ? [line.slice(start, pos), pos] : undefined;
 }
 
+/**
+ * Read an unrestricted name (`'Ω'`, `'A : B'`, `'ohm metre'`) at the quote
+ * at `pos` (KerML 8.2.2.3): the name without its quotes, and the position
+ * after the closing quote. An escaped quote (`\'`) doesn't end the name;
+ * escapes are kept as written, as the symbol table keeps them.
+ */
+function readQuotedName(line: string, pos: number): [string, number] | undefined {
+    const start = pos + 1;
+    for (pos = start; pos < line.length && line[pos] !== "'"; pos++) {
+        if (line[pos] === '\\') pos++;
+    }
+    if (pos >= line.length || pos === start) return undefined;
+    return [line.slice(start, pos), pos + 1];
+}
+
 /** Read a name that may be wrapped in single quotes ('Name') or angle brackets (<shortName>). */
 function readName(line: string, pos: number): [string, number] | undefined {
     pos = skipSpaces(line, pos);
-    if (pos < line.length && line[pos] === "'") {
-        pos++;
-        const start = pos;
-        while (pos < line.length && isWordChar(line.charCodeAt(pos))) pos++;
-        const name = line.slice(start, pos);
-        if (pos < line.length && line[pos] === "'") pos++;
-        return name ? [name, pos] : undefined;
-    }
+    if (pos < line.length && line[pos] === "'") return readQuotedName(line, pos);
     // Handle <shortName> syntax — index the short name and skip past the
     // optional long name that follows (quoted or unquoted).
     // e.g. `<knot> 'knot (nautical mile per hour)'` or `<kg> kilogram`
     if (pos < line.length && line[pos] === '<') {
-        pos++;
+        pos = skipSpaces(line, pos + 1);
+        // A quoted short name (`<'Ω'>`, `<'A > B'>`) is known by the name inside the quotes.
+        const quoted = line[pos] === "'" ? readQuotedName(line, pos) : undefined;
         const start = pos;
+        if (quoted) pos = quoted[1];
         while (pos < line.length && line[pos] !== '>') pos++;
-        const shortName = line.slice(start, pos).trim();
+        const shortName = quoted ? quoted[0] : line.slice(start, pos).trim();
         if (pos < line.length && line[pos] === '>') pos++;
         // Skip optional long name after the short name
         pos = skipSpaces(line, pos);
         if (pos < line.length && line[pos] === "'") {
             // Quoted long name — skip to closing quote
-            pos++;
-            while (pos < line.length && line[pos] !== "'") pos++;
-            if (pos < line.length) pos++;
+            pos = readQuotedName(line, pos)?.[1] ?? line.length;
         } else if (pos < line.length && isWordChar(line.charCodeAt(pos))) {
             // Unquoted long name (e.g. `<kg> kilogram`)
             while (pos < line.length && isWordChar(line.charCodeAt(pos))) pos++;
@@ -71,7 +80,9 @@ function readName(line: string, pos: number): [string, number] | undefined {
 function readLongName(line: string, pos: number): string | undefined {
     pos = skipSpaces(line, pos);
     if (pos >= line.length || line[pos] !== '<') return undefined;
-    // Skip past <shortName>
+    // Skip past <shortName>, reading a quoted one (`<'A > B'>`) to its closing quote
+    pos = skipSpaces(line, pos + 1);
+    if (line[pos] === "'") pos = readQuotedName(line, pos)?.[1] ?? line.length;
     while (pos < line.length && line[pos] !== '>') pos++;
     if (pos < line.length) pos++;
     pos = skipSpaces(line, pos);
