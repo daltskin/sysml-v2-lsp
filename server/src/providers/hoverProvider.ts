@@ -8,6 +8,7 @@ import {
 import { DocumentManager } from '../documentManager.js';
 import { getLibraryHoverInfo } from '../library/libraryIndex.js';
 import { toMetaclassName } from '../symbols/sysmlElements.js';
+import { NameReferences } from '../symbols/nameReferences.js';
 import { extractQualifiedNameAt } from '../utils/identUtils.js';
 import type { SemanticValidator } from './semanticValidator.js';
 
@@ -34,19 +35,20 @@ export class HoverProvider {
 
         // Try to extract the word at hover position (for qualified name lookup)
         const text = this.documentManager.getText(params.textDocument.uri);
-        const word = text
+        const reference = new NameReferences(this.documentManager).at(params.textDocument.uri, params.position);
+        const word = reference?.qualifiedName ?? (text
             ? this.getWordAtPosition(text, params.position.line, params.position.character)
-            : undefined;
+            : undefined);
 
         // For qualified names (e.g. ISQ::mass), check the standard
         // library first — the qualifier strongly suggests a library ref
-        if (word && word.includes('::')) {
+        if (word && word.includes('::') && !reference?.symbol) {
             const libHover = this.buildLibraryHover(word);
             if (libHover) return libHover;
         }
 
         // Find symbol at hover position
-        const symbol = symbolTable.findSymbolAtPosition(
+        const symbol = reference?.symbol ?? symbolTable.findSymbolAtPosition(
             params.textDocument.uri,
             params.position.line,
             params.position.character,
@@ -131,7 +133,7 @@ export class HoverProvider {
 
         return {
             contents: content,
-            range: symbol.selectionRange,
+            range: reference?.range ?? symbol.selectionRange,
         };
     }
 
@@ -214,5 +216,4 @@ export class HoverProvider {
         }
     }
 }
-
 

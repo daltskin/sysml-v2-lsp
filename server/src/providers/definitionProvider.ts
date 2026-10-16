@@ -5,6 +5,7 @@ import {
 import { DocumentManager } from '../documentManager.js';
 import { resolveLibraryPackage, resolveLibraryType } from '../library/libraryIndex.js';
 import { extractQualifiedNameAt } from '../utils/identUtils.js';
+import { NameReferences } from '../symbols/nameReferences.js';
 
 /**
  * Provides go-to-definition for SysML elements.
@@ -24,6 +25,10 @@ export class DefinitionProvider {
 
         // Workspace-wide symbol table for cross-file lookups (imports etc.)
         const wsSymbolTable = this.documentManager.getWorkspaceSymbolTable();
+        const reference = new NameReferences(this.documentManager).at(params.textDocument.uri, params.position);
+        if (reference?.symbol && !reference.isDeclaration) {
+            return { uri: reference.symbol.uri, range: reference.symbol.selectionRange };
+        }
 
         // Find what's at the cursor
         const symbol = symbolTable.findSymbolAtPosition(
@@ -157,5 +162,4 @@ export class DefinitionProvider {
         return extractQualifiedNameAt(lineText, character);
     }
 }
-
 

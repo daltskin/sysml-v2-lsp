@@ -6,6 +6,12 @@
 
 - A quoted name in a feature value (`:>> referenceUnit = 'Ω'`) is no longer read as the feature's type and reported as `unresolved-type`.
 - The standard-library index finds quoted short names (`<'Ω'>`, `<'A > B'>`) and quoted names with spaces (`'circular mil'`) by the name inside the quotes.
+- Support Unicode unrestricted names throughout navigation, hover, references,
+  rename, completion, quick fixes, hierarchy, import links, selection and semantic validation.
+  Decode standard name escapes consistently, preserve qualified-name segments,
+  and use UTF-16 editor positions after astral characters in interactive, batch
+  and worker parsing. Rename operates on resolved name tokens across files and
+  leaves comments, strings, usage names and unrelated declarations unchanged (#120).
 
 ## [0.36.0]
 

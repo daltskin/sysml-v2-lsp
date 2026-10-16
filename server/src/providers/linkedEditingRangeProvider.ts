@@ -3,7 +3,7 @@ import {
     LinkedEditingRanges,
 } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
-import { isAnonymous } from '../symbols/sysmlElements.js';
+import { NameReferences } from '../symbols/nameReferences.js';
 
 /**
  * Provides linked editing ranges — when you edit a symbol name,
@@ -16,29 +16,16 @@ export class LinkedEditingRangeProvider {
 
     provideLinkedEditingRanges(params: LinkedEditingRangeParams): LinkedEditingRanges | null {
         const uri = params.textDocument.uri;
-        const symbolTable = this.documentManager.getSymbolTable(uri);
-        if (!symbolTable) return null;
-
-        const text = this.documentManager.getText(uri);
-        if (!text) return null;
-
-        // Find symbol at cursor (declaration or reference)
-        const symbol = symbolTable.findSymbolAtPosition(
-            uri,
-            params.position.line,
-            params.position.character,
-        );
-        // An anonymous element has no name whose occurrences could be edited together.
-        if (!symbol || isAnonymous(symbol)) return null;
-
-        // Find all references with the same name in this document
-        const allRefs = symbolTable.findReferences(symbol.name);
-        const sameDocRefs = allRefs.filter(ref => ref.uri === uri);
+        const references = new NameReferences(this.documentManager);
+        const ref = references.at(uri, params.position);
+        if (!ref?.symbol) return null;
+        const sameDocRefs = references.to(ref.symbol)
+            .filter(occurrence => occurrence.uri === uri && occurrence.name === ref.name);
 
         if (sameDocRefs.length <= 1) return null;
 
         return {
-            ranges: sameDocRefs.map(ref => ref.selectionRange),
+            ranges: sameDocRefs.map(ref => ref.range),
         };
     }
 }

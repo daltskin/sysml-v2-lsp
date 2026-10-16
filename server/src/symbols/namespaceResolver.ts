@@ -13,6 +13,7 @@
  */
 
 import { canonicalUri, isSameDocumentUri } from '../utils/documentUri.js';
+import { splitQualifiedName } from '../utils/identUtils.js';
 import { FilterExpr, ImportTarget, SysMLElementKind, SysMLSymbol, isAnonymous, isDefinition, isUsage } from './sysmlElements.js';
 
 /**
@@ -378,6 +379,11 @@ export class NamespaceResolver {
         return this.resolveQualifiedNameFrom(ownerKeyOf(symbol, indexes.byId), name, indexes);
     }
 
+    /** Resolve an editor reference within its enclosing namespace, including the root. */
+    resolveNameIn(namespace: SysMLSymbol | undefined, name: string, indexes: SymbolIndexes): SysMLSymbol | undefined {
+        return this.resolveQualifiedNameFrom(namespace ? namespaceKeyOf(namespace) : '', name, indexes);
+    }
+
     /**
      * Resolve a (possibly qualified) name to its symbol per §7.5.1, searching
      * outward from namespace `start` and its enclosing namespaces (its own resolved
@@ -389,7 +395,7 @@ export class NamespaceResolver {
      * its own enclosing package already imported, per §7.5.1/§7.5.3).
      */
     private resolveQualifiedNameFrom(start: NamespaceKey, name: string, indexes: SymbolIndexes): SysMLSymbol | undefined {
-        const [first, ...rest] = name.split('::');
+        const [first, ...rest] = splitQualifiedName(name);
 
         let resolved: SysMLSymbol | undefined;
         for (const ancestor of this.namespaceAncestorsOf(start, indexes)) {
@@ -591,6 +597,9 @@ export class NamespaceResolver {
 
         for (const owned of indexes.byParent.get(namespace) ?? []) {
             addMember(owned.name, { symbol: owned, visibility: owned.visibility ?? 'public' });
+            if (owned.shortName) {
+                addMember(owned.shortName, { symbol: owned, visibility: owned.visibility ?? 'public' });
+            }
         }
 
         // Cycle guard: seed the cache with `members` itself -- the *same live
@@ -664,13 +673,17 @@ export class NamespaceResolver {
         switch (imp.kind) {
             case 'membership': {
                 const target = this.resolveQualifiedNameFrom(importingNamespace, imp.target, indexes);
-                if (target) addMember(target.name, { symbol: target, visibility: imp.visibility });
+                if (target) {
+                    addMember(target.name, { symbol: target, visibility: imp.visibility });
+                    if (target.shortName) addMember(target.shortName, { symbol: target, visibility: imp.visibility });
+                }
                 break;
             }
             case 'membership-deep': {
                 const target = this.resolveQualifiedNameFrom(importingNamespace, imp.target, indexes);
                 if (target) {
                     addMember(target.name, { symbol: target, visibility: imp.visibility });
+                    if (target.shortName) addMember(target.shortName, { symbol: target, visibility: imp.visibility });
                     this.importVisibleMembers(namespaceKeyOf(target), imp.visibility, indexes, addMember, true);
                 }
                 break;

@@ -26,6 +26,7 @@ import { clearAllDFAStates, hasStaleDfaStates, isDfaPreSeeded, loadDFASnapshot, 
 import { SysMLErrorListener } from './errorListener.js';
 import { EMPTY_NAME_MESSAGE, isEmptyName } from '../utils/emptyNames.js';
 import { WARMUP_TEXT } from './warmupText.js';
+import { normalizeUtf16Columns } from './positionUtils.js';
 
 // ---------------------------------------------------------------------------
 // Interruptible DFA warm-up
@@ -793,6 +794,7 @@ function handleParseRequest(msg: ParseRequest): void {
     // --- Build visible token array once for all post-parse analysis ---
     tokenStream.fill();
     const allTokens = tokenStream.getTokens();
+    normalizeUtf16Columns(text, allTokens, errors);
     const visible: Token[] = [];
     const positionIndex = new Map<string, number>();
     for (let i = 0; i < allTokens.length; i++) {

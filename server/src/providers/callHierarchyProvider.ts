@@ -11,7 +11,8 @@ import {
 } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
 import { displayName, SysMLElementKind, SysMLSymbol } from '../symbols/sysmlElements.js';
-import { isIdentPart as isWordChar } from '../utils/identUtils.js';
+import { scanQualifiedNames, splitQualifiedName } from '../utils/identUtils.js';
+import { NameReferences } from '../symbols/nameReferences.js';
 
 /**
  * Action-related keywords that create "call" relationships in SysML.
@@ -25,89 +26,29 @@ const CALL_KEYWORDS = new Set([
  */
 const USAGE_KEYWORDS = ['action', 'state', 'calc'];
 
-// ---- String scanning helpers ----
-
-function skipWS(text: string, pos: number): number {
-    while (pos < text.length && (text[pos] === ' ' || text[pos] === '\t' || text[pos] === '\n' || text[pos] === '\r')) pos++;
-    return pos;
-}
-
-function readIdent(text: string, pos: number): [string, number] | undefined {
-    pos = skipWS(text, pos);
-    const start = pos;
-    while (pos < text.length && isWordChar(text.charCodeAt(pos))) pos++;
-    return pos > start ? [text.slice(start, pos), pos] : undefined;
-}
-
-/** Check word boundary before position. */
-function wordBoundaryBefore(text: string, pos: number): boolean {
-    return pos === 0 || !isWordChar(text.charCodeAt(pos - 1));
-}
-
-/** Check word boundary after position. */
-function wordBoundaryAfter(text: string, pos: number): boolean {
-    return pos >= text.length || !isWordChar(text.charCodeAt(pos));
-}
-
 /** Find all `keyword <whitespace> targetName` at word boundaries. */
 function findKeywordTarget(text: string, keyword: string, target: string): { index: number; length: number }[] {
-    const results: { index: number; length: number }[] = [];
-    let from = 0;
-    while (from < text.length) {
-        const idx = text.indexOf(keyword, from);
-        if (idx < 0) break;
-        if (!wordBoundaryBefore(text, idx) || !wordBoundaryAfter(text, idx + keyword.length)) {
-            from = idx + 1; continue;
-        }
-        const nameStart = skipWS(text, idx + keyword.length);
-        if (text.startsWith(target, nameStart) && wordBoundaryAfter(text, nameStart + target.length)) {
-            results.push({ index: idx, length: nameStart + target.length - idx });
-        }
-        from = idx + 1;
-    }
-    return results;
+    return findKeywordCallees(text, keyword)
+        .filter(call => splitQualifiedName(call.calledName).pop() === target);
 }
 
 /** Find all typed usages `(action|state|calc) <name> : <targetName>` at word boundaries. */
 function findTypedUsageOfTarget(text: string, keywords: string[], target: string): { index: number; length: number }[] {
-    const results: { index: number; length: number }[] = [];
-    for (const kw of keywords) {
-        let from = 0;
-        while (from < text.length) {
-            const idx = text.indexOf(kw, from);
-            if (idx < 0) break;
-            if (!wordBoundaryBefore(text, idx) || !wordBoundaryAfter(text, idx + kw.length)) {
-                from = idx + 1; continue;
-            }
-            const nameResult = readIdent(text, idx + kw.length);
-            if (!nameResult) { from = idx + 1; continue; }
-            let pos = skipWS(text, nameResult[1]);
-            if (pos >= text.length || text[pos] !== ':') { from = idx + 1; continue; }
-            pos = skipWS(text, pos + 1);
-            if (text.startsWith(target, pos) && wordBoundaryAfter(text, pos + target.length)) {
-                results.push({ index: idx, length: pos + target.length - idx });
-            }
-            from = idx + 1;
-        }
-    }
-    return results;
+    return findTypedUsageCallees(text, keywords)
+        .filter(call => splitQualifiedName(call.calledName).pop() === target);
 }
 
 /** Find all `keyword <name>` and capture the name. */
 function findKeywordCallees(text: string, keyword: string): { index: number; length: number; calledName: string }[] {
     const results: { index: number; length: number; calledName: string }[] = [];
-    let from = 0;
-    while (from < text.length) {
-        const idx = text.indexOf(keyword, from);
-        if (idx < 0) break;
-        if (!wordBoundaryBefore(text, idx) || !wordBoundaryAfter(text, idx + keyword.length)) {
-            from = idx + 1; continue;
+    const names = [...scanQualifiedNames(text)];
+    for (let i = 0; i + 1 < names.length; i++) {
+        const current = names[i];
+        const next = names[i + 1];
+        if (text.slice(current.start, current.end) === keyword &&
+            /^\s+$/.test(text.slice(current.end, next.start))) {
+            results.push({ index: current.start, length: next.end - current.start, calledName: next.name });
         }
-        const nameResult = readIdent(text, idx + keyword.length);
-        if (nameResult) {
-            results.push({ index: idx, length: nameResult[1] - idx, calledName: nameResult[0] });
-        }
-        from = idx + 1;
     }
     return results;
 }
@@ -115,24 +56,15 @@ function findKeywordCallees(text: string, keyword: string): { index: number; len
 /** Find all typed usages `(action|state|calc) <name> : <typeName>` and capture the type name. */
 function findTypedUsageCallees(text: string, keywords: string[]): { index: number; length: number; calledName: string }[] {
     const results: { index: number; length: number; calledName: string }[] = [];
-    for (const kw of keywords) {
-        let from = 0;
-        while (from < text.length) {
-            const idx = text.indexOf(kw, from);
-            if (idx < 0) break;
-            if (!wordBoundaryBefore(text, idx) || !wordBoundaryAfter(text, idx + kw.length)) {
-                from = idx + 1; continue;
-            }
-            const nameResult = readIdent(text, idx + kw.length);
-            if (!nameResult) { from = idx + 1; continue; }
-            let pos = skipWS(text, nameResult[1]);
-            if (pos >= text.length || text[pos] !== ':') { from = idx + 1; continue; }
-            pos = skipWS(text, pos + 1);
-            const typeResult = readIdent(text, pos);
-            if (typeResult) {
-                results.push({ index: idx, length: typeResult[1] - idx, calledName: typeResult[0] });
-            }
-            from = idx + 1;
+    const names = [...scanQualifiedNames(text)];
+    for (let i = 0; i + 2 < names.length; i++) {
+        const current = names[i];
+        const usage = names[i + 1];
+        const type = names[i + 2];
+        if (keywords.includes(text.slice(current.start, current.end)) &&
+            /^\s+$/.test(text.slice(current.end, usage.start)) &&
+            /^\s*:\s*$/.test(text.slice(usage.end, type.start))) {
+            results.push({ index: current.start, length: type.end - current.start, calledName: type.name });
         }
     }
     return results;
@@ -186,7 +118,8 @@ export class CallHierarchyProvider {
 
         const symbolTable = this.documentManager.getWorkspaceSymbolTable();
 
-        const symbol = symbolTable.findSymbolAtPosition(uri, params.position.line, params.position.character);
+        const symbol = new NameReferences(this.documentManager).at(uri, params.position)?.symbol ??
+            symbolTable.findSymbolAtPosition(uri, params.position.line, params.position.character);
         if (!symbol) return null;
 
         // Call hierarchy makes sense for actions, states, and similar behavioral elements
@@ -277,7 +210,7 @@ export class CallHierarchyProvider {
         // 1. Explicit call keywords: `perform Brake`, `accept Accelerate`, etc.
         for (const keyword of CALL_KEYWORDS) {
             for (const m of findKeywordCallees(bodyText, keyword)) {
-                const targets = symbolTable.findByName(m.calledName);
+                const targets = symbolTable.findByName(splitQualifiedName(m.calledName).pop()!);
 
                 if (targets.length > 0) {
                     const absOffset = startOffset + m.index;
@@ -294,7 +227,7 @@ export class CallHierarchyProvider {
 
         // 2. Typed usages: `action foo : TypeDef` — composition is a call
         for (const m of findTypedUsageCallees(bodyText, USAGE_KEYWORDS)) {
-            const targets = symbolTable.findByName(m.calledName);
+            const targets = symbolTable.findByName(splitQualifiedName(m.calledName).pop()!);
             if (targets.length > 0) {
                 const absOffset = startOffset + m.index;
                 outgoing.push({

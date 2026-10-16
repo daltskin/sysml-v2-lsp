@@ -5,7 +5,7 @@ import { SysMLModelProvider } from '../model/sysmlModelProvider.js';
 import { NamespaceResolver, SymbolIndexes, buildSymbolIndexes, describeConflictingDeclarations, findConflictingDeclarations, NamespaceKey, namespaceKeyOf, otherDeclarations, ownerKeyOf, ownerOf } from '../symbols/namespaceResolver.js';
 import { SysMLElementKind, SysMLSymbol, displayName, isAnonymous, isDefinition } from '../symbols/sysmlElements.js';
 import { resolveTypeName } from '../symbols/typeResolution.js';
-import { stripComments } from '../utils/identUtils.js';
+import { scanFeaturePaths, splitQualifiedName, stripComments } from '../utils/identUtils.js';
 
 const CONSTRAINT_KEYWORDS = new Set([
     'and', 'or', 'not', 'xor', 'implies', 'if', 'then', 'else', 'true', 'false', 'null',
@@ -330,7 +330,7 @@ export class SemanticValidator {
         const referencedTypes = new Set(
             symbols
                 .filter(s => s.kind !== SysMLElementKind.Package)
-                .flatMap(s => s.typeNames),
+                .flatMap(s => s.typeNames.flatMap(name => [name, splitQualifiedName(name).at(-1)!])),
         );
 
         // Also consider expose targets in views as references
@@ -338,7 +338,7 @@ export class SemanticValidator {
             if (s.exposeTargets) {
                 for (const target of s.exposeTargets) {
                     // Extract simple name from qualified targets (e.g., "Pkg::MyPart" → "MyPart")
-                    const simpleName = target.replace(/::\*{1,2}$/, '').split('::').pop();
+                    const simpleName = splitQualifiedName(target.replace(/::\*{1,2}$/, '')).pop();
                     if (simpleName) referencedTypes.add(simpleName);
                 }
             }
@@ -346,7 +346,8 @@ export class SemanticValidator {
 
         const diagnostics: Diagnostic[] = [];
         for (const def of defsInScope) {
-            const isReferenced = referencedTypes.has(def.name);
+            const isReferenced = referencedTypes.has(def.name) ||
+                (def.shortName !== undefined && referencedTypes.has(def.shortName));
             const hasBaseType = (def.typeNames?.length ?? 0) > 0;
 
             if (!isReferenced && !hasBaseType) {
@@ -898,15 +899,20 @@ export class SemanticValidator {
         const diagnostics: Diagnostic[] = [];
         const lines = text.split('\n');
 
-        const re = /\bconnect\s+([A-Za-z_][\w.]*)\s+to\s+([A-Za-z_][\w.]*)/g;
-        let m: RegExpExecArray | null;
-        while ((m = re.exec(text)) !== null) {
-            const leftPath = m[1].split('.');
-            const rightPath = m[2].split('.');
+        const paths = [...scanFeaturePaths(text)];
+        for (let i = 0; i + 3 < paths.length; i++) {
+            const [connect, leftEnd, to, rightEnd] = paths.slice(i, i + 4);
+            if (text.slice(connect.start, connect.end) !== 'connect' ||
+                text.slice(to.start, to.end) !== 'to' ||
+                !/^\s+$/.test(text.slice(connect.end, leftEnd.start)) ||
+                !/^\s+$/.test(text.slice(leftEnd.end, to.start)) ||
+                !/^\s+$/.test(text.slice(to.end, rightEnd.start))) continue;
+            const leftPath = [...leftEnd.parts];
+            const rightPath = [...rightEnd.parts];
             const left = leftPath[leftPath.length - 1];
             const right = rightPath[rightPath.length - 1];
 
-            const scope = this.connectorScope(symbolsInUri, this.indexToRange(text, m.index, 0).start, indexes);
+            const scope = this.connectorScope(symbolsInUri, this.indexToRange(text, connect.start, 0).start, indexes);
             const lSym = this.resolveConnectorEnd(leftPath, scope, indexes);
             const rSym = this.resolveConnectorEnd(rightPath, scope, indexes);
             if (!lSym || !rSym) continue;
@@ -921,7 +927,7 @@ export class SemanticValidator {
             if (rType.startsWith('~') && rType.slice(1) === lType) continue;
 
             // Skip connections inside interface definitions
-            const matchLine = text.substring(0, m.index).split('\n').length - 1;
+            const matchLine = text.substring(0, connect.start).split('\n').length - 1;
             let insideInterfaceDef = false;
             for (let i = matchLine; i >= 0 && i >= matchLine - 30; i--) {
                 const line = (lines[i] || '').trim();
@@ -931,7 +937,7 @@ export class SemanticValidator {
             if (insideInterfaceDef) continue;
 
             // Skip connections within an interface usage
-            const precedingText = text.substring(Math.max(0, m.index - 300), m.index);
+            const precedingText = text.substring(Math.max(0, connect.start - 300), connect.start);
             if (/\binterface\s+\w[\w']*(:\w[\w']*)?\s*$/m.test(precedingText)) continue;
 
             // Skip connections between untyped port definitions (empty port defs
@@ -964,14 +970,14 @@ export class SemanticValidator {
                 if (hasSharedFeature) continue;
             }
 
-            const range = this.indexToRange(text, m.index, m[0].length);
+            const range = this.indexToRange(text, connect.start, rightEnd.end - connect.start);
             diagnostics.push({
                 severity: DiagnosticSeverity.Warning,
                 range,
                 message: `Port compatibility issue: '${left}' (${lType}) is connected to '${right}' (${rType})`,
                 source: 'sysml',
                 code: 'incompatible-port-types',
-                data: { uri },
+                data: { uri, left, right, leftType: lType },
             });
         }
 
@@ -1093,18 +1099,12 @@ export class SemanticValidator {
             const parentMembers = this.getConstraintScopeMembers(parent, indexes);
             if (parentMembers.length === 0) continue;
 
-            const ignoredRanges = this.getIgnoredBodyRanges(b.body);
-
-            const idRe = /\b([A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*)\b/g;
-            let im: RegExpExecArray | null;
-            while ((im = idRe.exec(b.body)) !== null) {
-                if (this.isIndexInRanges(im.index, ignoredRanges)) continue;
-
-                const expr = im[1];
+            for (const reference of scanFeaturePaths(b.body)) {
+                const expr = reference.name;
                 if (this.isConstraintKeyword(expr)) continue;
                 if (/^\d/.test(expr)) continue;
 
-                const path = expr.split('.');
+                const path = [...reference.parts];
                 const ok = this.resolvePathFromParent(path, parentMembers, indexes);
                 if (ok) continue;
 
@@ -1120,14 +1120,14 @@ export class SemanticValidator {
                     }
                 }
 
-                const absoluteStart = b.bodyOffset + im.index;
+                const absoluteStart = b.bodyOffset + reference.start;
                 diagnostics.push({
                     severity: DiagnosticSeverity.Warning,
-                    range: this.indexToRange(text, absoluteStart, expr.length),
+                    range: this.indexToRange(text, absoluteStart, reference.end - reference.start),
                     message: `Unresolved constraint reference '${expr}' in scope '${displayName(parent)}'`,
                     source: 'sysml',
                     code: 'unresolved-constraint-reference',
-                    data: { uri },
+                    data: { uri, scopeName: parent.name },
                 });
             }
         }
@@ -1378,32 +1378,6 @@ export class SemanticValidator {
 
     private isConstraintKeyword(value: string): boolean {
         return CONSTRAINT_KEYWORDS.has(value);
-    }
-
-    private getIgnoredBodyRanges(body: string): Array<{ start: number; end: number }> {
-        const ranges: Array<{ start: number; end: number }> = [];
-
-        // Block comments: /* ... */
-        const blockRe = /\/\*[\s\S]*?\*\//g;
-        let m: RegExpExecArray | null;
-        while ((m = blockRe.exec(body)) !== null) {
-            ranges.push({ start: m.index, end: m.index + m[0].length });
-        }
-
-        // Line comments: // ...
-        const lineRe = /\/\/[^\n\r]*/g;
-        while ((m = lineRe.exec(body)) !== null) {
-            ranges.push({ start: m.index, end: m.index + m[0].length });
-        }
-
-        return ranges;
-    }
-
-    private isIndexInRanges(index: number, ranges: Array<{ start: number; end: number }>): boolean {
-        for (const r of ranges) {
-            if (index >= r.start && index < r.end) return true;
-        }
-        return false;
     }
 
     private hasDocumentationOnlyConstraintBody(body: string): boolean {

@@ -3,6 +3,7 @@ import { SysMLv2Lexer } from '../generated/SysMLv2Lexer.js';
 import { SysMLv2Parser } from '../generated/SysMLv2Parser.js';
 import { clearAllDFAStates, hasStaleDfaStates, isDfaPreSeeded, markDfaNotPreSeeded } from './dfaLoader.js';
 import { SyntaxError, SysMLErrorListener } from './errorListener.js';
+import { normalizeUtf16Columns } from './positionUtils.js';
 
 /**
  * Result of parsing a SysML document.
@@ -20,6 +21,12 @@ export interface ParseResult {
     errors: SyntaxError[];
     /** Timing breakdown */
     timing: { lexMs: number; parseMs: number };
+}
+
+/** ANTLR counts code points; LSP's default position encoding counts UTF-16 code units. */
+function withUtf16Columns(text: string, result: ParseResult): ParseResult {
+    normalizeUtf16Columns(text, result.tokenStream.getTokens(), result.errors);
+    return result;
 }
 
 /**
@@ -53,7 +60,7 @@ export function parseDocument(text: string): ParseResult {
     if (result.errors.length > 0 && hasStaleDfaStates()) {
         markDfaNotPreSeeded();
         clearAllDFAStates();
-        return parseDocumentLL(text, result.lexer, result.tokenStream);
+        return withUtf16Columns(text, parseDocumentLL(text, result.lexer, result.tokenStream));
     }
 
     // First successful parse with pre-seeded DFA: the pre-seeded
@@ -65,7 +72,7 @@ export function parseDocument(text: string): ParseResult {
         markDfaNotPreSeeded();
     }
 
-    return result;
+    return withUtf16Columns(text, result);
 }
 
 function parseDocumentCore(text: string): ParseResult {
@@ -287,7 +294,7 @@ export function parseDocumentBatch(text: string): ParseResult {
     if (errors.length > 0 && hasStaleDfaStates()) {
         markDfaNotPreSeeded();
         clearAllDFAStates();
-        return parseDocumentBatchLL(text, lexer, tokenStream, lexMs);
+        return withUtf16Columns(text, parseDocumentBatchLL(text, lexer, tokenStream, lexMs));
     }
 
     // Pre-seeded DFA working correctly — clear the flag but keep the
@@ -296,14 +303,14 @@ export function parseDocumentBatch(text: string): ParseResult {
         markDfaNotPreSeeded();
     }
 
-    return {
+    return withUtf16Columns(text, {
         tree,
         tokenStream,
         parser,
         lexer,
         errors,
         timing: { lexMs, parseMs },
-    };
+    });
 }
 
 /**

@@ -1,6 +1,29 @@
 import { Token, ParserRuleContext } from 'antlr4ng';
 import { Position, Range } from 'vscode-languageserver/node';
 
+/** Convert ANTLR code-point columns to the UTF-16 positions used by LSP. Call once after parsing. */
+export function normalizeUtf16Columns(
+    text: string,
+    tokens: readonly Token[],
+    errors: readonly { line: number; column: number }[],
+): void {
+    if (!/[\uD800-\uDBFF][\uDC00-\uDFFF]/.test(text)) return;
+    const columns = new Map<number, number[]>();
+    const lines = text.split('\n');
+    for (let line = 0; line < lines.length; line++) {
+        if (!/[\uD800-\uDBFF][\uDC00-\uDFFF]/.test(lines[line])) continue;
+        const offsets = [0];
+        for (const character of lines[line]) offsets.push(offsets[offsets.length - 1] + character.length);
+        columns.set(line, offsets);
+    }
+    for (const token of tokens) {
+        token.column = columns.get(token.line - 1)?.[token.column] ?? token.column;
+    }
+    for (const error of errors) {
+        error.column = columns.get(error.line)?.[error.column] ?? error.column;
+    }
+}
+
 /**
  * Convert an ANTLR token to an LSP Position.
  * ANTLR lines are 1-based, LSP positions are 0-based.

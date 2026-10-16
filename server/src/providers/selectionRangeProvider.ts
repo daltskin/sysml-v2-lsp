@@ -5,6 +5,7 @@ import {
 } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { TextDocuments } from 'vscode-languageserver/node';
+import { scanQualifiedNames } from '../utils/identUtils.js';
 
 /** Check if a char code is whitespace (space, tab, CR, LF, etc.) without regex. */
 function isWhitespace(c: number): boolean {
@@ -73,19 +74,13 @@ export class SelectionRangeProvider {
         text: string,
         offset: number,
     ): Range | undefined {
-        // Find word boundaries
-        const wordPattern = /[a-zA-Z_]\w*/g;
-        let match;
-        while ((match = wordPattern.exec(text)) !== null) {
-            const start = match.index;
-            const end = start + match[0].length;
-            if (start <= offset && offset <= end) {
-                return Range.create(
-                    doc.positionAt(start),
-                    doc.positionAt(end),
-                );
+        for (const name of scanQualifiedNames(text)) {
+            for (const segment of name.segments) {
+                if (segment.start <= offset && offset <= segment.end) {
+                    return Range.create(doc.positionAt(segment.start), doc.positionAt(segment.end));
+                }
             }
-            if (start > offset) break;
+            if (name.start > offset) break;
         }
         return undefined;
     }

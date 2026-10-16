@@ -5,6 +5,7 @@ import { MultiplicityBoundsContext, OwnedExpressionContext, SysMLv2Parser } from
 import { ParseResult } from '../parser/parseDocument.js';
 import { contextToRange, tokenToRange } from '../parser/positionUtils.js';
 import { SYSML_KEYWORDS } from '../utils/sysmlKeywords.js';
+import { joinQualifiedName, scanQualifiedNames, splitQualifiedName, unquoteName as decodeName } from '../utils/identUtils.js';
 import { IdRegistry } from './ids.js';
 import { Scope } from './scope.js';
 import { FilterExpr, ImportTarget, SysMLElementKind, SysMLSymbol, isAnonymous, isDefinition, isFlowUsage, isUsage as isUsageKind } from './sysmlElements.js';
@@ -324,7 +325,12 @@ export class SymbolTable {
      * Find a symbol by name (simple name, not qualified).
      */
     findByName(name: string): SysMLSymbol[] {
-        return this.symbolsByName.get(name) ?? [];
+        const exact = this.symbolsByName.get(name);
+        if (exact) return exact;
+        const segments = splitQualifiedName(name);
+        if (segments.length === 1) return this.symbolsByName.get(segments[0]) ?? [];
+        const qualified = this.getSymbol(joinQualifiedName(segments));
+        return qualified ? [qualified] : [];
     }
 
     /**
@@ -983,7 +989,7 @@ export class SymbolTable {
         // KerML: only an element that is named, like all its owners, has a qualified name.
         const qualifiedName = anonymous || (owner && owner.qualifiedName === undefined)
             ? undefined
-            : owner ? `${owner.qualifiedName}::${name}` : name;
+            : owner ? `${owner.qualifiedName}::${joinQualifiedName([name])}` : joinQualifiedName([name]);
 
         // An anonymous element has no name to select: its first token (`connect`, `transition`, ...)
         // stands for it, never a name in its declaration that refers to another element.
@@ -1193,7 +1199,8 @@ export class SymbolTable {
 
     /** Remove SysML quoting while retaining qualified and dotted references. */
     private cleanTransitionText(text: string): string | undefined {
-        const cleaned = text.replace(/'([^']+)'/g, '$1').trim();
+        const cleaned = text.replace(/'(?:\\.|[^'\\])*'/g,
+            name => joinQualifiedName([decodeName(name)])).trim();
         return cleaned || undefined;
     }
 
@@ -1434,8 +1441,8 @@ export class SymbolTable {
 
     /** The name of the feature a reference such as `a.b` or `P::a` ends at (`b`, `a`). */
     private lastNameSegment(reference: ParserRuleContext): string | undefined {
-        const segment = reference.getText().split(/::|\./).pop();
-        return segment ? this.unquoteName(segment) : undefined;
+        const names = [...scanQualifiedNames(reference.getText())];
+        return names.at(-1)?.segments.at(-1)?.name;
     }
 
     private declarationTokens(ctx: ParserRuleContext): Token[] {
@@ -1592,6 +1599,17 @@ export class SymbolTable {
      * Extract the range of just the name token.
      */
     private extractNameRange(ctx: ParserRuleContext): Range | undefined {
+        if (ctx.ruleIndex === SysMLv2Parser.RULE_identification ||
+            ctx.ruleIndex === SysMLv2Parser.RULE_featureIdentification) {
+            let name: ParserRuleContext | undefined;
+            for (let i = 0; i < ctx.getChildCount(); i++) {
+                const child = ctx.getChild(i);
+                if (child instanceof ParserRuleContext && child.ruleIndex === SysMLv2Parser.RULE_name) {
+                    name = child;
+                }
+            }
+            if (name) return contextToRange(name);
+        }
         for (let i = 0; i < ctx.getChildCount(); i++) {
             const child = ctx.getChild(i);
             if (child instanceof TerminalNode && this.isNameTerminal(child)) {
@@ -1652,7 +1670,7 @@ export class SymbolTable {
             const specStr = text.substring(text.indexOf(specMatch[0]) + specMatch[0].indexOf(specMatch[1]));
             for (const part of specStr.split(',')) {
                 const quoted = quotedName(part);
-                if (quoted !== undefined) { names.push(quoted); continue; }
+                if (quoted !== undefined) { names.push(joinQualifiedName([quoted])); continue; }
                 const m = part.trim().match(RE_IDENT_START);
                 if (m) names.push(m[1]);
             }
@@ -1677,7 +1695,7 @@ export class SymbolTable {
             const afterColon = text.substring(fullMatchIdx + 1).trim();
             for (const part of afterColon.split(',')) {
                 const quoted = quotedName(part);
-                if (quoted !== undefined) { names.push(quoted); continue; }
+                if (quoted !== undefined) { names.push(joinQualifiedName([quoted])); continue; }
                 const m = part.trim().match(RE_IDENT_START);
                 if (m) names.push(m[1]);
             }
@@ -1688,7 +1706,7 @@ export class SymbolTable {
     }
 
     /**
-     * The declaration tokens before the body, with each lexer STRING token
+     * The declaration tokens before the value or body, with each lexer STRING token
      * replaced by a numbered placeholder (`'0'`, `'1'`, ...), and
      * `quotedName`, which turns a placeholder in a part of that text back into
      * the name, when it ends the qualified name the part starts with. SysML
@@ -1698,10 +1716,14 @@ export class SymbolTable {
      */
     private maskedDeclaration(ctx: ParserRuleContext): { text: string; quotedName: (part: string) => string | undefined } {
         const quoted: string[] = [];
-        const masked = this.declarationTokens(ctx).map(token => {
-            const text = token.text ?? '';
-            return token.type === SysMLv2Lexer.STRING ? `'${quoted.push(text.slice(1, -1)) - 1}'` : text;
-        }).join('');
+        // ValuePart follows FeatureSpecializationPart; its expressions are not type names.
+        const valueStart = this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_valuePart)?.start?.tokenIndex;
+        const masked = this.declarationTokens(ctx)
+            .filter(token => valueStart === undefined || token.tokenIndex < valueStart)
+            .map(token => {
+                const text = token.text ?? '';
+                return token.type === SysMLv2Lexer.STRING ? `'${quoted.push(decodeName(text)) - 1}'` : text;
+            }).join('');
         return {
             text: masked,
             quotedName: (part) => {
@@ -1733,7 +1755,7 @@ export class SymbolTable {
             const specStr = text.substring(text.indexOf(specMatch[0]) + specMatch[0].indexOf(specMatch[1]));
             for (const part of specStr.split(',')) {
                 const quoted = quotedName(part);
-                if (quoted !== undefined) { names.push(quoted); continue; }
+                if (quoted !== undefined) { names.push(joinQualifiedName([quoted])); continue; }
                 const m = part.trim().match(RE_IDENT_START);
                 if (m) names.push(m[1]);
             }
@@ -1771,23 +1793,7 @@ export class SymbolTable {
             if (!(child instanceof ParserRuleContext)) continue;
             const ri = child.ruleIndex;
             if (extractionRules.has(ri)) {
-                // These rules contain qualified-name children;
-                // extract all identifier-like tokens.
-                const childText = child.getText();
-                // Strip leading keywords / operators
-                // Note: getText() strips whitespace, so `:` may be directly followed by the type name
-                const stripped = childText
-                    .replace(/^(specializes|:>>|:>|:|definedby|subsets|redefines|references|conjugates|disjoints)/i, '');
-                for (const part of stripped.split(',')) {
-                    // Match quoted names ('...') or plain identifiers
-                    const qm = part.match(/'([^']+)'/);
-                    if (qm) {
-                        names.push(qm[1]);
-                    } else {
-                        const m = part.match(/([A-Za-z_]\w*(?:::\w+)*)/);
-                        if (m) names.push(m[1]);
-                    }
-                }
+                this.collectQualifiedTypeNames(child, names);
             } else if (
                 // Recurse into declaration / part / body wrappers that may
                 // contain nested typing rules (but NOT into body rules that
@@ -1799,6 +1805,18 @@ export class SymbolTable {
             ) {
                 this.collectNamesFromTree(child, names, depth + 1, extractionRules);
             }
+        }
+    }
+
+    private collectQualifiedTypeNames(ctx: ParserRuleContext, names: string[]): void {
+        if (ctx.ruleIndex === SysMLv2Parser.RULE_qualifiedName) {
+            const name = this.extractTextFromSubtree(ctx);
+            if (name) names.push(name);
+            return;
+        }
+        for (let i = 0; i < ctx.getChildCount(); i++) {
+            const child = ctx.getChild(i);
+            if (child instanceof ParserRuleContext) this.collectQualifiedTypeNames(child, names);
         }
     }
 
@@ -1999,10 +2017,7 @@ export class SymbolTable {
      * Returns the text unchanged if not quoted.
      */
     private unquoteName(text: string): string {
-        if (this.isQuotedName(text)) {
-            return text.slice(1, -1);
-        }
-        return text;
+        return decodeName(text);
     }
 
     /**
@@ -2338,7 +2353,8 @@ export class SymbolTable {
             const child = ctx.getChild(i);
             if (child instanceof TerminalNode) {
                 const text = child.symbol.text;
-                if (text) parts.push(text);
+                if (text) parts.push(child.symbol.type === SysMLv2Lexer.STRING
+                    ? joinQualifiedName([decodeName(text)]) : text);
             } else if (child instanceof ParserRuleContext) {
                 this.collectExposeText(child, parts);
             }
@@ -2423,17 +2439,19 @@ export class SymbolTable {
      * Extract all text content from a subtree (concatenate terminal nodes).
      */
     private extractTextFromSubtree(ctx: ParserRuleContext): string | undefined {
+        if (ctx.ruleIndex === SysMLv2Parser.RULE_name) return decodeName(ctx.getText());
         const parts: string[] = [];
         for (let i = 0; i < ctx.getChildCount(); i++) {
             const child = ctx.getChild(i);
             if (child instanceof TerminalNode) {
                 const text = child.symbol.text;
                 if (text && this.isNameTerminal(child)) {
-                    parts.push(this.unquoteName(text));
+                    parts.push(joinQualifiedName([this.unquoteName(text)]));
                 }
             } else if (child instanceof ParserRuleContext) {
                 const sub = this.extractTextFromSubtree(child);
-                if (sub) parts.push(sub);
+                if (sub) parts.push(child.ruleIndex === SysMLv2Parser.RULE_name
+                    ? joinQualifiedName([sub]) : sub);
             }
         }
         return parts.length > 0 ? parts.join('::') : undefined;

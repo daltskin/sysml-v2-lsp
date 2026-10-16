@@ -1484,6 +1484,30 @@ describe('anonymous elements indexed by symbol ID', () => {
 });
 
 describe('quoted names with a colon or keyword', () => {
+    it.each(["'\u03a9'", "'\u00b0C'", "'m\u00b2'", "('\u03a9', 'm\u00b2')"])(
+        'should not extract quoted values from %s as specialization names',
+        async (value) => {
+            const { st, result } = await buildST(`package Units {
+    attribute :>> referenceUnit = ${value};
+    attribute :>> otherUnit default ${value};
+    attribute :>> initialUnit := ${value};
+    attribute typedUnit : MissingUnit = ${value};
+}`);
+            expect(result.errors).toHaveLength(0);
+            const symbols = st.getAllSymbols();
+            expect(symbols.find(s => s.name === 'referenceUnit')?.typeNames)
+                .toEqual(['referenceUnit']);
+            expect(symbols.find(s => s.name === 'referenceUnit')?.specializationNames)
+                .toEqual(['referenceUnit']);
+            expect(symbols.find(s => s.name === 'otherUnit')?.typeNames)
+                .toEqual(['otherUnit']);
+            expect(symbols.find(s => s.name === 'initialUnit')?.typeNames)
+                .toEqual(['initialUnit']);
+            expect(symbols.find(s => s.name === 'typedUnit')?.typeNames)
+                .toEqual(['MissingUnit']);
+        },
+    );
+
     it('should mask only declaration tokens and never quoted text in documentation', async () => {
         const { SysMLv2Parser } = await import('../../server/src/generated/SysMLv2Parser.js');
         const { st, result } = await buildST(`package 'Structure: { then \\' Context' {
@@ -1506,7 +1530,7 @@ describe('quoted names with a colon or keyword', () => {
         expect(packageContext).toBeDefined();
         const masked = st['maskedDeclaration'](packageContext!);
         expect(masked.text).toBe("package'0'");
-        expect(masked.quotedName("'0'")).toBe("Structure: { then \\' Context");
+        expect(masked.quotedName("'0'")).toBe("Structure: { then ' Context");
         expect(masked.quotedName("'1'")).toBeUndefined();
     });
 
@@ -1579,9 +1603,9 @@ package P {
         expect(typesOf('redefineLike')).toEqual(['A :> B']);
     });
 
-    it('should read a masked quoted name only where it ends the leading qualified name', async () => {
+    it('should exclude values and read masked names only in leading qualified names', async () => {
         const { SysMLv2Parser } = await import('../../server/src/generated/SysMLv2Parser.js');
-        const { st, result } = await buildST(`package P { attribute :>> referenceUnit = 'Ω'; }`);
+        const { st, result } = await buildST(`package P { attribute referenceUnit : 'Ω' = 'value only'; }`);
         expect(result.errors).toHaveLength(0);
         const pending = [result.tree!];
         let attribute;
@@ -1595,7 +1619,8 @@ package P {
         }
         expect(attribute).toBeDefined();
         const masked = st['maskedDeclaration'](attribute!);
-        expect(masked.text).toContain("referenceUnit='0'");
+        expect(masked.text).toBe("attributereferenceUnit:'0'");
+        expect(masked.quotedName("'1'")).toBeUndefined();
         expect(masked.quotedName("'0'")).toBe('Ω');
         expect(masked.quotedName(" SI::'0'")).toBe('Ω');
         expect(masked.quotedName("$::SI::'0'")).toBe('Ω');

@@ -27,6 +27,19 @@ A [Language Server Protocol (LSP)](https://microsoft.github.io/language-server-p
 
 ## Quick Start
 
+### Unicode and unrestricted names
+
+Use single quotes for names outside the ASCII basic-name syntax, for example
+`attribute 'temperature Ω' : Real;`. Names may contain Unicode characters,
+combining marks, spaces and escaped quotes or backslashes. Their spelling is
+preserved without Unicode normalization (SysML 7.2.2; KerML 8.2.2.3).
+
+Navigation, hover, references, rename and completions handle the whole quoted
+name. Rename updates resolved workspace references, not comments, string literals,
+usage names or unrelated same-named declarations. Completion and rename insert
+the required quotes and escapes automatically; editor positions use UTF-16,
+including after characters outside the Basic Multilingual Plane.
+
 ### Install from Marketplace
 
 Install via the VS Code extension from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=JamieD.sysml-v2-support).

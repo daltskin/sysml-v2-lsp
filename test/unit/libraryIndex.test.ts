@@ -2,6 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join, resolve } from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { quoteName } from '../../server/src/utils/identUtils.js';
 
 describe('Library Index', () => {
     beforeAll(async () => {
@@ -29,6 +30,26 @@ describe('Library Index', () => {
     });
 
     describe('type resolution', () => {
+        it.each([
+            ['\u03a9', 'ohm'],
+            ['\u00b0C', 'degree celsius (temperature difference)'],
+        ])('should index the unrestricted SI short name %s without quotes', async (short, long) => {
+            const { resolveLibraryType } = await import('../../server/src/library/libraryIndex.js');
+            const location = resolveLibraryType(short);
+            expect(location).toBeDefined();
+            expect(location!.uri).toContain('SI.sysml');
+            expect(location).toEqual(resolveLibraryType(long));
+            expect(resolveLibraryType(`SI::${short}`)).toEqual(location);
+        });
+
+        it('should index complete quoted long names, not just their first word', async () => {
+            const { resolveLibraryType } = await import('../../server/src/library/libraryIndex.js');
+            const location = resolveLibraryType('volt ampere reactive');
+            expect(location).toBeDefined();
+            expect(location!.uri).toContain('SI.sysml');
+            expect(location).toEqual(resolveLibraryType('var'));
+        });
+
         it('should resolve Real to ScalarValues.kerml with a line number', async () => {
             const { resolveLibraryType } = await import('../../server/src/library/libraryIndex.js');
             const loc = resolveLibraryType('Real');
@@ -107,6 +128,30 @@ describe('Library Index', () => {
             expect(names).toContain('Integer');
             expect(names.length).toBeGreaterThan(10);
         });
+
+        it('should not report the quoted SI reference-unit value as an unresolved type (#120)', async () => {
+            const { DocumentManager } = await import('../../server/src/documentManager.js');
+            const { SemanticValidator } = await import('../../server/src/providers/semanticValidator.js');
+            const { SysMLModelProvider } = await import('../../server/src/model/sysmlModelProvider.js');
+            const { TextDocument } = await import('vscode-languageserver-textdocument');
+            const manager = new DocumentManager();
+            const uri = 'file:///quoted-unit.sysml';
+            manager.parse(TextDocument.create(uri, 'sysml', 1, `library package NIUnits {
+        private import SI::'\u03a9';
+        attribute <'M\u03a9'> megohm : ResistanceUnit {
+            doc /* Resistance unit equal to one million ohms. */
+            attribute :>> unitConversion : ConversionByPrefix {
+                attribute :>> prefix = mega;
+                attribute :>> referenceUnit = '\u03a9';
+            }
+        }
+    }`));
+
+            expect(new SemanticValidator(manager).validate(uri)
+                .filter(d => d.code === 'unresolved-type')).toEqual([]);
+            const model = new SysMLModelProvider(manager).getModel(uri, 1, ['diagnostics']);
+            expect(model.diagnostics!.filter(d => d.code === 'unresolved-type')).toEqual([]);
+        });
     });
 });
 
@@ -141,7 +186,7 @@ describe('Library Index: quoted short names with punctuation', () => {
     it.each([
         ['a colon', 'A : B', 'colonUnit'],
         ['a greater-than sign, which does not end the short name', 'A > B', 'greaterUnit'],
-        ['an escaped quote, kept as written like the symbol table keeps it', "A\\'B", 'quoteUnit'],
+        ['an escaped quote, decoded per KerML 8.2.2.3', "A'B", 'quoteUnit'],
         ['a subsetting symbol', 'A :> B', 'subsetUnit'],
         ['a redefinition symbol', 'A :>> B', 'redefineUnit'],
     ])('resolves a short name with %s', async (_case, shortName, name) => {
@@ -150,11 +195,14 @@ describe('Library Index: quoted short names with punctuation', () => {
         expect(declaration).toBeDefined();
         expect(resolveLibraryType(shortName)).toEqual(declaration);
         expect(resolveLibraryType(`QuotedNames::${shortName}`)).toEqual(declaration);
+        expect(resolveLibraryType(quoteName(shortName))).toEqual(declaration);
+        expect(resolveLibraryType(`QuotedNames::${quoteName(shortName)}`)).toEqual(declaration);
     });
 
     it('reads a quoted long name with an escaped quote to its end', async () => {
         const { resolveLibraryType } = await import('../../server/src/library/libraryIndex.js');
         expect(resolveLibraryType('S')?.line).toBe(7);
+        expect(resolveLibraryType("long ' name")?.line).toBe(7);
         expect(resolveLibraryType('afterAll')?.line).toBe(8);
     });
 });

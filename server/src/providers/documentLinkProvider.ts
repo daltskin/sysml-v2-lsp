@@ -7,7 +7,7 @@ import {
 } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
 import { resolveLibraryPackage } from '../library/libraryIndex.js';
-import { isIdentPart as isIdentChar } from '../utils/identUtils.js';
+import { readQualifiedNameAt, scanQualifiedNames, splitQualifiedName } from '../utils/identUtils.js';
 
 /**
  * Find all SysML `import` statements in `text` without regex.
@@ -17,63 +17,20 @@ import { isIdentPart as isIdentChar } from '../utils/identUtils.js';
  */
 function findImportStatements(text: string): Array<{ pathStart: number; pathEnd: number; importPath: string }> {
     const results: Array<{ pathStart: number; pathEnd: number; importPath: string }> = [];
-    const len = text.length;
-    let i = 0;
-
-    while (i < len) {
-        const idx = text.indexOf('import', i);
-        if (idx === -1) break;
-
-        // Ensure word boundary before 'import'
-        if (idx > 0 && isIdentChar(text.charCodeAt(idx - 1))) {
-            i = idx + 6;
-            continue;
-        }
-        const afterImport = idx + 6;
-        if (afterImport >= len) break;
-
-        // Must be followed by whitespace
-        const ch = text.charCodeAt(afterImport);
-        if (ch !== 32 && ch !== 9 && ch !== 10 && ch !== 13) { // space, tab, LF, CR
-            i = afterImport;
-            continue;
-        }
-
-        // Skip whitespace after 'import'
-        let j = afterImport;
-        while (j < len) {
-            const wc = text.charCodeAt(j);
-            if (wc !== 32 && wc !== 9 && wc !== 10 && wc !== 13) break;
-            j++;
-        }
-        if (j >= len) break;
-
-        // Read the qualified path: identifier segments separated by '::',
-        // optionally ending with '*'
-        const pathStart = j;
-        while (j < len) {
-            if (text.charCodeAt(j) === 42) { // '*'
-                j++;
-                break;
-            }
-            if (!isIdentChar(text.charCodeAt(j))) break;
-            while (j < len && isIdentChar(text.charCodeAt(j))) j++;
-            // Check for '::' separator
-            if (j + 1 < len && text[j] === ':' && text[j + 1] === ':') {
-                j += 2;
-            } else {
-                break;
-            }
-        }
-        const pathEnd = j;
-        if (pathEnd <= pathStart) { i = j; continue; }
-
-        // Skip whitespace, then expect ';'
-        while (j < len && (text.charCodeAt(j) === 32 || text.charCodeAt(j) === 9)) j++;
-        if (j >= len || text[j] !== ';') { i = j; continue; }
-
-        results.push({ pathStart, pathEnd, importPath: text.substring(pathStart, pathEnd) });
-        i = j + 1;
+    for (const keyword of scanQualifiedNames(text)) {
+        if (text.slice(keyword.start, keyword.end) !== 'import') continue;
+        let start = keyword.end;
+        while (start < text.length && /\s/.test(text[start])) start++;
+        const path = readQualifiedNameAt(text, start);
+        if (!path) continue;
+        const suffix = text.slice(path.end).match(/^\s*(::\*\*(?=;|\s)|::\*(?=;|\s))?\s*;/);
+        if (!suffix) continue;
+        const wildcard = suffix[1] ?? '';
+        results.push({
+            pathStart: path.start,
+            pathEnd: path.end + (wildcard ? suffix[0].indexOf(wildcard) + wildcard.length : 0),
+            importPath: path.name,
+        });
     }
 
     return results;
@@ -147,7 +104,7 @@ export class DocumentLinkProvider {
         if (exact) return { uri: exact.uri };
 
         // Try the first segment as a simple name
-        const firstSegment = qualifiedName.split('::')[0];
+        const firstSegment = splitQualifiedName(qualifiedName)[0];
         const matches = symbolTable.findByName(firstSegment);
         if (matches.length > 0) return { uri: matches[0].uri };
 

@@ -1,54 +1,17 @@
-import {
-    ReferenceParams,
-    Location,
-} from 'vscode-languageserver/node';
+import { Location, ReferenceParams } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
-import { isAnonymous } from '../symbols/sysmlElements.js';
+import { NameReferences } from '../symbols/nameReferences.js';
 
-/**
- * Provides find-all-references for SysML elements.
- */
+/** Find complete source references across the workspace, with exact name ranges. */
 export class ReferencesProvider {
-
-    constructor(private documentManager: DocumentManager) { }
+    constructor(private readonly documentManager: DocumentManager) { }
 
     provideReferences(params: ReferenceParams): Location[] {
-        const result = this.documentManager.get(params.textDocument.uri);
-        if (!result) {
-            return [];
-        }
-
-        // Use shared workspace symbol table (includes all documents)
-        const symbolTable = this.documentManager.getWorkspaceSymbolTable();
-
-        // Find symbol at position
-        const symbol = symbolTable.findSymbolAtPosition(
-            params.textDocument.uri,
-            params.position.line,
-            params.position.character,
-        );
-
-        // An anonymous element has no name to be referenced by.
-        if (!symbol || isAnonymous(symbol)) {
-            return [];
-        }
-
-        // Find all references across all files
-        const references = symbolTable.findReferences(symbol.name);
-        const locations: Location[] = [];
-
-        for (const ref of references) {
-            locations.push({
-                uri: ref.uri,
-                range: ref.selectionRange,
-            });
-        }
-
-        // Include the definition itself if requested
-        if (params.context.includeDeclaration) {
-            // Already included through findReferences
-        }
-
-        return locations;
+        const references = new NameReferences(this.documentManager);
+        const ref = references.at(params.textDocument.uri, params.position);
+        return ref?.symbol
+            ? references.to(ref.symbol, params.context.includeDeclaration)
+                .map(({ uri, range }) => ({ uri, range }))
+            : [];
     }
 }

@@ -2,10 +2,12 @@ import {
     CompletionItem,
     CompletionItemKind,
     InsertTextFormat,
+    Range,
     TextDocumentPositionParams,
 } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
 import { isDefinition, SysMLElementKind, SysMLSymbol } from '../symbols/sysmlElements.js';
+import { quoteName, scanQualifiedNames } from '../utils/identUtils.js';
 
 /**
  * SysML v2 keyword completions organized by category.
@@ -120,6 +122,7 @@ export class CompletionProvider {
                 seen.add(sym.name);
                 defItems.push({
                     label: sym.name,
+                    insertText: quoteName(sym.name),
                     kind: this.mapSymbolKindToCompletionKind(sym.kind),
                     detail: `${sym.kind}${sym.qualifiedName !== undefined && sym.qualifiedName !== sym.name ? ` (${sym.qualifiedName})` : ''}`,
                     documentation: sym.documentation,
@@ -142,6 +145,7 @@ export class CompletionProvider {
                 seenPorts.add(sym.name);
                 items.push({
                     label: sym.name,
+                    insertText: quoteName(sym.name),
                     kind: CompletionItemKind.Interface,
                     detail: `${sym.kind}${sym.typeNames[0] ? ` : ${sym.typeNames[0]}` : ''}`,
                     data: sym.qualifiedName,
@@ -150,17 +154,21 @@ export class CompletionProvider {
             }
         }
 
-        if (context === 'type-annotation') {
-            return items.filter((i) => this.isTypeOrDefinitionCompletion(i));
-        }
-
-        if (context === 'connect-endpoint') {
-            return items.filter((i) => this.isConnectContextCompletion(i));
-        }
-
-        // TODO: Add antlr4-c3 grammar-aware context-sensitive completions.
-
-        return items;
+        const filtered = context === 'type-annotation'
+            ? items.filter(i => this.isTypeOrDefinitionCompletion(i))
+            : context === 'connect-endpoint'
+                ? items.filter(i => this.isConnectContextCompletion(i)) : items;
+        const line = this.documentManager.getText(uri)?.split('\n')[params.position.line] ?? '';
+        const segment = [...scanQualifiedNames(line, true)].flatMap(name => name.segments)
+            .find(name => name.start <= params.position.character && name.end >= params.position.character);
+        if (!segment) return filtered;
+        return filtered.map(item => item.insertTextFormat === InsertTextFormat.Snippet ? item : ({
+            ...item,
+            textEdit: {
+                range: Range.create(params.position.line, segment.start, params.position.line, segment.end),
+                newText: item.insertText ?? item.label,
+            },
+        }));
     }
 
     resolveCompletion(item: CompletionItem): CompletionItem {

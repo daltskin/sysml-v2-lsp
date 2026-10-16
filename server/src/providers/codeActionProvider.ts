@@ -9,6 +9,9 @@ import {
 } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
 import { SysMLElementKind, isDefinition } from '../symbols/sysmlElements.js';
+import {
+    quoteName, scanFeaturePaths, scanQualifiedNames, splitQualifiedName, unquoteName,
+} from '../utils/identUtils.js';
 
 /**
  * Provides code actions (quick fixes) for SysML documents.
@@ -122,13 +125,13 @@ export class CodeActionProvider {
         const packageNames = new Set<string>();
         for (const s of allSymbols) {
             if (!isDefinition(s.kind)) continue;
-            if (s.name !== unresolvedType) continue;
+            if (s.name !== unquoteName(unresolvedType)) continue;
             if (s.uri === uri) continue;
 
             // The top-level namespace of its qualified name; one without can't be imported.
-            const pkg = (s.qualifiedName?.split('::')[0] ?? '').trim();
+            const pkg = s.qualifiedName ? splitQualifiedName(s.qualifiedName)[0] : '';
             if (!pkg || pkg === unresolvedType) continue;
-            if (pkg) packageNames.add(pkg);
+            packageNames.add(quoteName(pkg));
         }
 
         for (const pkg of packageNames) {
@@ -271,7 +274,7 @@ export class CodeActionProvider {
         const edit: WorkspaceEdit = {
             changes: {
                 [uri]: [
-                    TextEdit.replace(diagnostic.range, newName),
+                    TextEdit.replace(diagnostic.range, quoteName(newName)),
                 ],
             },
         };
@@ -420,7 +423,7 @@ export class CodeActionProvider {
         const edit: WorkspaceEdit = {
             changes: {
                 [uri]: [
-                    TextEdit.replace(diagnostic.range, newName),
+                    TextEdit.replace(diagnostic.range, quoteName(newName)),
                 ],
             },
         };
@@ -498,10 +501,11 @@ export class CodeActionProvider {
 
         const msg = diagnostic.message;
         const m = msg.match(/'([^']+)'\s+\(([^)]+)\)\s+is connected to\s+'([^']+)'\s+\(([^)]+)\)/);
-        if (!m) return undefined;
-        const left = m[1];
-        const leftType = m[2];
-        const right = m[3];
+        const data = diagnostic.data as { left?: string; leftType?: string; right?: string } | undefined;
+        const left = data?.left ?? m?.[1];
+        const leftType = data?.leftType ?? m?.[2];
+        const right = data?.right ?? m?.[3];
+        if (!left || !leftType || !right) return undefined;
 
         const symbolTable = this.documentManager.getWorkspaceSymbolTable();
         const symbolsInUri = symbolTable.getSymbolsForUri(uri);
@@ -522,8 +526,12 @@ export class CodeActionProvider {
         const segment = (lines[start.line] ?? '').slice(start.character, end.character);
         if (!segment) return undefined;
 
-        const replaced = segment.replace(new RegExp(`\\b${right}\\b`), compatible.name);
-        if (replaced === segment) return undefined;
+        const rightPath = [...scanFeaturePaths(segment)].reverse()
+            .find(path => path.parts[path.parts.length - 1] === right);
+        const rightName = rightPath?.qualifiedNames.at(-1)?.segments.at(-1);
+        if (!rightName) return undefined;
+        const replaced = segment.slice(0, rightName.start) + quoteName(compatible.name)
+            + segment.slice(rightName.end);
 
         const edit: WorkspaceEdit = {
             changes: {
@@ -572,17 +580,19 @@ export class CodeActionProvider {
             : '';
 
         const m = msg.match(/Unresolved constraint reference\s+'([^']+)'(?:\s+in scope\s+'([^']+)')?/);
+        const data = diagnostic.data as { scopeName?: string } | undefined;
         const expr = (rangeExpr && rangeExpr.includes('.'))
             ? rangeExpr
             : (tokenExpr && tokenExpr.includes('.'))
                 ? tokenExpr
                 : (m?.[1] ?? '');
-        const scopeName = m?.[2];
+        const scopeName = data?.scopeName ?? m?.[2];
         if (!expr) return undefined;
         if (!expr.includes('.')) return undefined;
 
-        const parts = expr.split('.');
-        if (parts.length < 2) return undefined;
+        const path = [...scanFeaturePaths(expr)].find(path => path.qualifiedNames.length > 1);
+        if (!path) return undefined;
+        const parts = path.parts;
         const root = parts[0];
         const unresolvedLeaf = parts[parts.length - 1];
 
@@ -600,7 +610,7 @@ export class CodeActionProvider {
         const rootType = rootUsage ? (rootUsage.typeNames[0] ?? rootUsage.typeName) : undefined;
         let memberNames: string[] = [];
         if (rootType) {
-            const typeDef = allSymbols.find((s) => s.name === rootType && s.kind.endsWith(' def'));
+            const typeDef = symbolTable.findByName(rootType).find(s => isDefinition(s.kind));
             if (typeDef) {
                 memberNames = allSymbols
                     .filter((s) => s.parentId === typeDef.symbolId)
@@ -637,7 +647,8 @@ export class CodeActionProvider {
 
         if (!best || best.dist > 4 || best.name === unresolvedLeaf) return undefined;
 
-        const fixedExpr = `${root}.${best.name}`;
+        const leaf = path.qualifiedNames.at(-1)!;
+        const fixedExpr = expr.slice(0, leaf.start) + quoteName(best.name) + expr.slice(leaf.end);
         const edit: WorkspaceEdit = {
             changes: {
                 [uri]: [
@@ -723,6 +734,14 @@ export class CodeActionProvider {
     private isAttributeTypeContext(text: string, diagnostic: Diagnostic, unresolvedType: string): boolean {
         const lines = text.split('\n');
         const line = lines[diagnostic.range.start.line] ?? '';
+        const names = [...scanQualifiedNames(line)];
+        const attribute = names.findIndex(name => line.slice(name.start, name.end) === 'attribute');
+        const usage = names[attribute + 1];
+        const type = names[attribute + 2];
+        if (attribute >= 0 && usage && type && type.name === unresolvedType
+            && /^\s*:\s*$/.test(line.slice(usage.end, type.start))) {
+            return true;
+        }
         const beforeRange = line.slice(0, diagnostic.range.start.character);
         const unresolvedInLine = line.slice(diagnostic.range.start.character, diagnostic.range.end.character);
 
@@ -753,16 +772,17 @@ export class CodeActionProvider {
         unresolvedType: string,
         childIndent: string,
     ): { title: string; stubText: string } {
+        const sourceName = quoteName(unquoteName(unresolvedType));
         if (this.isAttributeTypeContext(text, diagnostic, unresolvedType)) {
             return {
-                title: `Create local 'attribute def ${unresolvedType};'`,
-                stubText: `\n${childIndent}attribute def ${unresolvedType};\n`,
+                title: `Create local 'attribute def ${sourceName};'`,
+                stubText: `\n${childIndent}attribute def ${sourceName};\n`,
             };
         }
 
         return {
-            title: `Create local 'item def ${unresolvedType};'`,
-            stubText: `\n${childIndent}item def ${unresolvedType};\n`,
+            title: `Create local 'item def ${sourceName};'`,
+            stubText: `\n${childIndent}item def ${sourceName};\n`,
         };
     }
 }
@@ -808,22 +828,12 @@ function extractQuotedString(text: string, prefixWithQuote: string): string | un
 
 function extractDottedTokenAtRange(line: string, start: number, end: number): string {
     if (!line || start < 0 || end < 0 || start > line.length || end > line.length) return '';
-
-    const isTokenChar = (ch: string): boolean =>
-        (ch >= 'a' && ch <= 'z')
-        || (ch >= 'A' && ch <= 'Z')
-        || (ch >= '0' && ch <= '9')
-        || ch === '_'
-        || ch === '.';
-
-    let left = Math.max(0, start);
-    while (left > 0 && isTokenChar(line[left - 1])) left--;
-
-    let right = Math.min(line.length, end);
-    while (right < line.length && isTokenChar(line[right])) right++;
-
-    const token = line.slice(left, right).trim();
-    return token.includes('.') ? token : '';
+    for (const path of scanFeaturePaths(line)) {
+        if (path.qualifiedNames.length > 1 && path.start <= start && path.end >= end) {
+            return line.slice(path.start, path.end);
+        }
+    }
+    return '';
 }
 
 function extractLikelyMemberNames(text: string, excludeName: string): string[] {

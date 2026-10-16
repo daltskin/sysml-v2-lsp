@@ -9,6 +9,7 @@
 import { resolveLibraryType } from '../library/libraryIndex.js';
 import { NamespaceResolver, SymbolIndexes } from './namespaceResolver.js';
 import { SysMLSymbol } from './sysmlElements.js';
+import { splitQualifiedName } from '../utils/identUtils.js';
 
 /**
  * Standard library types that are always available (from Kernel libraries).
@@ -83,7 +84,7 @@ export function resolveTypeName(
 ): { resolved: boolean; strippedTypeName: string } {
     const kwMatch = typeName.match(/^([A-Z][A-Za-z_0-9]*?)(redefines|subsets|references|connect|bind|default|via|accept|send|flow|allocate|assign|decide|merge|join|fork)([A-Z])/);
     const strippedTypeName = kwMatch ? kwMatch[1] : typeName;
-    const rootSegment = strippedTypeName.split('::')[0];
+    const rootSegment = splitQualifiedName(strippedTypeName)[0];
 
     const resolved =
         resolver.isLocallyVisible(symbol, strippedTypeName, indexes) ||

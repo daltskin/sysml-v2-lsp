@@ -7,6 +7,7 @@ import {
 } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
 import { displayName, isDefinition, SysMLElementKind, SysMLSymbol } from '../symbols/sysmlElements.js';
+import { NameReferences } from '../symbols/nameReferences.js';
 
 /**
  * Provides type hierarchy for SysML definitions.
@@ -29,7 +30,8 @@ export class TypeHierarchyProvider {
 
         const symbolTable = this.documentManager.getWorkspaceSymbolTable();
 
-        const symbol = symbolTable.findSymbolAtPosition(
+        const symbol = new NameReferences(this.documentManager).at(uri, params.position)?.symbol ??
+            symbolTable.findSymbolAtPosition(
             uri, params.position.line, params.position.character,
         );
         if (!symbol || !isDefinition(symbol.kind)) return null;
@@ -67,10 +69,15 @@ export class TypeHierarchyProvider {
 
         const item = params.item;
         const allSymbols = symbolTable.getAllSymbols();
+        const base = allSymbols.find(s => s.uri === item.uri &&
+            s.selectionRange.start.line === item.selectionRange.start.line &&
+            s.selectionRange.start.character === item.selectionRange.start.character);
+        if (!base) return [];
 
         // Find all definitions whose typeNames includes this item's name
         const subtypes = allSymbols.filter(s =>
-            isDefinition(s.kind) && s.typeNames.includes(item.name)
+            isDefinition(s.kind) && s.typeNames.some(type =>
+                symbolTable.findByName(type).some(parent => parent.symbolId === base.symbolId))
         );
 
         return subtypes.map(s => this.toTypeHierarchyItem(s));
