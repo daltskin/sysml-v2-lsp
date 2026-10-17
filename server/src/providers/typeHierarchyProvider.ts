@@ -105,7 +105,8 @@ export class TypeHierarchyProvider {
             case SysMLElementKind.ItemDef: return SymbolKind.Struct;
             case SysMLElementKind.PortDef:
             case SysMLElementKind.InterfaceDef:
-            case SysMLElementKind.ConnectionDef: return SymbolKind.Interface;
+            case SysMLElementKind.ConnectionDef:
+            case SysMLElementKind.FlowDef: return SymbolKind.Interface;
             case SysMLElementKind.EnumDef: return SymbolKind.Enum;
             case SysMLElementKind.CalcDef: return SymbolKind.Function;
             case SysMLElementKind.RequirementDef:

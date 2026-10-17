@@ -245,6 +245,155 @@ package Demo {
         });
     });
 
+    it('should give a flow definition a symbol owning its members, also when abstract or without a body', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    item def Fuel;
+    flow def Transfer;
+    flow def <ff> FuelFlow :> Transfer {
+        ref item :>> payload : Fuel;
+    }
+    abstract flow def Message;
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        const flowDefs = st.getSymbolsForUri('test://test.sysml').filter(s => s.kind === 'flow def');
+        expect(flowDefs.map(def => [def.qualifiedName, def.shortName, def.typeNames])).toEqual([
+            ['Demo::Transfer', undefined, []],
+            ['Demo::FuelFlow', 'ff', ['Transfer']],
+            ['Demo::Message', undefined, []],
+        ]);
+        const payload = st.findByName('payload');
+        expect(payload.map(member => member.qualifiedName)).toEqual(['Demo::FuelFlow::payload']);
+    });
+
+    it('should give a message a flow symbol with its payload and ends, named by its declaration when anonymous', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    item def Fuel;
+    part def Vehicle {
+        part tank { event occurrence fuelSent; }
+        part engine { event occurrence fuelReceived; }
+        message m1 of Fuel from tank.fuelSent to engine.fuelReceived;
+        message of Fuel from tank.fuelSent to engine.fuelReceived;
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        const messages = st.getSymbolsForUri('test://test.sysml').filter(s => s.kind === 'flow');
+        expect(messages.map(message => [message.name, isAnonymous(message), displayName(message), message.flowDetails])).toEqual([
+            ['m1', false, 'm1', { itemType: 'Fuel', payloadDeclared: true, source: 'tank.fuelSent', target: 'engine.fuelReceived' }],
+            ['', true, 'tank.fuelSent→engine.fuelReceived', { itemType: 'Fuel', payloadDeclared: true, source: 'tank.fuelSent', target: 'engine.fuelReceived' }],
+        ]);
+        expect(st.findByName('Fuel').map(fuel => fuel.kind)).toEqual(['item def']);
+    });
+
+    it('should read every message form: named payload, plain-name ends, typed, payload only, bare, and in an occurrence', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    item def Fuel;
+    flow def MsgDef;
+    part def Vehicle {
+        part tank { event occurrence sent; }
+        part engine { event occurrence received; }
+        message m1 of fuel : Fuel from tank.sent to engine.received;
+        message m2 from tank to engine;
+        message m3 : MsgDef of Fuel from tank.sent to engine.received;
+        message of Fuel;
+        message m4;
+    }
+    occurrence {
+        part p1 { event occurrence e1; }
+        part p2 { event occurrence e2; }
+        message m5 from p1.e1 to p2.e2;
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        const messages = st.getSymbolsForUri('test://test.sysml').filter(s => s.kind === 'flow');
+        expect(messages.map(m => [displayName(m), m.typeNames, m.flowDetails])).toEqual([
+            ['m1', [], { itemType: 'Fuel', payloadDeclared: true, source: 'tank.sent', target: 'engine.received' }],
+            ['m2', [], { payloadDeclared: false, source: 'tank', target: 'engine' }],
+            ['m3', ['MsgDef'], { itemType: 'Fuel', payloadDeclared: true, source: 'tank.sent', target: 'engine.received' }],
+            ['message of Fuel', [], { itemType: 'Fuel', payloadDeclared: true, source: undefined, target: undefined }],
+            ['m4', [], { payloadDeclared: false, source: undefined, target: undefined }],
+            ['m5', [], { payloadDeclared: false, source: 'p1.e1', target: 'p2.e2' }],
+        ]);
+        // A payload's name is not a member of the vehicle.
+        expect(st.findByName('fuel')).toEqual([]);
+    });
+
+    it('should read a payload\'s type from its typing only, whole when qualified, and not from what it subsets', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    package P { item def Fuel; attribute def Rate; }
+    part def Vehicle {
+        part tank { out item fuelOut : P::Fuel; }
+        part engine { in item fuelIn : P::Fuel; }
+        flow of P::Fuel from tank.fuelOut to engine.fuelIn;
+        flow of [2] P::Fuel from tank.fuelOut to engine.fuelIn;
+        flow of p1 :> tank.fuelOut from tank.fuelOut to engine.fuelIn;
+        flow of p2 : P::Rate = 3 from tank.fuelOut to engine.fuelIn;
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        const flows = st.getSymbolsForUri('test://test.sysml').filter(s => s.kind === 'flow');
+        expect(flows.map(f => [f.flowDetails?.itemType, f.flowDetails?.payloadDeclared])).toEqual([
+            ['P::Fuel', true],
+            ['P::Fuel', true],
+            [undefined, true],
+            ['P::Rate', true],
+        ]);
+    });
+
+    it('should read a named, typed succession flow with its payload and ends (spec 7.16.2)', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    item def Image;
+    flow def ImageFlow;
+    action def TakePicture {
+        action focus { out image : Image; }
+        action shoot { in image : Image; }
+        succession flow focus.image to shoot.image;
+        succession flow sf : ImageFlow of img : Image from focus.image to shoot.image;
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        const successions = st.getSymbolsForUri('test://test.sysml').filter(s => s.kind === 'succession flow');
+        expect(successions.map(s => [displayName(s), s.typeNames, s.flowDetails])).toEqual([
+            ['focus.image→shoot.image', [], { payloadDeclared: false, source: 'focus.image', target: 'shoot.image' }],
+            ['sf', ['ImageFlow'], { itemType: 'Image', payloadDeclared: true, source: 'focus.image', target: 'shoot.image' }],
+        ]);
+        expect(st.findByName('img')).toEqual([]);
+    });
+
+    it('should own a flow nested in a flow usage\'s body by that flow usage', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    item def Item1 { item subItem1; }
+    action a1 { out item1 : Item1; }
+    action a2 { in item2 : Item1; }
+    flow flow1_2 from a1.item1 to a2.item2 {
+        flow source.item1.subItem1 to target.item2.subItem1;
+    }
+}
+`);
+
+        expect(result.errors).toHaveLength(0);
+        const flows = st.getSymbolsForUri('test://test.sysml').filter(s => s.kind === 'flow');
+        expect(flows.map(f => [displayName(f), f.flowDetails?.source, f.flowDetails?.target])).toEqual([
+            ['flow1_2', 'a1.item1', 'a2.item2'],
+            ['source.item1.subItem1→target.item2.subItem1', 'source.item1.subItem1', 'target.item2.subItem1'],
+        ]);
+    });
+
     it('should name an anonymous interface usage after its ends\' reference paths', async () => {
         const { st, result } = await buildST(`
 package Demo {

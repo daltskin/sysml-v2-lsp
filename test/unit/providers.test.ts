@@ -1296,6 +1296,59 @@ describe('Semantic Tokens Provider', () => {
         expect(tokenTypes).toContain(9); // number type
     });
 
+    it('should classify a flow or message payload\'s type as a type, and its name as a variable, in every payload form', async () => {
+        const { SemanticTokensProvider } = await import('../../server/src/providers/semanticTokensProvider.js');
+        const text = [
+            'package T {',
+            '    item def Fuel;',
+            '    package P { item def Fuel; }',
+            '    part def V {',
+            '        part tank { out item fuelOut : Fuel; event occurrence fuelSent; }',
+            '        part engine { in item fuelIn : Fuel; event occurrence fuelReceived; }',
+            '        flow of Fuel from tank.fuelOut to engine.fuelIn;',
+            '        succession flow of Fuel from tank.fuelOut to engine.fuelIn;',
+            '        message of Fuel from tank.fuelSent to engine.fuelReceived;',
+            '        flow of fuel : Fuel from tank.fuelOut to engine.fuelIn;',
+            '        flow of Fuel[2] from tank.fuelOut to engine.fuelIn;',
+            '        flow of [2] Fuel from tank.fuelOut to engine.fuelIn;',
+            '        flow of p1 :> tank.fuelOut from tank.fuelOut to engine.fuelIn;',
+            '        flow of P::Fuel from tank.fuelOut to engine.fuelIn;',
+            '    }',
+            '}',
+        ].join('\n');
+        const { dm } = await setup(text);
+        const provider = new SemanticTokensProvider(dm);
+        const data = provider.provideSemanticTokens({ textDocument: { uri: 'test://test.sysml' } }).data;
+
+        // Decode (line, character, length, type) quintuples into `text:type` per line.
+        const lines = text.split('\n');
+        const byLine = new Map<number, string[]>();
+        let line = 0;
+        let character = 0;
+        for (let i = 0; i < data.length; i += 5) {
+            line += data[i];
+            character = data[i] === 0 ? character + data[i + 1] : data[i + 1];
+            const token = `${lines[line].substr(character, data[i + 2])}:${data[i + 3]}`;
+            byLine.set(line, [...(byLine.get(line) ?? []), token]);
+        }
+        const afterOf = (lineIndex: number) => {
+            const tokens = byLine.get(lineIndex)!;
+            return tokens.slice(tokens.findIndex(t => t.startsWith('of:')) + 1, tokens.findIndex(t => t.startsWith('from:')));
+        };
+        // Token types: 1 = type, 3 = variable, 9 = number, 10 = operator.
+        expect(afterOf(6)).toEqual(['Fuel:1']);
+        expect(afterOf(7)).toEqual(['Fuel:1']);
+        expect(afterOf(8)).toEqual(['Fuel:1']);
+        expect(afterOf(9)).toEqual(['fuel:3', 'Fuel:1']);
+        // A payload with a multiplicity, after or before its type, is still a type.
+        expect(afterOf(10)).toEqual(['Fuel:1', '2:9']);
+        expect(afterOf(11)).toEqual(['2:9', 'Fuel:1']);
+        // A payload subsetting a feature is named, not typed: its name stays a variable.
+        expect(afterOf(12).slice(0, 2)).toEqual(['p1:3', ':>:10']);
+        // In a qualified payload type, the type is the last segment.
+        expect(afterOf(13).at(-1)).toBe('Fuel:1');
+    });
+
     it('should classify identifiers with variable token type', async () => {
         const { SemanticTokensProvider } = await import('../../server/src/providers/semanticTokensProvider.js');
         const text = 'package Test { part myPart : SomeType; part def SomeType; }';

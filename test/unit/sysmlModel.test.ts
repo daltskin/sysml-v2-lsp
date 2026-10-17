@@ -331,6 +331,79 @@ package Demo {
             expect(new Set([...idsIn('test://a.sysml'), ...idsIn('test://b.sysml')]).size).toBe(4);
         });
 
+        it('should include a flow definition with its members', async () => {
+            const model = await getModelForText(`
+package Test {
+    item def Fuel;
+    flow def FuelFlow {
+        ref item :>> payload : Fuel;
+    }
+}
+`, ['elements']);
+
+            const pkg = model.elements!.find(e => e.name === 'Test');
+            const flowDef = pkg!.children.find(e => e.name === 'FuelFlow');
+            expect(flowDef?.type).toBe('flow def');
+            expect(flowDef!.children.map(c => c.name)).toEqual(['payload']);
+        });
+
+        it('should report a message as a flow, with its from/to relationship', async () => {
+            const model = await getModelForText(`
+package Test {
+    item def Fuel;
+    part def Vehicle {
+        part tank { event occurrence fuelSent; }
+        part engine { event occurrence fuelReceived; }
+        message m1 of Fuel from tank.fuelSent to engine.fuelReceived;
+    }
+}
+`, ['elements', 'relationships']);
+
+            const vehicle = model.elements!.find(e => e.name === 'Test')!.children.find(e => e.name === 'Vehicle');
+            const message = vehicle?.children.find(e => e.name === 'm1');
+            expect(message?.type).toBe('flow');
+            expect(model.relationships!.filter(r => r.type === 'flow')).toEqual([
+                expect.objectContaining({ source: 'tank.fuelSent', target: 'engine.fuelReceived', name: 'Fuel', symbolId: message!.symbolId }),
+            ]);
+        });
+
+        it('should report a succession flow typed by a flow definition, with its succession relationship', async () => {
+            const model = await getModelForText(`
+package Test {
+    flow def ImageFlow;
+    action def TakePicture {
+        action focus { out image; }
+        action shoot { in image; }
+        succession flow sf : ImageFlow from focus.image to shoot.image;
+    }
+}
+`, ['elements', 'relationships']);
+
+            const takePicture = model.elements!.find(e => e.name === 'Test')!.children.find(e => e.name === 'TakePicture');
+            const sf = takePicture?.children.find(e => e.name === 'sf');
+            expect(sf?.type).toBe('succession flow');
+            expect(sf?.attributes['flowType']).toBe('ImageFlow');
+            expect(model.relationships!.filter(r => r.type === 'succession')).toEqual([
+                expect.objectContaining({ source: 'focus.image', target: 'shoot.image', symbolId: sf!.symbolId }),
+            ]);
+        });
+
+        it('should report a flow nested in a flow usage as that flow usage\'s child', async () => {
+            const model = await getModelForText(`
+package Test {
+    item def Item1 { item subItem1; }
+    action a1 { out item1 : Item1; }
+    action a2 { in item2 : Item1; }
+    flow flow1_2 from a1.item1 to a2.item2 {
+        flow source.item1.subItem1 to target.item2.subItem1;
+    }
+}
+`, ['elements']);
+
+            const flow = model.elements!.find(e => e.name === 'Test')!.children.find(e => e.name === 'flow1_2');
+            expect(flow?.children.map(c => [c.type, c.displayName])).toEqual([['flow', 'source.item1.subItem1→target.item2.subItem1']]);
+        });
+
         it('should use correct type strings matching extension expectations', async () => {
             const model = await getModelForText(`
 package Test {

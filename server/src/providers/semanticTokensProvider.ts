@@ -1,3 +1,4 @@
+import { ParserRuleContext } from 'antlr4ng';
 import {
     SemanticTokens,
     SemanticTokensBuilder,
@@ -5,6 +6,7 @@ import {
 } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
 import { SysMLv2Lexer } from '../generated/SysMLv2Lexer.js';
+import { SysMLv2Parser } from '../generated/SysMLv2Parser.js';
 import { SYSML_KEYWORDS } from '../utils/sysmlKeywords.js';
 
 /** Lexer token types that map to the "operator" semantic token. */
@@ -43,6 +45,26 @@ const PUNCTUATION_TOKENS = new Set([
     SysMLv2Lexer.RBRACK,        // ]
     SysMLv2Lexer.COLON,         // :
 ]);
+
+/**
+ * The token index of each flow or message payload type written without a payload name (8.2.2.16
+ * `PayloadFeature`): the last token of the payload's own typing. A payload with a name is typed
+ * after `:`, which the context classification handles.
+ */
+function payloadTypeTokenIndices(tree: ParserRuleContext): Set<number> {
+    const indices = new Set<number>();
+    const visit = (ctx: ParserRuleContext): void => {
+        for (const child of ctx.children) {
+            if (!(child instanceof ParserRuleContext)) continue;
+            if (ctx.ruleIndex === SysMLv2Parser.RULE_payloadFeature && child.ruleIndex === SysMLv2Parser.RULE_ownedFeatureTyping && child.stop) {
+                indices.add(child.stop.tokenIndex);
+            }
+            visit(child);
+        }
+    };
+    visit(tree);
+    return indices;
+}
 
 /** Module-level keyword sets — allocated once, shared by all provider instances. */
 const STRUCTURAL_KEYWORDS = new Set([
@@ -113,6 +135,7 @@ export class SemanticTokensProvider {
         const tokens = result.tokenStream.getTokens();
 
         let prevMeaningful: string | undefined;
+        const payloadTypes = result.tree ? payloadTypeTokenIndices(result.tree) : new Set<number>();
 
         for (const token of tokens) {
             if (!token.text || token.channel !== 0) {
@@ -120,7 +143,7 @@ export class SemanticTokensProvider {
             }
 
             const text = token.text;
-            const tokenType = this.classifyTokenInContext(text, prevMeaningful, token.type);
+            const tokenType = payloadTypes.has(token.tokenIndex) ? 1 : this.classifyTokenInContext(text, prevMeaningful, token.type);
 
             // Track previous meaningful token for context-sensitive classification
             prevMeaningful = text;

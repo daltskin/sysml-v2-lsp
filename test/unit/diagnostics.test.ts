@@ -241,6 +241,84 @@ package Demo {
         });
     });
 
+    describe('flow definitions', () => {
+        it('should not flag a flow usage typed by a flow definition in the same document', async () => {
+            const text = `
+package Demo {
+    flow def FuelFlow;
+    part def Vehicle {
+        flow fuelFlow : FuelFlow;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            expect(diags.filter(d => d.code === 'unresolved-type')).toEqual([]);
+        });
+
+        it('should not flag a flow or message typed by a flow definition through a qualified or short name', async () => {
+            const text = `
+package Demo {
+    package P { flow def <ff> FuelFlow; }
+    part def Vehicle {
+        flow f1 : P::FuelFlow;
+        flow f2 : P::ff;
+        message m : P::FuelFlow;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            expect(diags.filter(d => d.code === 'unresolved-type')).toEqual([]);
+        });
+
+        it('should not flag a succession flow typed by a flow definition', async () => {
+            const text = `
+package Demo {
+    item def Image;
+    flow def ImageFlow;
+    action def TakePicture {
+        action focus { out image : Image; }
+        action shoot { in image : Image; }
+        succession flow sf : ImageFlow from focus.image to shoot.image;
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            expect(diags.filter(d => d.code === 'unresolved-type')).toEqual([]);
+        });
+
+        it('should flag an unresolved type on a message', async () => {
+            const text = `
+package Demo {
+    message m : Missing;
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            expect(diags.filter(d => d.code === 'unresolved-type').some(d => d.message.includes("'Missing'"))).toBe(true);
+        });
+
+        it('should report two messages with the same name as ambiguous', async () => {
+            const text = `
+package Demo {
+    message m;
+    message m;
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            expect(diags.some(d => d.code === 'ambiguous-namespace-name' && d.message.includes("'m'"))).toBe(true);
+        });
+
+        it('should report two flow definitions with the same name as ambiguous', async () => {
+            const text = `
+package Demo {
+    flow def FuelFlow;
+    flow def FuelFlow;
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            expect(diags.some(d => d.code === 'ambiguous-namespace-name' && d.message.includes("'FuelFlow'"))).toBe(true);
+        });
+    });
+
     describe('unresolved type references', () => {
         it('should flag a type that does not exist in the document', async () => {
             const text = `

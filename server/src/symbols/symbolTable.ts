@@ -45,7 +45,9 @@ const RULE_INDEX_TO_KIND = new Map<number, SysMLElementKind>([
     [SysMLv2Parser.RULE_attributeUsage, SysMLElementKind.AttributeUsage],         // 224
     [SysMLv2Parser.RULE_portUsage, SysMLElementKind.PortUsage],                   // 251
     [SysMLv2Parser.RULE_connectionUsage, SysMLElementKind.ConnectionUsage],       // 254
+    [SysMLv2Parser.RULE_flowDefinition, SysMLElementKind.FlowDef],                // 279
     [SysMLv2Parser.RULE_flow, SysMLElementKind.FlowUsage],                         // 152
+    [SysMLv2Parser.RULE_message, SysMLElementKind.FlowUsage],                      // 280
     [SysMLv2Parser.RULE_flowUsage, SysMLElementKind.FlowUsage],                    // 284
     [SysMLv2Parser.RULE_successionFlowUsage, SysMLElementKind.SuccessionFlowUsage], // 285
     [SysMLv2Parser.RULE_actionUsage, SysMLElementKind.ActionUsage],               // 296
@@ -89,14 +91,21 @@ const BODY_RULE_INDICES: ReadonlySet<number> = new Set(
 );
 
 /**
- * A flow's payload (`of i : I`) and ends (`from a to b`): they declare names
- * and types of their own, never the flow's.
+ * A flow's payload and ends, and a message's events: they declare names and
+ * types of their own, never the flow's.
  */
 const FLOW_PART_RULE_INDICES: ReadonlySet<number> = new Set([
     SysMLv2Parser.RULE_payloadFeatureMember,
     SysMLv2Parser.RULE_flowPayloadFeatureMember,
     SysMLv2Parser.RULE_flowEndMember,
+    SysMLv2Parser.RULE_messageEventMember,
 ]);
+
+/** A flow usage's declaration: a flow's, or a message's (8.2.2.16 `MessageDeclaration`). */
+const FLOW_DECLARATION_RULE_INDICES: readonly number[] = [
+    SysMLv2Parser.RULE_flowDeclaration,
+    SysMLv2Parser.RULE_messageDeclaration,
+];
 
 /**
  * Usages named after the element they refer to when they declare no name of
@@ -1115,19 +1124,22 @@ export class SymbolTable {
 
     /** Extract the payload type and both endpoint paths from a flow declaration. */
     private extractFlowDetails(ctx: ParserRuleContext): SysMLSymbol['flowDetails'] {
-        const declaration = this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_flowDeclaration);
+        const declaration = this.flowDeclarationOf(ctx);
         if (!declaration) return undefined;
 
+        // A flow's ends, or a message's source and target events.
         const flowEnds: ParserRuleContext[] = [];
         this.collectDescendantRules(declaration, SysMLv2Parser.RULE_flowEndMember, flowEnds);
+        this.collectDescendantRules(declaration, SysMLv2Parser.RULE_messageEventMember, flowEnds);
         const endpoints = flowEnds.map((end) => {
-            const flowEnd = this.findOwnHeaderRule(end, SysMLv2Parser.RULE_flowEnd);
+            const flowEnd = this.findOwnHeaderRule(end, SysMLv2Parser.RULE_flowEnd)
+                ?? this.findOwnHeaderRule(end, SysMLv2Parser.RULE_messageEvent);
             return flowEnd ? this.cleanTransitionText(flowEnd.getText()) : undefined;
         });
 
         const payload = this.findOwnHeaderRule(declaration, SysMLv2Parser.RULE_payloadFeatureMember)
             ?? this.findOwnHeaderRule(declaration, SysMLv2Parser.RULE_flowPayloadFeatureMember);
-        const payloadTypes = payload ? this.extractTypeNames(payload) : [];
+        const payloadTypes = payload ? this.extractPayloadTypeNames(payload) : [];
         const identification = payload
             ? this.findRuleContext(payload, SysMLv2Parser.RULE_identification)
             : undefined;
@@ -1145,9 +1157,30 @@ export class SymbolTable {
         };
     }
 
+    /**
+     * A flow payload's own types (8.2.2.16 `PayloadFeature`), as written: its typings only, never a
+     * feature it subsets or redefines.
+     */
+    private extractPayloadTypeNames(payload: ParserRuleContext): string[] {
+        const typings: ParserRuleContext[] = [];
+        this.collectDescendantRules(payload, SysMLv2Parser.RULE_ownedFeatureTyping, typings);
+        const names: string[] = [];
+        for (const typing of typings) this.collectQualifiedTypeNames(typing, names);
+        return names;
+    }
+
+    /** A flow usage's own declaration: a flow's `flowDeclaration` or a message's `messageDeclaration`. */
+    private flowDeclarationOf(ctx: ParserRuleContext): ParserRuleContext | undefined {
+        for (const ruleIndex of FLOW_DECLARATION_RULE_INDICES) {
+            const declaration = this.findOwnHeaderRule(ctx, ruleIndex);
+            if (declaration) return declaration;
+        }
+        return undefined;
+    }
+
     /** Extract the flow feature's own declared type without including its payload type. */
     private extractFlowTypeNames(ctx: ParserRuleContext): string[] {
-        const declaration = this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_flowDeclaration);
+        const declaration = this.flowDeclarationOf(ctx);
         const typeDeclaration = declaration && (
             this.findOwnHeaderRule(declaration, SysMLv2Parser.RULE_featureDeclaration)
             ?? this.findOwnHeaderRule(declaration, SysMLv2Parser.RULE_usageDeclaration)

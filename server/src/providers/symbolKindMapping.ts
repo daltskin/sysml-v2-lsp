@@ -33,9 +33,10 @@ export function toSysMLSymbolKind(kind: SysMLElementKind): SymbolKind {
         case SysMLElementKind.InterfaceUsage:
             return SymbolKind.Interface;
 
-        // Connections
+        // Connections, and flow definitions (declared like connection definitions, 7.16.2)
         case SysMLElementKind.ConnectionDef:
         case SysMLElementKind.ConnectionUsage:
+        case SysMLElementKind.FlowDef:
             return SymbolKind.Interface;
 
         // Behavioral: actions → Method

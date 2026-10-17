@@ -15,6 +15,7 @@ export enum SysMLElementKind {
     ConnectionUsage = 'connection',
     InterfaceDef = 'interface def',
     InterfaceUsage = 'interface',
+    FlowDef = 'flow def',
     FlowUsage = 'flow',
     SuccessionFlowUsage = 'succession flow',
     ActionDef = 'action def',
@@ -281,6 +282,7 @@ export function toMetaclassName(kind: SysMLElementKind): string {
         case SysMLElementKind.ConnectionUsage: return 'ConnectionUsage';
         case SysMLElementKind.InterfaceDef: return 'InterfaceDefinition';
         case SysMLElementKind.InterfaceUsage: return 'InterfaceUsage';
+        case SysMLElementKind.FlowDef: return 'FlowDefinition';
         case SysMLElementKind.FlowUsage: return 'FlowUsage';
         case SysMLElementKind.SuccessionFlowUsage: return 'SuccessionFlowUsage';
         case SysMLElementKind.ActionDef: return 'ActionDefinition';
