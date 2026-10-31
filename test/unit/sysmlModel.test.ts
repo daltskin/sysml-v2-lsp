@@ -2099,6 +2099,222 @@ package Demo {
             });
         });
 
+        describe('usage value (SysML 8.2.2.6.2 ValuePart, FeatureValue)', () => {
+            const text = `
+package Demo {
+    attribute def Mass;
+    item def I;
+    part p {
+        attribute mass : Mass;
+        attribute crossing => mass;
+        attribute m1 : Mass = mass;
+        attribute m2 : Mass := mass;
+        attribute m3 : Mass default = mass * 2;
+        item item1 : I;
+        item item8R = item1;
+        part p2 = item1;
+        part p3 = item1 {
+            attribute inner = 5;
+        }
+    }
+}
+`;
+            const valueOf = (model: any, name: string) => model.elements!
+                .find((e: { name: string }) => e.name === 'Demo').children
+                .find((e: { name: string }) => e.name === 'p').children
+                .find((e: { name: string }) => e.name === name)?.attributes['value'];
+
+            it('reports no value for a cross subsetting (=>)', async () => {
+                const model = await getModelForText(text, ['elements']);
+                expect(valueOf(model, 'crossing')).toBeUndefined();
+                expect(valueOf(model, 'mass')).toBeUndefined();
+            });
+
+            it('reports the value after =, := and default', async () => {
+                const model = await getModelForText(text, ['elements']);
+                expect(valueOf(model, 'm1')).toBe('mass');
+                expect(valueOf(model, 'm2')).toBe('mass');
+                expect(valueOf(model, 'm3')).toBe('mass * 2');
+            });
+
+            it('reports the value of every kind of usage', async () => {
+                const model = await getModelForText(text, ['elements']);
+                expect(valueOf(model, 'item8R')).toBe('item1');
+                expect(valueOf(model, 'p2')).toBe('item1');
+            });
+
+            it('reports whether a value is a default and an initial value (SysML 7.13.4)', async () => {
+                const model = await getModelForText(`
+package Demo {
+    part def Engine;
+    part def Vehicle {
+        part standardEngine : Engine;
+        attribute bound = 12;
+        attribute count := 0;
+        attribute mass default 1500.0;
+        attribute cutoff default = 0.75;
+        part engine[1] : Engine default := standardEngine;
+    }
+}
+`, ['elements']);
+                const vehicle = model.elements!.find(e => e.name === 'Demo')!.children.find(e => e.name === 'Vehicle')!;
+                const kindOf = (name: string) => {
+                    const attributes = vehicle.children.find(e => e.name === name)!.attributes;
+                    return [attributes['value'], attributes['isDefault'] ?? false, attributes['isInitial'] ?? false];
+                };
+                expect(kindOf('bound')).toEqual(['12', false, false]);
+                expect(kindOf('count')).toEqual(['0', false, true]);
+                expect(kindOf('mass')).toEqual(['1500.0', true, false]);
+                expect(kindOf('cutoff')).toEqual(['0.75', true, false]);
+                expect(kindOf('engine')).toEqual(['standardEngine', true, true]);
+            });
+
+            it('reports the value of an enumerated value, named or not (SysML Table 6)', async () => {
+                const model = await getModelForText(`
+package Demo {
+    attribute value1;
+    attribute unit1;
+    enum def E1 {
+       enum = value1 [unit1];
+    }
+    enum def E2 {
+       = value1 [unit1];
+    }
+    enum def E3 {
+       enum named1 = 5 [unit1];
+    }
+}
+`, ['elements']);
+                const demo = model.elements!.find(e => e.name === 'Demo')!;
+                const valuesOf = (name: string) => demo.children.find(e => e.name === name)!.children.map(e => e.attributes['value']);
+                expect(valuesOf('E1')).toEqual(['value1 [unit1]']);
+                expect(valuesOf('E2')).toEqual(['value1 [unit1]']);
+                expect(valuesOf('E3')).toEqual(['5 [unit1]']);
+            });
+
+            it('reports the value of a redefinition without a kind keyword (SysML 7.8.2)', async () => {
+                const model = await getModelForText(`
+package Demo {
+    enum def ConditionColor { red; green; yellow; }
+    attribute def ConditionLevel {
+        attribute color : ConditionColor;
+    }
+    enum def RiskLevel :> ConditionLevel {
+        enum low { :>> color = ConditionColor::green; }
+        enum high { :>> color = ConditionColor::red; }
+    }
+}
+`, ['elements']);
+                const riskLevel = model.elements!.find(e => e.name === 'Demo')!.children.find(e => e.name === 'RiskLevel')!;
+                const colorOf = (name: string) => riskLevel.children.find(e => e.name === name)!.children[0].attributes['value'];
+                expect(colorOf('low')).toBe('ConditionColor::green');
+                expect(colorOf('high')).toBe('ConditionColor::red');
+                expect(riskLevel.children.find(e => e.name === 'low')!.attributes['value']).toBeUndefined();
+            });
+
+            it('reports the value of other usage kinds (SysML 8.2.2.13-8.2.2.25 ValuePart)', async () => {
+                const model = await getModelForText(`
+package Demo {
+    part def P { port q; }
+    action def Drive;
+    constraint def C;
+    view def V;
+    part w : P;
+    part a : P {
+        port p1;
+        connection conn = w connect p1 to w.q;
+        flow fl = w from p1 to w.q;
+        action act : Drive = w;
+        perform action pa = w;
+        constraint con : C = w;
+        view vw : V = w;
+        port pv = p1;
+        ref rf = w;
+    }
+}
+`, ['elements']);
+                const a = model.elements!.find(e => e.name === 'Demo')!.children.find(e => e.name === 'a')!;
+                for (const name of ['conn', 'fl', 'act', 'pa', 'con', 'vw', 'rf']) {
+                    expect(a.children.find(e => e.name === name)?.attributes['value'], name).toBe('w');
+                }
+                expect(a.children.find(e => e.name === 'pv')?.attributes['value']).toBe('p1');
+            });
+
+            it('keeps a parameter\'s or payload\'s value off its owner (SysML 8.2.2.17.4 FeatureBinding)', async () => {
+                const model = await getModelForText(`
+package Demo {
+    attribute def Sig;
+    attribute def Real;
+    part def P { port q; }
+    action def Drive { in speed : Real; }
+    part w : P;
+    part a : P {
+        port p1;
+        action drive : Drive { in speed = 100; }
+        flow of payload : Sig = Sig() from p1 to w.q;
+    }
+}
+`, ['elements']);
+                const a = model.elements!.find(e => e.name === 'Demo')!.children.find(e => e.name === 'a')!;
+                const drive = a.children.find(e => e.name === 'drive')!;
+                expect(drive.attributes['value']).toBeUndefined();
+                expect(drive.children.find(e => e.name === 'speed')?.attributes['value']).toBe('100');
+                const flow = a.children.find(e => e.attributes['isAnonymous'] === true)!;
+                expect(flow.attributes['value']).toBeUndefined();
+            });
+
+            it('reports an expression of any form as written', async () => {
+                const model = await getModelForText(`
+package Demo {
+    action def Drive { in speed; }
+    part a {
+        attribute seq = (1, 2, 3);
+        attribute cond = if true ? 1 else 2;
+        attribute call = Drive(speed = 1);
+        attribute multi = 1 +
+            2;
+        attribute quoted = 'my value';
+        attribute str = "text";
+        attribute withBody = 5 { doc /* the value */ }
+    }
+}
+`, ['elements']);
+                const a = model.elements!.find(e => e.name === 'Demo')!.children.find(e => e.name === 'a')!;
+                const valueOf = (name: string) => a.children.find(e => e.name === name)?.attributes['value'];
+                expect(valueOf('seq')).toBe('(1, 2, 3)');
+                expect(valueOf('cond')).toBe('if true ? 1 else 2');
+                expect(valueOf('call')).toBe('Drive(speed = 1)');
+                expect(valueOf('multi')).toBe('1 + 2');
+                expect(valueOf('quoted')).toBe("'my value'");
+                expect(valueOf('str')).toBe('"text"');
+                expect(valueOf('withBody')).toBe('5');
+            });
+
+            it('reports a value containing "def", and a long one, in full', async () => {
+                const long = Array.from({ length: 30 }, (_, i) => `term${i}`).join(' + ');
+                const model = await getModelForText(`
+package Demo {
+    part a {
+        attribute predefinedLimit = 5;
+        attribute limit = predefinedLimit;
+        attribute total = ${long};
+    }
+}
+`, ['elements']);
+                const a = model.elements!.find(e => e.name === 'Demo')!.children.find(e => e.name === 'a')!;
+                expect(a.children.find(e => e.name === 'limit')?.attributes['value']).toBe('predefinedLimit');
+                expect(long.length).toBeGreaterThan(100);
+                expect(a.children.find(e => e.name === 'total')?.attributes['value']).toBe(long);
+            });
+
+            it('reports a usage\'s own value, not one of its members\'', async () => {
+                const model = await getModelForText(text, ['elements']);
+                expect(valueOf(model, 'p3')).toBe('item1');
+                const p = model.elements!.find(e => e.name === 'Demo')!.children.find(e => e.name === 'p')!;
+                expect(p.attributes['value']).toBeUndefined();
+            });
+        });
+
         it('should extract visibility (public, private, protected)', async () => {
             const model = await getModelForText(`
 package Test {

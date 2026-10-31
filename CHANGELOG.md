@@ -10,6 +10,7 @@
 
 - `sysml/model` reports an element's prefix from its own prefix and multiplicity productions (SysML 8.2.2.6.2 `RefPrefix`, `BasicUsagePrefix`, `EndUsagePrefix`, 8.2.2.6.6 `MultiplicityPart`): `modifier` now includes `ref`, `constant` and `end`, in written order; `direction` is reported for every usage, not only ports; `ordered: true` and `nonunique: true` when written. A keyword in a member's or an owned feature's declaration (e.g. a transition's trigger payload or guard), in a name or reference spelled like a keyword (`var`), or in a comment is no longer credited to the element.
 - `readonly`, which is not a keyword in the SysML v2 grammar (KERML_-57 renamed it to `constant`), is no longer reported in `modifier` when written; completion offers `constant` instead. Resolved features have `isConstant`.
+- `sysml/model` reports the value of every kind of usage, not only attributes, read from its own `ValuePart` (SysML 8.2.2.6.2): the expression after `=`, `:=` or `default`, with `isDefault` and `isInitial` for a default and an initial value (SysML 7.13.4). A cross subsetting (`=> x`) is no longer reported as a value.
 
 ### Deprecated
 

@@ -1016,6 +1016,142 @@ package InheritTest {
     });
 });
 
+describe('Feature value (SysML 7.13.4, 8.2.2.6.2 ValuePart)', () => {
+    it('records the own value of a symbol, with its kind', async () => {
+        const { st } = await buildST(`
+package Demo {
+    part def Engine;
+    part a {
+        part standardEngine : Engine;
+        attribute bound = 12;
+        attribute count := 0;
+        part engine : Engine default := standardEngine;
+        attribute crossing => bound;
+    }
+}
+`);
+        const valueOf = (name: string) => st.getAllSymbols().find(symbol => symbol.name === name)?.featureValue;
+        expect(valueOf('bound')).toEqual({ expression: '12', isDefault: false, isInitial: false });
+        expect(valueOf('count')).toEqual({ expression: '0', isDefault: false, isInitial: true });
+        expect(valueOf('engine')).toEqual({ expression: 'standardEngine', isDefault: true, isInitial: true });
+        expect(valueOf('crossing')).toBeUndefined();
+        expect(valueOf('a')).toBeUndefined();
+    });
+
+    it('records no value for a value part without an expression (a syntax error)', async () => {
+        const { st } = await buildST(`
+package Demo {
+    part a {
+        attribute broken = ;
+    }
+}
+`);
+        expect(st.getAllSymbols().find(symbol => symbol.name === 'broken')?.featureValue).toBeUndefined();
+    });
+
+    it('records an expression with expression bodies in full (SysML 7.13.4, KerML 8.2.5.8.3 BodyExpression)', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    attribute s;
+    attribute def SampledFunction { attribute samples; }
+    part a {
+        attribute b1 = s->select { in i; i > 1 };
+        attribute v1 = s->select { in i { } i > 1 };
+        attribute n3 = s->select { in i; i > 1 }->size();
+        attribute v3 = s->select { in i; i > 1 } + s->select { in j; j > 2 };
+        attribute v5 = s->collect { in i; s->select { in j; j > i } };
+        attribute v7 = {
+            in i;
+            i
+        };
+        attribute v8 = s->select { doc /* d */ in i : ScalarValues::Integer [1]; i > 1 };
+        attribute sampling = new SampledFunction(samples = s->collect { in x; x * 2 });
+        attribute b10 = s->collect { in i; i * 2 } { doc /* d */ }
+    }
+}
+`);
+        expect(result.errors).toEqual([]);
+        const valueOf = (name: string) => st.getAllSymbols().find(symbol => symbol.name === name)?.featureValue?.expression;
+        expect(valueOf('b1')).toBe('s->select { in i; i > 1 }');
+        expect(valueOf('v1')).toBe('s->select { in i { } i > 1 }');
+        expect(valueOf('n3')).toBe('s->select { in i; i > 1 }->size()');
+        expect(valueOf('v3')).toBe('s->select { in i; i > 1 } + s->select { in j; j > 2 }');
+        expect(valueOf('v5')).toBe('s->collect { in i; s->select { in j; j > i } }');
+        expect(valueOf('v7')).toBe('{ in i; i }');
+        expect(valueOf('v8')).toBe('s->select { doc /* d */ in i : ScalarValues::Integer [1]; i > 1 }');
+        expect(valueOf('sampling')).toBe('new SampledFunction(samples = s->collect { in x; x * 2 })');
+        expect(valueOf('b10')).toBe('s->collect { in i; i * 2 }');
+    });
+
+    it('reads a value by its syntactic role, not from names or comments spelled like one', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    attribute 'default';
+    part a {
+        attribute 'default' = 1;
+        attribute '=' = 2;
+        attribute ':=' := 3;
+        attribute 'x=y';
+        attribute 'z default';
+        attribute k1 = 'default';
+        attribute c1; // = 5 trailing
+        attribute c2 { doc /* default = 6 */ }
+        // attribute ghost = 99;
+        /* attribute ghost2 default = 98; */
+        attribute c3 = 1 // comment = 5
+            + 4;
+    }
+}
+`);
+        expect(result.errors).toEqual([]);
+        const owner = st.getAllSymbols().find(symbol => symbol.qualifiedName === 'Demo::a');
+        const symbolOf = (name: string) => st.getAllSymbols().find(symbol => symbol.parentId === owner?.symbolId && symbol.name === name);
+        const valueOf = (name: string) => symbolOf(name)?.featureValue;
+        for (const name of ['default', '=', ':=', 'x=y', 'z default', 'k1', 'c1', 'c2', 'c3']) expect(symbolOf(name), name).toBeDefined();
+        expect(valueOf('default')).toEqual({ expression: '1', isDefault: false, isInitial: false });
+        expect(valueOf('=')).toEqual({ expression: '2', isDefault: false, isInitial: false });
+        expect(valueOf(':=')).toEqual({ expression: '3', isDefault: false, isInitial: true });
+        expect(valueOf('x=y')).toBeUndefined();
+        expect(valueOf('z default')).toBeUndefined();
+        expect(valueOf('k1')).toEqual({ expression: "'default'", isDefault: false, isInitial: false });
+        expect(valueOf('c1')).toBeUndefined();
+        expect(valueOf('c2')).toBeUndefined();
+        expect(valueOf('c3')?.expression).toBe('1 + 4');
+        expect(st.getAllSymbols().some(symbol => symbol.name.startsWith('ghost'))).toBe(false);
+    });
+
+    it('records no value on a transition for its accept payload or effect action (SysML 8.2.2.18.3)', async () => {
+        const { st, result } = await buildST(`
+package Demo {
+    attribute def T;
+    action def A;
+    attribute a : T;
+    port p;
+    state def S {
+        state s1; state s2;
+        transition t1 first s1 accept sig1 : T = a then s2;
+        transition t2 first s1 accept sig2 : T := a then s2;
+        transition t3 first s1 accept sig3 : T [3] default = a then s2;
+        transition t4 first s1 accept sig4 : T = a via p then s2;
+        transition t5 first s1 do action eff5 : A [2] = a then s2;
+        transition t6 first s1 do action eff6 : A = a { } then s2;
+        transition t7 first s1 accept sig7 : T do action eff7 = a then s2;
+        transition t8 first s1 do action eff8 = { in i; i } then s2;
+        transition t9 first s1 accept at a then s2;
+        transition t10 first s1 accept when a == a then s2;
+        transition t11 first s1 do send a via p then s2;
+        transition t12 first s1 do assign a := 3 then s2;
+        transition t13 first s1 if a == a then s2;
+    }
+}
+`);
+        expect(result.errors).toEqual([]);
+        const transitions = st.getAllSymbols().filter(symbol => /^t\d+$/.test(symbol.name));
+        expect(transitions.map(symbol => symbol.name)).toHaveLength(13);
+        for (const transition of transitions) expect({ [transition.name]: transition.featureValue }).toEqual({ [transition.name]: undefined });
+    });
+});
+
 describe('Package split across files: fields beyond imports/filters also merge', () => {
     // A reopened package (`package P { ... }` in more than one file) is one
     // semantic namespace, not several -- a `doc`, prefix `#annotation`, or

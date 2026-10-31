@@ -140,6 +140,11 @@ export interface SysMLSymbol {
     /** Visibility declared on the owning membership; omitted for default public visibility. */
     visibility?: 'public' | 'private' | 'protected';
     /**
+     * The element's own feature value (SysML 7.13.4): its expression as written,
+     * and whether it is a default (`default`) and an initial (`:=`) value.
+     */
+    featureValue?: { expression: string; isDefault: boolean; isInitial: boolean };
+    /**
      * Keywords of the element's own prefix and multiplicity part, in written
      * order (`in`, `abstract`, `constant`, `ref`, `end`, `ordered`, ...).
      */

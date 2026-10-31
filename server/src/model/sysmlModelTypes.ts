@@ -218,7 +218,10 @@ export interface SysMLElementDTO {
      *   doc           – Alternative doc field
      *   modifier      – Prefix keywords other than the direction, as written
      *                   (e.g., "abstract", "derived", "constant", "ref", "end")
-     *   value         – Default/assigned value
+     *   value         – Expression of the element's own feature value, as written
+     *                   (whitespace and comments between its parts as one space)
+     *   isDefault     – true for a default feature value (`default`, `default =`, `default :=`)
+     *   isInitial     – true for an initial feature value (`:=`, `default :=`)
      *   visibility    – 'public' | 'private' | 'protected'
      *   isAnonymous   – true for an element without a name (its `name` is empty)
      */

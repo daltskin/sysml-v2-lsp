@@ -1,7 +1,7 @@
 import { ErrorNode, ParserRuleContext, ParseTree, TerminalNode, Token } from 'antlr4ng';
 import { Range } from 'vscode-languageserver/node';
 import { SysMLv2Lexer } from '../generated/SysMLv2Lexer.js';
-import { MultiplicityBoundsContext, OwnedExpressionContext, SysMLv2Parser } from '../generated/SysMLv2Parser.js';
+import { FeatureValueContext, MultiplicityBoundsContext, OwnedExpressionContext, SysMLv2Parser } from '../generated/SysMLv2Parser.js';
 import { ParseResult } from '../parser/parseDocument.js';
 import { contextToRange, tokenToRange } from '../parser/positionUtils.js';
 import { SYSML_KEYWORDS } from '../utils/sysmlKeywords.js';
@@ -96,6 +96,24 @@ const RULE_INDEX_TO_KIND = new Map<number, SysMLElementKind>([
 const BODY_RULE_INDICES: ReadonlySet<number> = new Set(
     SysMLv2Parser.ruleNames.flatMap((ruleName, index) => ruleName.endsWith('Body') ? [index] : []),
 );
+
+/**
+ * The declaration rules through which a usage's own `ValuePart` is reached
+ * from its element rule (SysML v2 8.2.2.6.2 `UsageCompletion`, 8.2.2.14.2
+ * `InterfaceUsageDeclaration`, 8.2.2.16 `FlowDeclaration`/`MessageDeclaration`,
+ * 8.2.2.17.2 `ActionUsageDeclaration`/`PerformActionUsageDeclaration`, 8.2.2.20
+ * `ConstraintUsageDeclaration`). Any other rule owns its own elements or values.
+ */
+const VALUE_DECLARATION_RULE_INDICES: ReadonlySet<number> = new Set([
+    SysMLv2Parser.RULE_usage,
+    SysMLv2Parser.RULE_usageCompletion,
+    SysMLv2Parser.RULE_actionUsageDeclaration,
+    SysMLv2Parser.RULE_performActionUsageDeclaration,
+    SysMLv2Parser.RULE_constraintUsageDeclaration,
+    SysMLv2Parser.RULE_interfaceUsageDeclaration,
+    SysMLv2Parser.RULE_flowDeclaration,
+    SysMLv2Parser.RULE_messageDeclaration,
+]);
 
 /**
  * A flow's payload and ends, and a message's events: they declare names and
@@ -1341,6 +1359,7 @@ export class SymbolTable {
         const typeName = typeNames[0];
         const documentation = this.extractDocumentation(ctx);
         const visibility = this.extractVisibility(ctx);
+        const featureValue = this.extractFeatureValue(ctx);
         const prefixKeywords = this.extractPrefixKeywords(ctx);
         // Only extract multiplicity for usages
         const { multiplicity, multiplicityRange } = isUsageKind(kind) ? this.extractMultiplicity(ctx) : {};
@@ -1383,6 +1402,7 @@ export class SymbolTable {
             namingReference,
             documentation,
             visibility,
+            featureValue,
             prefixKeywords: prefixKeywords.length > 0 ? prefixKeywords : undefined,
             source: transition?.source,
             target: transition?.target,
@@ -1871,7 +1891,25 @@ export class SymbolTable {
      * between two of them (`connect a.p to b.p`, `connection : Conn`).
      */
     private declarationText(ctx: ParserRuleContext): string | undefined {
-        const tokens = this.declarationTokens(ctx);
+        return this.tokensText(this.declarationTokens(ctx));
+    }
+
+    /** Every token of `ctx`, in source order: a whole expression, bodies and `;` included. */
+    private subtreeTokens(ctx: ParserRuleContext, tokens: Token[] = []): Token[] {
+        for (let i = 0; i < ctx.getChildCount(); i++) {
+            const child = ctx.getChild(i);
+            if (child instanceof TerminalNode) {
+                if (child.symbol.tokenIndex >= 0) tokens.push(child.symbol);
+            } else if (child instanceof ParserRuleContext) this.subtreeTokens(child, tokens);
+        }
+        return tokens;
+    }
+
+    /**
+     * Tokens joined as written, with one space wherever the source has
+     * whitespace or a comment between two of them.
+     */
+    private tokensText(tokens: Token[]): string | undefined {
         let text = '';
         tokens.forEach((token, i) => {
             if (i > 0 && token.start > tokens[i - 1].stop + 1) text += ' ';
@@ -1993,6 +2031,42 @@ export class SymbolTable {
                 : undefined;
         }
 
+        return undefined;
+    }
+
+    /**
+     * `ctx`'s own feature value (SysML 7.13.4, 8.2.2.6.2 `ValuePart`, `FeatureValue`):
+     * its expression as written, and whether it is a default (`default`) and an
+     * initial (`:=`) value. Never a nested element's value; a cross subsetting
+     * (`=> x`) is not a value. The expression is the whole `OwnedExpression`,
+     * expression bodies included, with whitespace and comments as one space.
+     */
+    private extractFeatureValue(ctx: ParserRuleContext): SysMLSymbol['featureValue'] {
+        const featureValueCtx = this.findOwnValuePart(ctx)?.getRuleContext(0, FeatureValueContext);
+        const expression = featureValueCtx?.ownedExpression();
+        const text = expression && this.tokensText(this.subtreeTokens(expression));
+        if (!featureValueCtx || !text) return undefined;
+        return {
+            expression: text,
+            isDefault: featureValueCtx.DEFAULT() !== null,
+            isInitial: featureValueCtx.COLON_EQ() !== null,
+        };
+    }
+
+    /**
+     * `ctx`'s own `ValuePart`: a direct child of its element rule, or of one of
+     * its declaration rules (`VALUE_DECLARATION_RULE_INDICES`). Never one of an
+     * inline-owned element, e.g. a transition's accept payload or effect action.
+     */
+    private findOwnValuePart(ctx: ParserRuleContext): ParserRuleContext | undefined {
+        for (let i = 0; i < ctx.getChildCount(); i++) {
+            const child = ctx.getChild(i);
+            if (!(child instanceof ParserRuleContext)) continue;
+            if (child.ruleIndex === SysMLv2Parser.RULE_valuePart) return child;
+            if (!VALUE_DECLARATION_RULE_INDICES.has(child.ruleIndex)) continue;
+            const valuePart = this.findOwnValuePart(child);
+            if (valuePart) return valuePart;
+        }
         return undefined;
     }
 

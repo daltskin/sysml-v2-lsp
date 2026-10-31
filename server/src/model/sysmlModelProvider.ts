@@ -426,10 +426,11 @@ export class SysMLModelProvider {
             attributes['visibility'] = symbol.visibility;
         }
 
-        // Extract value
-        const value = this.extractValue(symbol, lines);
-        if (value) {
-            attributes['value'] = value;
+        // The value is parsed from the element's own ValuePart.
+        if (symbol.featureValue) {
+            attributes['value'] = symbol.featureValue.expression;
+            if (symbol.featureValue.isDefault) attributes['isDefault'] = true;
+            if (symbol.featureValue.isInitial) attributes['isInitial'] = true;
         }
 
         // Inline relationships for this element
@@ -1382,35 +1383,6 @@ export class SysMLModelProvider {
         const startLine = symbol.range.start.line;
         const endLine = Math.min(symbol.range.end.line, lines.length - 1);
         return lines.slice(startLine, endLine + 1).join('\n');
-    }
-
-    /** Extract default/assigned value from source text. */
-    private extractValue(symbol: SysMLSymbol, lines: string[]): string | undefined {
-        if (symbol.kind !== SysMLElementKind.AttributeUsage) {
-            return undefined;
-        }
-        const elementText = this.getElementText(symbol, lines);
-        // Find the first `=` (optionally preceded by `:` for `:=`)
-        const eqIdx = elementText.indexOf('=');
-        if (eqIdx < 0) return undefined;
-        // Skip the `=` and any following whitespace
-        let start = eqIdx + 1;
-        // Handle `:=` — the `:` comes before `=` but we've already found `=`
-        // Handle `==` — skip double-equals (comparison, not assignment)
-        if (start < elementText.length && elementText[start] === '=') return undefined;
-        start = skipWS(elementText, start);
-        // Read until `;`, `{`, `}`, or newline
-        let end = start;
-        while (end < elementText.length) {
-            const ch = elementText[end];
-            if (ch === ';' || ch === '{' || ch === '}' || ch === '\n') break;
-            end++;
-        }
-        const val = elementText.substring(start, end).trim();
-        if (val && !val.includes('def') && val.length < 100) {
-            return val;
-        }
-        return undefined;
     }
 
     /** Extract all specialization targets from `:>` or `specializes` syntax. */
