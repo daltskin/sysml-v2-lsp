@@ -245,6 +245,7 @@ export interface RelationshipDTO {
     /**
      * Relationship kind. Known values:
      *   'specializes', 'typing', 'redefinition', 'subsetting',
+     *   'referenceSubsetting', 'crossSubsetting',
      *   'conjugation', 'disjoining', 'differencing', 'intersecting', 'unioning',
      *   'connection', 'binding', 'succession', 'allocation',
      *   'dependency', 'satisfy', 'verify',
@@ -266,6 +267,12 @@ export interface RelationshipDTO {
 
     /** Optional label/name for the relationship. */
     name?: string;
+
+    /**
+     * The operator or keyword a specialization is written with (`:>`, `subsets`,
+     * `::>`, `references`, `=>`, `crosses`, `:>>`, `redefines`, `specializes`).
+     */
+    notation?: string;
 }
 
 // ---------------------------------------------------------------------------

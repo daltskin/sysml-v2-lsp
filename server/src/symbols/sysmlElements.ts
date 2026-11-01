@@ -149,6 +149,13 @@ export interface SysMLSymbol {
      * order (`in`, `abstract`, `constant`, `ref`, `end`, `ordered`, ...).
      */
     prefixKeywords?: string[];
+    /**
+     * The specializations of the element's own declaration, one per target in
+     * written order: a usage's typings, subsettings, reference and cross
+     * subsettings and redefinitions (SysML 8.2.2.6.2), a definition's
+     * subclassifications (8.2.2.6.1).
+     */
+    ownedSpecializations?: OwnedSpecialization[];
     /** Source reference for a transition usage. */
     source?: string;
     /** Target reference for a transition usage. */
@@ -210,6 +217,22 @@ export interface ImportTarget {
      * given filter conditions").
      */
     filter?: FilterExpr;
+}
+
+/**
+ * One target of a specialization in an element's own declaration (SysML
+ * 8.2.2.6.1 `SubclassificationPart`, 8.2.2.6.2 `FeatureSpecialization`).
+ */
+export interface OwnedSpecialization {
+    kind: 'typing' | 'specializes' | 'subsetting' | 'referenceSubsetting' | 'crossSubsetting' | 'redefinition';
+    /**
+     * The general type or feature: a qualified name or feature chain (`Base`,
+     * `P::a`, `v.engine`, `$::P::a`, `~P`), each name quoted only where it
+     * can't be read back otherwise (`'a.b'`, `'it\'s'`).
+     */
+    target: string;
+    /** The operator or keyword as written (`:>`, `subsets`, ...); none for a typing. */
+    notation?: string;
 }
 
 /**

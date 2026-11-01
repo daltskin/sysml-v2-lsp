@@ -1,15 +1,15 @@
 import { ErrorNode, ParserRuleContext, ParseTree, TerminalNode, Token } from 'antlr4ng';
 import { Range } from 'vscode-languageserver/node';
 import { SysMLv2Lexer } from '../generated/SysMLv2Lexer.js';
-import { FeatureValueContext, MultiplicityBoundsContext, OwnedExpressionContext, SysMLv2Parser } from '../generated/SysMLv2Parser.js';
+import { ConjugatedPortTypingContext, FeatureSpecializationContext, FeatureTypingContext, FeatureValueContext, MultiplicityBoundsContext, NameContext, OwnedExpressionContext, OwnedReferenceSubsettingContext, QualifiedNameContext, RedefinesContext, SubclassificationPartContext, SubsetsContext, SysMLv2Parser, TypedByContext } from '../generated/SysMLv2Parser.js';
 import { ParseResult } from '../parser/parseDocument.js';
 import { contextToRange, tokenToRange } from '../parser/positionUtils.js';
 import { SYSML_KEYWORDS } from '../utils/sysmlKeywords.js';
-import { joinQualifiedName, scanFeaturePaths, scanQualifiedNames, splitQualifiedName, unquoteName as decodeName } from '../utils/identUtils.js';
+import { joinQualifiedName, joinReference, scanFeaturePaths, scanQualifiedNames, splitQualifiedName, unquoteName as decodeName } from '../utils/identUtils.js';
 import { IdRegistry } from './ids.js';
 import { buildSymbolIndexes, NamespaceResolver, SymbolIndexes } from './namespaceResolver.js';
 import { Scope } from './scope.js';
-import { FilterExpr, ImportTarget, SysMLElementKind, SysMLSymbol, displayName, isAnonymous, isDefinition, isFlowUsage, isUsage as isUsageKind } from './sysmlElements.js';
+import { FilterExpr, ImportTarget, OwnedSpecialization, SysMLElementKind, SysMLSymbol, displayName, isAnonymous, isDefinition, isFlowUsage, isUsage as isUsageKind } from './sysmlElements.js';
 
 // ── ruleIndex-based lookup tables ───────────────────────────────────
 // These replace the toLowerCase() + string-comparison chains with O(1)
@@ -124,6 +124,44 @@ const FLOW_PART_RULE_INDICES: ReadonlySet<number> = new Set([
     SysMLv2Parser.RULE_flowPayloadFeatureMember,
     SysMLv2Parser.RULE_flowEndMember,
     SysMLv2Parser.RULE_messageEventMember,
+]);
+
+/**
+ * The declaration rules through which an element's own `FeatureSpecialization`s
+ * and `SubclassificationPart` are reached from its element rule (SysML v2
+ * 8.2.2.6.1 `DefinitionDeclaration`, 8.2.2.6.2 `UsageDeclaration`, and the
+ * kind-specific declarations wrapping it; a flow's declaration parses as a
+ * KerML `FeatureDeclaration`). Any other rule owns its own elements.
+ */
+const SPECIALIZATION_DECLARATION_RULE_INDICES: ReadonlySet<number> = new Set([
+    SysMLv2Parser.RULE_definition,
+    SysMLv2Parser.RULE_definitionDeclaration,
+    SysMLv2Parser.RULE_usage,
+    SysMLv2Parser.RULE_usageDeclaration,
+    SysMLv2Parser.RULE_featureDeclaration,
+    SysMLv2Parser.RULE_featureSpecializationPart,
+    SysMLv2Parser.RULE_actionUsageDeclaration,
+    SysMLv2Parser.RULE_performActionUsageDeclaration,
+    SysMLv2Parser.RULE_constraintUsageDeclaration,
+    SysMLv2Parser.RULE_interfaceUsageDeclaration,
+    SysMLv2Parser.RULE_allocationUsageDeclaration,
+    SysMLv2Parser.RULE_flowDeclaration,
+    SysMLv2Parser.RULE_messageDeclaration,
+]);
+
+/**
+ * The rules whose own `OwnedReferenceSubsetting` is the reference subsetting of
+ * the usage they declare: the shorthands `perform a`, `exhibit s`, `include uc`,
+ * `frame c`, `variant v` (SysML v2 8.2.2.6.3 `VariantReference`, 8.2.2.17.2
+ * `PerformActionUsageDeclaration`, 8.2.2.18.2 `ExhibitStateUsage`, 8.2.2.21.1
+ * `FramedConcernUsage`, 8.2.2.25 `IncludeUseCaseUsage`).
+ */
+const REFERENCE_SHORTHAND_RULE_INDICES: ReadonlySet<number> = new Set([
+    SysMLv2Parser.RULE_variantReference,
+    SysMLv2Parser.RULE_performActionUsageDeclaration,
+    SysMLv2Parser.RULE_exhibitStateUsage,
+    SysMLv2Parser.RULE_framedConcernUsage,
+    SysMLv2Parser.RULE_includeUseCaseUsage,
 ]);
 
 /** A flow usage's declaration: a flow's, or a message's (8.2.2.16 `MessageDeclaration`). */
@@ -1361,6 +1399,7 @@ export class SymbolTable {
         const visibility = this.extractVisibility(ctx);
         const featureValue = this.extractFeatureValue(ctx);
         const prefixKeywords = this.extractPrefixKeywords(ctx);
+        const ownedSpecializations = this.extractOwnedSpecializations(ctx);
         // Only extract multiplicity for usages
         const { multiplicity, multiplicityRange } = isUsageKind(kind) ? this.extractMultiplicity(ctx) : {};
         // Extract prefix metadata annotations (#name)
@@ -1404,6 +1443,7 @@ export class SymbolTable {
             visibility,
             featureValue,
             prefixKeywords: prefixKeywords.length > 0 ? prefixKeywords : undefined,
+            ownedSpecializations: ownedSpecializations.length > 0 ? ownedSpecializations : undefined,
             source: transition?.source,
             target: transition?.target,
             flowDetails,
@@ -2068,6 +2108,77 @@ export class SymbolTable {
             if (valuePart) return valuePart;
         }
         return undefined;
+    }
+
+    /**
+     * The specializations of `ctx`'s own declaration, one per target in written
+     * order, read only from its `FeatureSpecialization`s (SysML v2 8.2.2.6.2),
+     * `SubclassificationPart` (8.2.2.6.1) and a shorthand's reference
+     * (`perform a`, `REFERENCE_SHORTHAND_RULE_INDICES`), reached through
+     * `SPECIALIZATION_DECLARATION_RULE_INDICES`.
+     */
+    private extractOwnedSpecializations(ctx: ParserRuleContext): OwnedSpecialization[] {
+        const specializations: OwnedSpecialization[] = [];
+        // A rule's accessors return null for a part missing after a syntax error.
+        const add = (kind: OwnedSpecialization['kind'], targets: (ParserRuleContext | null | undefined)[], notation?: TerminalNode | null): void => {
+            for (const targetCtx of targets) {
+                const target = targetCtx && this.specializationTarget(targetCtx);
+                if (target) specializations.push(notation ? { kind, target, notation: notation.getText() } : { kind, target });
+            }
+        };
+        const visit = (node: ParserRuleContext): void => {
+            for (let i = 0; i < node.getChildCount(); i++) {
+                const child = node.getChild(i);
+                if (child instanceof FeatureSpecializationContext) {
+                    const typings = child.typings();
+                    const subsettings = child.subsettings();
+                    const references = child.references();
+                    const crosses = child.crosses();
+                    const redefinitions = child.redefinitions();
+                    if (typings) {
+                        const typedBy = typings.typedBy() as TypedByContext | null;
+                        add('typing', [typedBy?.featureTyping() as FeatureTypingContext | null | undefined, ...typings.featureTyping()]
+                            .map(typing => typing && (typing.ownedFeatureTyping() ?? typing.conjugatedPortTyping())));
+                    } else if (subsettings) {
+                        const subsets = subsettings.subsets() as SubsetsContext | null;
+                        add('subsetting', [subsets?.ownedSubsetting(), ...subsettings.ownedSubsetting()], subsets && (subsets.COLON_GT() ?? subsets.SUBSETS()));
+                    } else if (references) {
+                        add('referenceSubsetting', [references.ownedReferenceSubsetting()], references.COLON_COLON_GT() ?? references.REFERENCES());
+                    } else if (crosses) {
+                        add('crossSubsetting', [crosses.ownedCrossSubsetting()], crosses.FAT_ARROW() ?? crosses.CROSSES());
+                    } else if (redefinitions) {
+                        const redefines = redefinitions.redefines() as RedefinesContext | null;
+                        add('redefinition', [redefines?.ownedRedefinition(), ...redefinitions.ownedRedefinition()], redefines && (redefines.COLON_GT_GT() ?? redefines.REDEFINES()));
+                    }
+                } else if (child instanceof OwnedReferenceSubsettingContext && REFERENCE_SHORTHAND_RULE_INDICES.has(node.ruleIndex)) {
+                    add('referenceSubsetting', [child]);
+                } else if (child instanceof SubclassificationPartContext) {
+                    add('specializes', child.ownedSubclassification(), child.COLON_GT() ?? child.SPECIALIZES());
+                } else if (child instanceof ParserRuleContext && SPECIALIZATION_DECLARATION_RULE_INDICES.has(child.ruleIndex)) {
+                    visit(child);
+                }
+            }
+        };
+        visit(ctx);
+        return specializations;
+    }
+
+    /**
+     * The general type or feature a specialization's target rule names: its
+     * qualified name, or its feature chain (`v.engine`), with a global `$::`
+     * (KerML 7.2.2) and a conjugated port typing's `~` (`~P`, SysML 8.3.12.3).
+     * Its names are quoted as everywhere in the server (`joinReference`).
+     * Undefined for a target missing after a syntax error.
+     */
+    private specializationTarget(ctx: ParserRuleContext): string | undefined {
+        const chain = ctx.getRuleContexts(QualifiedNameContext).map(qualifiedName => ({
+            global: qualifiedName.DOLLAR() !== null,
+            names: qualifiedName.getRuleContexts(NameContext).map(name => name.getText()),
+        }));
+        // A name missing after a syntax error has no text; an empty name is written `''`.
+        if (chain.length === 0 || chain.some(({ names }) => names.length === 0 || names.some(name => !name))) return undefined;
+        return joinReference(chain.map(({ global, names }) => ({ global, names: names.map(decodeName) })),
+            ctx instanceof ConjugatedPortTypingContext);
     }
 
     /**
