@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.41.0]
+
 ### Changed
 
 - Update the pinned grammar to `v2026.09.1` (OMG release `2026-09.1`) and refresh the parser and DFA snapshot with `make update-grammar`. The lexer and parser grammars are unchanged from `v2026.09.0`; this introduces no language behavior changes.
