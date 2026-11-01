@@ -164,28 +164,6 @@ function readWordAfterKeyword(text: string, afterPos: number, allowDots = false)
     return readIdent(text, start, allowDots);
 }
 
-/**
- * Read comma-separated identifiers starting at `pos`.
- * Stops at the first token that isn't an identifier, comma, `::`, or whitespace.
- * Returns an array of trimmed identifier strings.
- */
-function readCommaSeparatedIdents(text: string, pos: number): string[] {
-    const names: string[] = [];
-    let p = skipWS(text, pos);
-    while (p < text.length) {
-        const [name, end] = readIdent(text, p);
-        if (!name) break;
-        names.push(name);
-        p = skipWS(text, end);
-        if (p < text.length && text[p] === ',') {
-            p = skipWS(text, p + 1);
-        } else {
-            break;
-        }
-    }
-    return names;
-}
-
 /** `symbols` by `symbolId`. */
 function symbolsById(symbols: SysMLSymbol[]): Map<string, SysMLSymbol> {
     return new Map(symbols.map(s => [s.symbolId, s]));
@@ -258,7 +236,7 @@ export class SysMLModelProvider {
 
         // --- Resolved Types ---
         if (scopeSet.has('resolvedTypes')) {
-            result.resolvedTypes = this.extractResolvedTypes(symbolTable, uri, lines);
+            result.resolvedTypes = this.extractResolvedTypes(symbolTable, uri);
         }
 
         // --- Semantic Diagnostics ---
@@ -436,28 +414,9 @@ export class SysMLModelProvider {
         // Inline relationships for this element
         const relationships: RelationshipDTO[] = [];
 
-        // Typing relationships (part x : Type, or defined by A, B)
-        for (const tn of symbol.typeNames) {
-            relationships.push({
-                type: 'typing',
-                source: symbol.name,
-                sourceId: symbol.symbolId,
-                target: tn,
-            });
-        }
+        relationships.push(...this.specializationRelationships(symbol));
         const flowRelationship = this.flowRelationship(symbol);
         if (flowRelationship) relationships.push(flowRelationship);
-
-        // Specialization (detected from text ":>" / "specializes" syntax)
-        const specializations = this.extractSpecializations(symbol, lines);
-        for (const spec of specializations) {
-            relationships.push({
-                type: 'specializes',
-                source: symbol.name,
-                sourceId: symbol.symbolId,
-                target: spec,
-            });
-        }
 
         return {
             type: symbol.kind as string,
@@ -469,6 +428,21 @@ export class SysMLModelProvider {
             attributes,
             relationships,
         };
+    }
+
+    /**
+     * The typings, subclassifications, subsettings and redefinitions of the
+     * element's own declaration, one per target in written order (SysML v2
+     * 8.2.2.6.1, 8.2.2.6.2).
+     */
+    private specializationRelationships(symbol: SysMLSymbol): RelationshipDTO[] {
+        return (symbol.ownedSpecializations ?? []).map(({ kind, target, notation }) => ({
+            type: kind,
+            source: symbol.name,
+            sourceId: symbol.symbolId,
+            target,
+            ...(notation ? { notation } : {}),
+        }));
     }
 
     private flowRelationship(symbol: SysMLSymbol): RelationshipDTO | undefined {
@@ -517,30 +491,7 @@ export class SysMLModelProvider {
                 continue;
             }
 
-            // Typing relationships (part x : Type, or defined by A, B)
-            // Only for usages — definitions' typeName can be a false positive
-            // from child element text captured by ctx.getText()
-            if (symbol.typeNames.length > 0 && isUsage(symbol.kind)) {
-                for (const tn of symbol.typeNames) {
-                    relationships.push({
-                        type: 'typing',
-                        source: symbol.name,
-                        sourceId: symbol.symbolId,
-                        target: tn,
-                    });
-                }
-            }
-
-            // Specialization (part def X :> Y, Z  or  specializes Y, Z)
-            const specializations = this.extractSpecializations(symbol, lines);
-            for (const spec of specializations) {
-                relationships.push({
-                    type: 'specializes',
-                    source: symbol.name,
-                    sourceId: symbol.symbolId,
-                    target: spec,
-                });
-            }
+            relationships.push(...this.specializationRelationships(symbol));
 
             // Connection usages create connection relationships
             if (symbol.kind === SysMLElementKind.ConnectionUsage) {
@@ -1182,28 +1133,21 @@ export class SysMLModelProvider {
     private extractResolvedTypes(
         symbolTable: SymbolTable,
         uri: string,
-        lines: string[],
     ): Record<string, ResolvedTypeDTO> {
         const symbols = symbolTable.getSymbolsForUri(uri);
         const result: Record<string, ResolvedTypeDTO> = {};
 
         for (const symbol of symbols) {
-            // Only include definitions and typed usages, keyed by a qualified name
-            // (one without, an anonymous element or a member of one, can't be referenced).
+            // Only include definitions and usages with specializations of their own, keyed by a
+            // qualified name (one without, an anonymous element or a member of one, can't be referenced).
             const qualifiedName = symbol.qualifiedName;
             if (qualifiedName === undefined) continue;
-            if (!isDefinition(symbol.kind) && symbol.typeNames.length === 0) {
+            if (!isDefinition(symbol.kind) && !symbol.ownedSpecializations) {
                 continue;
             }
 
-            const specializes: string[] = [];
-            const specList = this.extractSpecializations(symbol, lines);
-            for (const s of specList) {
-                if (!specializes.includes(s)) { specializes.push(s); }
-            }
-            for (const tn of symbol.typeNames) {
-                if (!specializes.includes(tn)) { specializes.push(tn); }
-            }
+            // Typings, subsettings and redefinitions are specializations too (KerML 8.3.3.1).
+            const specializes = [...new Set((symbol.ownedSpecializations ?? []).map(({ target }) => target))];
 
             // Build specialization chain (currently single-level without library)
             const specializationChain = [...specializes];
@@ -1385,30 +1329,6 @@ export class SysMLModelProvider {
         return lines.slice(startLine, endLine + 1).join('\n');
     }
 
-    /** Extract all specialization targets from `:>` or `specializes` syntax. */
-    private extractSpecializations(symbol: SysMLSymbol, lines: string[]): string[] {
-        const elementText = this.getElementText(symbol, lines);
-
-        // Match `:>` syntax — find ':>' then read comma-separated identifiers
-        const colonGtIdx = elementText.indexOf(':>');
-        if (colonGtIdx >= 0) {
-            // Make sure it's not `:>>` (redefinition)
-            if (colonGtIdx + 2 < elementText.length && elementText[colonGtIdx + 2] === '>') {
-                // skip :>> — fall through to specializes check
-            } else {
-                return readCommaSeparatedIdents(elementText, colonGtIdx + 2);
-            }
-        }
-
-        // Match `specializes` keyword then read comma-separated identifiers
-        const specPositions = findWordPositions(elementText, 'specializes');
-        if (specPositions.length > 0) {
-            return readCommaSeparatedIdents(elementText, specPositions[0].afterPos);
-        }
-
-        return [];
-    }
-
     /** Extract connection endpoints from `connect` syntax. */
     private extractConnectionEndpoints(symbol: SysMLSymbol, lines: string[]): string[] {
         const elementText = this.getElementText(symbol, lines);
@@ -1484,20 +1404,6 @@ export class SysMLModelProvider {
         const fromElement = { source: elementName, sourceId: element.symbolId };
         elementText = stripComments(elementText);
         const rels: RelationshipDTO[] = [];
-
-        // subsetting: `subsets X`
-        const subsetsPositions = findWordPositions(elementText, 'subsets');
-        if (subsetsPositions.length > 0) {
-            const [target] = readWordAfterKeyword(elementText, subsetsPositions[0].afterPos);
-            if (target) rels.push({ type: 'subsetting', ...fromElement, target });
-        }
-
-        // redefinition: `redefines X`
-        const redefPositions = findWordPositions(elementText, 'redefines');
-        if (redefPositions.length > 0) {
-            const [target] = readWordAfterKeyword(elementText, redefPositions[0].afterPos);
-            if (target) rels.push({ type: 'redefinition', ...fromElement, target });
-        }
 
         // satisfy: `satisfy [requirement] X [by Y]`
         const satisfyPositions = findWordPositions(elementText, 'satisfy');

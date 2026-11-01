@@ -1214,6 +1214,63 @@ package Test {
             }
         });
 
+        it('reports a type\'s own specializations, each target once, in written order (KerML 8.3.3.1)', async () => {
+            const model = await getModelForText(`
+package Test {
+    attribute def Mass;
+    part def A;
+    part def B :> A {
+        part member :> A;
+    }
+    part def C specializes A, B;
+    part p : B {
+        attribute m : Mass :>> member, member;
+        part q : A, B :> member;
+    }
+}
+`, ['resolvedTypes']);
+            const resolved = model.resolvedTypes!;
+            expect(resolved['Test::B'].specializes).toEqual(['A']);
+            expect(resolved['Test::C'].specializes).toEqual(['A', 'B']);
+            expect(resolved['Test::p'].specializes).toEqual(['B']);
+            expect(resolved['Test::p::m'].specializes).toEqual(['Mass', 'member']);
+            expect(resolved['Test::p::q'].specializes).toEqual(['A', 'B', 'member']);
+            expect(resolved['Test::p::q'].specializationChain).toEqual(['A', 'B', 'member']);
+        });
+
+        it('includes each usage with specializations of its own, and no other usage', async () => {
+            const model = await getModelForText(`
+package Test {
+    action def A;
+    item def F;
+    part def Base { part e; action run : A; }
+    part p : Base {
+        part x1 :> e;
+        part x2 subsets e;
+        part x3 redefines e;
+        part x4 references e;
+        part x5 => e;
+        perform run;
+        part plain;
+    }
+    state def S {
+        state s0;
+        state s9;
+        transition t1 first s0 accept sig : F then s9;
+    }
+}
+`, ['resolvedTypes']);
+            const resolved = model.resolvedTypes!;
+            expect(resolved['Test::p::x1'].specializes).toEqual(['e']);
+            expect(resolved['Test::p::x2'].specializes).toEqual(['e']);
+            expect(resolved['Test::p::x3'].specializes).toEqual(['e']);
+            expect(resolved['Test::p::x4'].specializes).toEqual(['e']);
+            expect(resolved['Test::p::x5'].specializes).toEqual(['e']);
+            expect(resolved['Test::p::run'].specializes).toEqual(['run']);
+            expect(resolved['Test::p::plain']).toBeUndefined();
+            expect(resolved['Test::S::t1']).toBeUndefined();
+        });
+
         it('should expose canonical kinds and display metadata for feature groups', async () => {
             const model = await getModelForText(`
 package Test {
@@ -2315,6 +2372,460 @@ package Demo {
             });
         });
 
+        describe('specializations (SysML 8.2.2.6.1 SubclassificationPart, 8.2.2.6.2 FeatureSpecialization)', () => {
+            const SPECIALIZATION_TYPES = ['typing', 'specializes', 'subsetting', 'referenceSubsetting', 'crossSubsetting', 'redefinition'];
+            const text = `
+package Demo {
+    item def ItemDef4R;
+    item def ItemDef7S;
+    attribute def Mass;
+    part def Base {
+        attribute mass : Mass;
+        item item4;
+        item item5;
+        item item7 [*];
+    }
+    part def Sub :> Base;
+    part p : Base {
+        item item4R : ItemDef4R :>> item4 :>> item5;
+        item item7S : ItemDef7S :> item7;
+        attribute speeds : Mass [*] ::> mass;
+        attribute r references mass;
+        attribute crossing => mass;
+        attribute :>> mass = 1500;
+    }
+    part q : Base {
+        attribute redefines mass;
+    }
+}
+`;
+            /** The element at `path` (names from the top), its first match at each step. */
+            const find = (model: any, path: string[]): any =>
+                path.reduce((found, name) => found?.children.find((e: { name: string }) => e.name === name),
+                    { children: model.elements });
+            /** The specialization relationships of the element at `path`, as [type, target, notation]. */
+            const specializationsOf = (model: any, path: string[]) => (find(model, path).relationships as any[])
+                .filter(r => SPECIALIZATION_TYPES.includes(r.type))
+                .map(r => [r.type, r.target, r.notation]);
+
+            it('reports each redefinition, subsetting, reference and cross subsetting with its notation', async () => {
+                const model = await getModelForText(text, ['elements']);
+                expect(specializationsOf(model, ['Demo', 'p', 'item4R'])).toEqual([
+                    ['typing', 'ItemDef4R', undefined],
+                    ['redefinition', 'item4', ':>>'],
+                    ['redefinition', 'item5', ':>>'],
+                ]);
+                expect(specializationsOf(model, ['Demo', 'p', 'item7S'])).toEqual([
+                    ['typing', 'ItemDef7S', undefined],
+                    ['subsetting', 'item7', ':>'],
+                ]);
+                expect(specializationsOf(model, ['Demo', 'p', 'speeds'])).toEqual([
+                    ['typing', 'Mass', undefined],
+                    ['referenceSubsetting', 'mass', '::>'],
+                ]);
+                expect(specializationsOf(model, ['Demo', 'p', 'r'])).toEqual([['referenceSubsetting', 'mass', 'references']]);
+                expect(specializationsOf(model, ['Demo', 'p', 'crossing'])).toEqual([['crossSubsetting', 'mass', '=>']]);
+            });
+
+            it('reports a definition\'s :> as a subclassification, not a typing', async () => {
+                const model = await getModelForText(text, ['elements', 'relationships']);
+                expect(specializationsOf(model, ['Demo', 'Sub'])).toEqual([['specializes', 'Base', ':>']]);
+                expect(model.relationships!.filter(r => r.source === 'Sub')).toEqual([
+                    { type: 'specializes', source: 'Sub', sourceId: find(model, ['Demo', 'Sub']).symbolId, target: 'Base', notation: ':>' },
+                ]);
+            });
+
+            it('reports an anonymous redefinition as a redefinition, not a typing', async () => {
+                const model = await getModelForText(text, ['elements']);
+                const anonymous = find(model, ['Demo', 'p']).children.filter((e: { name: string }) => e.name === 'mass');
+                expect(anonymous).toHaveLength(1);
+                expect(anonymous[0].relationships.map((r: any) => [r.type, r.target, r.notation]))
+                    .toEqual([['redefinition', 'mass', ':>>']]);
+            });
+
+            it('credits a member\'s redefinition to the member only, not its owner', async () => {
+                const model = await getModelForText(text, ['elements', 'relationships']);
+                expect(specializationsOf(model, ['Demo', 'q'])).toEqual([['typing', 'Base', undefined]]);
+                expect(specializationsOf(model, ['Demo', 'q', 'mass'])).toEqual([['redefinition', 'mass', 'redefines']]);
+                expect(model.relationships!.filter(r => r.source === 'q').map(r => r.type)).toEqual(['typing']);
+            });
+
+            it('reports the same relationships at the top level as on each element', async () => {
+                const model = await getModelForText(text, ['elements', 'relationships']);
+                const fromElements: any[] = [];
+                const collect = (e: any) => {
+                    fromElements.push(...e.relationships.filter((r: any) => SPECIALIZATION_TYPES.includes(r.type)));
+                    e.children.forEach(collect);
+                };
+                model.elements!.forEach(collect);
+                expect(model.relationships!.filter(r => SPECIALIZATION_TYPES.includes(r.type))).toEqual(fromElements);
+            });
+
+            it('reports every target of a comma-separated list, in written order, with its keyword', async () => {
+                const model = await getModelForText(`
+package Demo {
+    attribute def Mass;
+    attribute def Real;
+    part def A;
+    part def B;
+    part def C specializes A, B;
+    part def D :> A, B;
+    part def E {
+        item i1;
+        item i2;
+        item i3;
+    }
+    part e : E {
+        attribute t typed by Mass, Real;
+        attribute t2 defined by Mass;
+        item s subsets i1, i2;
+        item r redefines i1, i2;
+        item m : A subsets i1 references i2 :>> i3 [1];
+        item k :> i1 [0..*] ordered :> i2;
+        attribute c crosses i3;
+    }
+}
+`, ['elements']);
+                expect(specializationsOf(model, ['Demo', 'C'])).toEqual([['specializes', 'A', 'specializes'], ['specializes', 'B', 'specializes']]);
+                expect(specializationsOf(model, ['Demo', 'D'])).toEqual([['specializes', 'A', ':>'], ['specializes', 'B', ':>']]);
+                expect(specializationsOf(model, ['Demo', 'e', 't'])).toEqual([['typing', 'Mass', undefined], ['typing', 'Real', undefined]]);
+                expect(specializationsOf(model, ['Demo', 'e', 't2'])).toEqual([['typing', 'Mass', undefined]]);
+                expect(specializationsOf(model, ['Demo', 'e', 's'])).toEqual([['subsetting', 'i1', 'subsets'], ['subsetting', 'i2', 'subsets']]);
+                expect(specializationsOf(model, ['Demo', 'e', 'r'])).toEqual([['redefinition', 'i1', 'redefines'], ['redefinition', 'i2', 'redefines']]);
+                expect(specializationsOf(model, ['Demo', 'e', 'm'])).toEqual([
+                    ['typing', 'A', undefined],
+                    ['subsetting', 'i1', 'subsets'],
+                    ['referenceSubsetting', 'i2', 'references'],
+                    ['redefinition', 'i3', ':>>'],
+                ]);
+                expect(specializationsOf(model, ['Demo', 'e', 'k'])).toEqual([['subsetting', 'i1', ':>'], ['subsetting', 'i2', ':>']]);
+                expect(specializationsOf(model, ['Demo', 'e', 'c'])).toEqual([['crossSubsetting', 'i3', 'crosses']]);
+            });
+
+            it('reads names, quoted names and short names spelled like keywords as names', async () => {
+                const model = await getModelForText(`
+package Demo {
+    attribute def Mass;
+    port def P;
+    port def 'P-1';
+    port def '~P';
+    part def Base {
+        attribute var : Mass;
+        attribute 'specializes' : Mass;
+        attribute <m> 'dry mass' : Mass;
+        attribute 'a::b' : Mass;
+        part engine { part cylinder; }
+        part 'my.engine' { part 'the cylinder'; }
+        attribute <'a'> alpha : Mass;
+        attribute <'a.b.'> beta : Mass;
+    }
+    part def <Q> 'Quoted Def' :> Base;
+    part def <'D.1'> 'Def.1' :> Base;
+    part p : Base {
+        attribute s1 :> var;
+        attribute s2 :> 'specializes';
+        attribute 'specializes' :>> 'specializes';
+        attribute redefines var;
+        attribute q1 :> 'dry mass', 'a::b';
+        attribute q2 :>> Base::'dry mass';
+        attribute <q3> :> m;
+        part c1 :> engine.cylinder;
+        part c2 :> 'my.engine'.'the cylinder';
+        part c3 :> 'my.engine';
+        part c4 :> Base::'my.engine';
+        port cp : ~P;
+        port cp2 : ~Demo::P;
+        port cp3 : ~'P-1';
+        port cp4 : P::'~P';
+        port cp5 : '~P';
+        attribute sn1 :> 'a';
+        attribute sn2 :> a;
+        attribute sn3 :> 'a.b.';
+        attribute sn4 :>> Base::'a.b.';
+        attribute <'s.1'> 'n.1' :> alpha;
+        attribute <'sb2'> :>> beta;
+    }
+}
+`, ['elements']);
+                expect(specializationsOf(model, ['Demo', 'Quoted Def'])).toEqual([['specializes', 'Base', ':>']]);
+                expect(specializationsOf(model, ['Demo', 'p', 's1'])).toEqual([['subsetting', 'var', ':>']]);
+                expect(specializationsOf(model, ['Demo', 'p', 's2'])).toEqual([['subsetting', 'specializes', ':>']]);
+                expect(specializationsOf(model, ['Demo', 'p', 'specializes'])).toEqual([['redefinition', 'specializes', ':>>']]);
+                expect(specializationsOf(model, ['Demo', 'p', 'var'])).toEqual([['redefinition', 'var', 'redefines']]);
+                // A name is quoted only where it is needed to split the target again.
+                expect(specializationsOf(model, ['Demo', 'p', 'q1'])).toEqual([['subsetting', 'dry mass', ':>'], ['subsetting', "'a::b'", ':>']]);
+                expect(specializationsOf(model, ['Demo', 'p', 'q2'])).toEqual([['redefinition', 'Base::dry mass', ':>>']]);
+                expect(specializationsOf(model, ['Demo', 'p', 'q3'])).toEqual([['subsetting', 'm', ':>']]);
+                expect(specializationsOf(model, ['Demo', 'p', 'c1'])).toEqual([['subsetting', 'engine.cylinder', ':>']]);
+                expect(specializationsOf(model, ['Demo', 'p', 'c2'])).toEqual([['subsetting', "'my.engine'.the cylinder", ':>']]);
+                expect(specializationsOf(model, ['Demo', 'p', 'cp'])).toEqual([['typing', '~P', undefined]]);
+                expect(specializationsOf(model, ['Demo', 'p', 'c3'])).toEqual([['subsetting', "'my.engine'", ':>']]);
+                expect(specializationsOf(model, ['Demo', 'p', 'c4'])).toEqual([['subsetting', "Base::'my.engine'", ':>']]);
+                expect(specializationsOf(model, ['Demo', 'p', 'cp2'])).toEqual([['typing', '~Demo::P', undefined]]);
+                // A conjugated port definition by its own name (SysML 8.3.12.3) stays quoted, apart from the conjugation `~P`.
+                expect(specializationsOf(model, ['Demo', 'p', 'cp3'])).toEqual([['typing', '~P-1', undefined]]);
+                expect(specializationsOf(model, ['Demo', 'p', 'cp4'])).toEqual([['typing', "P::'~P'", undefined]]);
+                expect(specializationsOf(model, ['Demo', 'p', 'cp5'])).toEqual([['typing', "'~P'", undefined]]);
+                // Quoted short names, with and without a `.`, as targets and on the declaring element.
+                expect(specializationsOf(model, ['Demo', 'p', 'sn1'])).toEqual([['subsetting', 'a', ':>']]);
+                expect(specializationsOf(model, ['Demo', 'p', 'sn2'])).toEqual([['subsetting', 'a', ':>']]);
+                expect(specializationsOf(model, ['Demo', 'p', 'sn3'])).toEqual([['subsetting', "'a.b.'", ':>']]);
+                expect(specializationsOf(model, ['Demo', 'p', 'sn4'])).toEqual([['redefinition', "Base::'a.b.'", ':>>']]);
+                expect(specializationsOf(model, ['Demo', 'p', 'n.1'])).toEqual([['subsetting', 'alpha', ':>']]);
+                expect(specializationsOf(model, ['Demo', 'p', 'sb2'])).toEqual([['redefinition', 'beta', ':>>']]);
+                expect(specializationsOf(model, ['Demo', 'Def.1'])).toEqual([['specializes', 'Base', ':>']]);
+            });
+
+            it('reports the specializations of each kind-specific declaration', async () => {
+                const model = await getModelForText(`
+package Demo {
+    action def A;
+    state def S;
+    use case def U;
+    flow def F;
+    part def Base {
+        action run : A;
+        state st : S;
+        use case uc : U;
+        port fuelPort;
+        part engine;
+    }
+    part q : Base {
+        action a1 : A :> run;
+        perform action pa :> run;
+        exhibit state es :> st;
+        include use case iu :> uc;
+        connection conn :> conn connect engine to engine;
+        flow f1 : F :> f1 from engine to engine;
+        succession flow f2 :>> f1 from engine to engine;
+        message msg :> msg;
+        allocation al :> al allocate engine to engine;
+        interface ifc :> ifc connect fuelPort to fuelPort;
+    }
+    variation part def Choice :> Base {
+        variant engine :> run;
+    }
+    state def S2 :> S {
+        entry action en :> run;
+    }
+}
+`, ['elements']);
+                expect(specializationsOf(model, ['Demo', 'q', 'a1'])).toEqual([['typing', 'A', undefined], ['subsetting', 'run', ':>']]);
+                expect(specializationsOf(model, ['Demo', 'q', 'pa'])).toEqual([['subsetting', 'run', ':>']]);
+                expect(specializationsOf(model, ['Demo', 'q', 'es'])).toEqual([['subsetting', 'st', ':>']]);
+                expect(specializationsOf(model, ['Demo', 'q', 'iu'])).toEqual([['subsetting', 'uc', ':>']]);
+                expect(specializationsOf(model, ['Demo', 'q', 'conn'])).toEqual([['subsetting', 'conn', ':>']]);
+                expect(specializationsOf(model, ['Demo', 'q', 'f1'])).toEqual([['typing', 'F', undefined], ['subsetting', 'f1', ':>']]);
+                expect(specializationsOf(model, ['Demo', 'q', 'f2'])).toEqual([['redefinition', 'f1', ':>>']]);
+                expect(specializationsOf(model, ['Demo', 'q', 'msg'])).toEqual([['subsetting', 'msg', ':>']]);
+                expect(specializationsOf(model, ['Demo', 'q', 'al'])).toEqual([['subsetting', 'al', ':>']]);
+                expect(specializationsOf(model, ['Demo', 'q', 'ifc'])).toEqual([['subsetting', 'ifc', ':>']]);
+                expect(specializationsOf(model, ['Demo', 'Choice', 'engine'])).toEqual([['referenceSubsetting', 'engine', undefined], ['subsetting', 'run', ':>']]);
+                expect(specializationsOf(model, ['Demo', 'S2', 'en'])).toEqual([['subsetting', 'run', ':>']]);
+            });
+
+            it('reports a shorthand\'s reference (perform a, exhibit s, include uc, frame c, variant v) as a reference subsetting', async () => {
+                const model = await getModelForText(`
+package Demo {
+    action def A;
+    state def S;
+    use case def U;
+    requirement def R { concern cn; }
+    part def Base {
+        action run : A;
+        state st : S;
+        use case uc : U;
+        part engine;
+    }
+    part q : Base {
+        perform run;
+        perform Base::run :> run;
+        exhibit st;
+        include uc :> uc;
+    }
+    variation part def Choice :> Base {
+        variant engine;
+    }
+    state def S2 :> S {
+        do run;
+    }
+    requirement def R2 :> R {
+        frame cn;
+    }
+}
+`, ['elements']);
+                const runs = find(model, ['Demo', 'q']).children.filter((e: { name: string }) => e.name === 'run')
+                    .map((e: any) => e.relationships.map((r: any) => [r.type, r.target, r.notation]));
+                expect(runs).toEqual([
+                    [['referenceSubsetting', 'run', undefined]],
+                    [['referenceSubsetting', 'Base::run', undefined], ['subsetting', 'run', ':>']],
+                ]);
+                expect(specializationsOf(model, ['Demo', 'q', 'st'])).toEqual([['referenceSubsetting', 'st', undefined]]);
+                expect(specializationsOf(model, ['Demo', 'q', 'uc'])).toEqual([['referenceSubsetting', 'uc', undefined], ['subsetting', 'uc', ':>']]);
+                expect(specializationsOf(model, ['Demo', 'Choice', 'engine'])).toEqual([['referenceSubsetting', 'engine', undefined]]);
+                expect(specializationsOf(model, ['Demo', 'S2', 'run'])).toEqual([['referenceSubsetting', 'run', undefined]]);
+                const framed = find(model, ['Demo', 'R2']).children[0];
+                expect(framed.relationships.map((r: any) => [r.type, r.target])).toEqual([['referenceSubsetting', 'cn']]);
+            });
+
+            it('reports a shorthand\'s reference before its own specializations (independent review, F1)', async () => {
+                const model = await getModelForText(`
+package Demo {
+    action def A;
+    state def S;
+    part def T;
+    package Ctx { action b0 : A; action b1 : A; }
+    part def Base { action base : A; concern w; part p1; }
+    part q : Base {
+        perform Ctx::b0;
+        perform pa2 :> Ctx::b0 :>> Ctx::b1;
+    }
+    state def S2 :> S {
+        entry Ctx::b0;
+        exit en2 :> base;
+    }
+    requirement def R2 :> Base {
+        frame fc :> w;
+    }
+    variation part def V :> Base {
+        variant p2 :> T;
+    }
+}
+`, ['elements']);
+                expect(specializationsOf(model, ['Demo', 'q', 'b0'])).toEqual([['referenceSubsetting', 'Ctx::b0', undefined]]);
+                expect(specializationsOf(model, ['Demo', 'q', 'pa2'])).toEqual([
+                    ['referenceSubsetting', 'pa2', undefined],
+                    ['subsetting', 'Ctx::b0', ':>'],
+                    ['redefinition', 'Ctx::b1', ':>>'],
+                ]);
+                expect(specializationsOf(model, ['Demo', 'S2', 'b0'])).toEqual([['referenceSubsetting', 'Ctx::b0', undefined]]);
+                expect(specializationsOf(model, ['Demo', 'S2', 'en2'])).toEqual([['referenceSubsetting', 'en2', undefined], ['subsetting', 'base', ':>']]);
+                expect(find(model, ['Demo', 'R2']).children[0].relationships.map((r: any) => [r.type, r.target, r.notation]))
+                    .toEqual([['referenceSubsetting', 'fc', undefined], ['subsetting', 'w', ':>']]);
+                expect(specializationsOf(model, ['Demo', 'V', 'p2'])).toEqual([['referenceSubsetting', 'p2', undefined], ['subsetting', 'T', ':>']]);
+            });
+
+            it('reports no reference subsetting of a connector end, a message event or a transition\'s effect', async () => {
+                const model = await getModelForText(`
+package Demo {
+    part def Base {
+        part engine;
+        attribute counter;
+    }
+    part q : Base {
+        connection cn connect engine to engine;
+        message m from engine to engine;
+    }
+    state def Machine {
+        state s0;
+        state s9;
+        transition t first s0 do counter then s9;
+    }
+}
+`, ['elements']);
+                expect(specializationsOf(model, ['Demo', 'q', 'cn'])).toEqual([]);
+                expect(specializationsOf(model, ['Demo', 'q', 'm'])).toEqual([]);
+                expect(specializationsOf(model, ['Demo', 'Machine', 't'])).toEqual([]);
+            });
+
+            it('credits no specialization of an inline-owned element, a member or a comment to its owner', async () => {
+                const model = await getModelForText(`
+package Demo {
+    attribute def Real;
+    item def Fuel;
+    metadata def M { attribute level : Real; }
+    part def Base {
+        attribute counter : Real;
+        item item7 [*];
+        part d1 [1];
+        part engine;
+    }
+    state def Machine :> Base {
+        state s0;
+        state s9;
+        transition t1 first s0 accept sig : Fuel [1] ordered :> item7 then s9;
+        transition t2 first s0 if { in x : Real [*] :> counter; true } do action eff :>> eff then s9;
+    }
+    part h : Base {
+        attribute h1 : Real = { in y : Real [1] :> counter; y };
+        flow f of fp : Fuel [1] :> item7 from engine to engine;
+        connection cn connect a ::> d1 to b references d1;
+        @M { :>> level = 1; }
+        metadata M { redefines level = 2; }
+        // a comment naming redefines item7 or :> counter
+        /* subsets d1 */
+        part nested { attribute :>> counter; }
+    }
+}
+`, ['elements', 'relationships']);
+                expect(specializationsOf(model, ['Demo', 'Machine', 't1'])).toEqual([]);
+                expect(specializationsOf(model, ['Demo', 'Machine', 't2'])).toEqual([]);
+                expect(specializationsOf(model, ['Demo', 'h'])).toEqual([['typing', 'Base', undefined]]);
+                expect(specializationsOf(model, ['Demo', 'h', 'h1'])).toEqual([['typing', 'Real', undefined]]);
+                expect(specializationsOf(model, ['Demo', 'h', 'f'])).toEqual([]);
+                expect(specializationsOf(model, ['Demo', 'h', 'cn'])).toEqual([]);
+                expect(specializationsOf(model, ['Demo', 'h', 'nested'])).toEqual([]);
+                expect(specializationsOf(model, ['Demo', 'h', 'nested', 'counter'])).toEqual([['redefinition', 'counter', ':>>']]);
+                const hId = find(model, ['Demo', 'h']).symbolId;
+                expect(model.relationships!.filter(r => r.sourceId === hId).map(r => r.type)).toEqual(['typing']);
+            });
+
+            it('reports no specialization for a target missing after a syntax error', async () => {
+                const model = await getModelForText(`
+package Demo {
+    part def Base;
+    part def D :> ;
+    part x : ;
+    part y :> ;
+    part z : Base :>> ;
+}
+`, ['elements', 'relationships']);
+                expect(model.relationships!.filter(r => SPECIALIZATION_TYPES.includes(r.type)).map(r => [r.source, r.type, r.target]))
+                    .toEqual([['z', 'typing', 'Base']]);
+            });
+
+            it('keeps a name quoted where the target could not be read back otherwise', async () => {
+                const model = await getModelForText(`
+package Demo {
+    part def 'a:' { part b; }
+    part def a { part ':b'; }
+    part def ':' { part ':'; }
+    part def P { part A; }
+    part def '$' { part x; }
+    part def 'it\\'s';
+    part def 'a\\\\b';
+    part def '';
+    part p {
+        part e1 : 'a:'::b;
+        part e2 : a::':b';
+        part e7 : ':'::':';
+        part g1 : $::P::A;
+        part g2 :> $::P.A;
+        part g3 : '$'::x;
+        part g4 : $::'$'::x;
+        part q1 : 'it\\'s';
+        part q2 : 'a\\\\b';
+        part q3 : '';
+    }
+}
+`, ['elements']);
+                // A name with `:` keeps its quotes, so `'a:'::b` and `a::':b'` stay apart.
+                expect(specializationsOf(model, ['Demo', 'p', 'e1'])).toEqual([['typing', "'a:'::b", undefined]]);
+                expect(specializationsOf(model, ['Demo', 'p', 'e2'])).toEqual([['typing', "a::':b'", undefined]]);
+                expect(specializationsOf(model, ['Demo', 'p', 'e7'])).toEqual([['typing', "':'::':'", undefined]]);
+                // A global qualifier is kept (KerML 7.2.2); a name spelled `$` stays quoted.
+                expect(specializationsOf(model, ['Demo', 'p', 'g1'])).toEqual([['typing', '$::P::A', undefined]]);
+                expect(specializationsOf(model, ['Demo', 'p', 'g2'])).toEqual([['subsetting', '$::P.A', ':>']]);
+                expect(specializationsOf(model, ['Demo', 'p', 'g3'])).toEqual([['typing', "'$'::x", undefined]]);
+                expect(specializationsOf(model, ['Demo', 'p', 'g4'])).toEqual([['typing', "$::'$'::x", undefined]]);
+                // A name with a quote, a backslash or a control character stays quoted, with its escapes.
+                expect(specializationsOf(model, ['Demo', 'p', 'q1'])).toEqual([['typing', "'it\\'s'", undefined]]);
+                expect(specializationsOf(model, ['Demo', 'p', 'q2'])).toEqual([['typing', "'a\\\\b'", undefined]]);
+                // An empty name (KerML 8.2.2.3) is a target too, written `''`.
+                expect(specializationsOf(model, ['Demo', 'p', 'q3'])).toEqual([['typing', "''", undefined]]);
+            });
+        });
+
         it('should extract visibility (public, private, protected)', async () => {
             const model = await getModelForText(`
 package Test {
@@ -2525,11 +3036,9 @@ package Test {
 `, ['relationships']);
 
             const rels = model.relationships!;
-            const subset = rels.find(r => r.type === 'subsetting');
-            // subsetting is extracted from element text — source is the symbol name
-            if (subset) {
-                expect(subset.target).toBe('engine');
-            }
+            expect(rels.filter(r => r.type === 'subsetting')).toEqual([
+                expect.objectContaining({ source: 'carEngine', target: 'engine', notation: 'subsets' }),
+            ]);
         });
 
         it('should extract redefines relationship', async () => {
@@ -2547,11 +3056,9 @@ package Test {
 `, ['relationships']);
 
             const rels = model.relationships!;
-            const redef = rels.find(r => r.type === 'redefinition');
-            // redefinition is extracted from element text — target should be 'engine'
-            if (redef) {
-                expect(redef.target).toBe('engine');
-            }
+            expect(rels.filter(r => r.type === 'redefinition')).toEqual([
+                expect.objectContaining({ source: 'turbo', target: 'engine', notation: 'redefines' }),
+            ]);
         });
 
         it('should extract specializations via :> and specializes keyword', async () => {

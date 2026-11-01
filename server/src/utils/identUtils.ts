@@ -73,9 +73,24 @@ export function splitQualifiedName(text: string): string[] {
     return parts;
 }
 
-/** Keep internal names readable, quoting only segments that would be ambiguous when joined or split again. */
+/**
+ * Keep internal names readable, quoting only segments that would be ambiguous when joined or split
+ * again: one holding `::`, a quote, a backslash or a control character, starting or ending with
+ * `:` or whitespace, spelled `$` (the global qualifier, KerML 7.2.2), or empty.
+ */
 export function joinQualifiedName(parts: readonly string[]): string {
-    return parts.map(part => /::|['\\\r\n\t\b\f]|^\s|\s$/.test(part) ? quoteName(part) : part).join('::');
+    return parts.map(part => /::|^:|:$|['\\\r\n\t\b\f]|^\s|\s$|^\$?$/.test(part) ? quoteName(part) : part).join('::');
+}
+
+/**
+ * A reference as a readable name: a feature chain (`v.engine`, KerML 7.3.4.6) of qualified names,
+ * each optionally global (`$::P::a`), optionally conjugated (`~P`, SysML 8.3.12.3). On top of
+ * `joinQualifiedName`, a name holding `.` or starting with `~` is quoted, as they'd read as a
+ * chain or a conjugation.
+ */
+export function joinReference(chain: readonly { global: boolean; names: readonly string[] }[], conjugated = false): string {
+    return (conjugated ? '~' : '') + chain.map(({ global, names }) => (global ? '$::' : '')
+        + names.map(name => /\.|^~/.test(name) ? quoteName(name) : joinQualifiedName([name])).join('::')).join('.');
 }
 
 /** Read one basic or unrestricted source name at an exact UTF-16 offset. */

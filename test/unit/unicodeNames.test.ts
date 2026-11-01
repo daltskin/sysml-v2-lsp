@@ -18,7 +18,7 @@ import { DocumentLinkProvider } from '../../server/src/providers/documentLinkPro
 import { SemanticTokensProvider } from '../../server/src/providers/semanticTokensProvider.js';
 import { CodeActionProvider } from '../../server/src/providers/codeActionProvider.js';
 import {
-    extractQualifiedNameAt, joinQualifiedName, quoteName, readNameAt,
+    extractQualifiedNameAt, joinQualifiedName, joinReference, quoteName, readNameAt,
     scanQualifiedNames, splitQualifiedName, unquoteName,
 } from '../../server/src/utils/identUtils.js';
 
@@ -65,6 +65,31 @@ describe('SysML unrestricted names (7.2.2 and KerML 8.2.2.3)', () => {
         expect(dm.get(uri)!.errors).toEqual([]);
         expect(new SemanticValidator(dm).validate(uri)
             .filter(diagnostic => diagnostic.code === 'unresolved-type')).toEqual([]);
+    });
+
+    it('quotes a qualified name\'s segment only where splitting it again would be ambiguous', () => {
+        expect(joinQualifiedName(['P', 'Unit: Main', 'dry mass'])).toBe('P::Unit: Main::dry mass');
+        expect(joinQualifiedName(['a:', 'b'])).toBe("'a:'::b");
+        expect(joinQualifiedName(['a', ':b'])).toBe("a::':b'");
+        expect(joinQualifiedName([':', ':'])).toBe("':'::':'");
+        expect(joinQualifiedName(['a::b', 'c'])).toBe("'a::b'::c");
+        expect(joinQualifiedName(['$', 'x'])).toBe("'$'::x");
+        expect(joinQualifiedName(['', 'x'])).toBe("''::x");
+        expect(joinQualifiedName(["it's"])).toBe("'it\\'s'");
+        expect(joinQualifiedName(['a.b', '~P'])).toBe('a.b::~P');
+        for (const parts of [['a:', 'b'], ['a', ':b'], ['$', 'x'], ['', 'x'], ['Unit: Main', "it's"]]) {
+            expect(splitQualifiedName(joinQualifiedName(parts))).toEqual(parts);
+        }
+    });
+
+    it('quotes a reference\'s names where they would read as a feature chain or a conjugation', () => {
+        expect(joinReference([{ global: false, names: ['P', 'a'] }, { global: false, names: ['b'] }])).toBe('P::a.b');
+        expect(joinReference([{ global: false, names: ['a.b'] }])).toBe("'a.b'");
+        expect(joinReference([{ global: false, names: ['P', '~P'] }])).toBe("P::'~P'");
+        expect(joinReference([{ global: false, names: ['P'] }], true)).toBe('~P');
+        expect(joinReference([{ global: true, names: ['P', 'A'] }, { global: true, names: ['x'] }])).toBe('$::P::A.$::x');
+        expect(joinReference([{ global: true, names: ['$', 'x'] }])).toBe("$::'$'::x");
+        expect(joinReference([{ global: false, names: ['a:', 'b'] }])).toBe("'a:'::b");
     });
 
     it('quotes generated imports without splitting namespace separators inside package names', () => {
