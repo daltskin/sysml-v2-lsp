@@ -263,8 +263,19 @@ export function isAnonymous(symbol: SysMLSymbol): boolean {
 }
 
 /**
+ * The name `symbol` is identified by in a qualified name: its name, else its
+ * short name (KerML 8.3.2.1.2, `escapedName()`, without the escaping).
+ * Empty for an anonymous element.
+ */
+export function nameOrShortName(symbol: SysMLSymbol): string {
+    return symbol.name || symbol.shortName || '';
+}
+
+/**
  * Text naming `symbol` where some text is required (document outline,
- * workspace symbols, hierarchies, messages): its name; for an anonymous
+ * workspace symbols, hierarchies, messages): its short name and name as
+ * declared, as the graphical name compartment shows them (8.2.3, Table 4:
+ * `<PD2> PartDef2`, `<PD3>`); for an anonymous
  * element its declaration without a name, as the standard's graphical
  * notation shows it (8.2.3.6) -- its specialization part (`: Engine`); else
  * what it connects: a transition's states, a flow's source and target, or a
@@ -272,6 +283,7 @@ export function isAnonymous(symbol: SysMLSymbol): boolean {
  * `-`; else its declaration as written.
  */
 export function displayName(symbol: SysMLSymbol): string {
+    if (symbol.shortName) return symbol.name ? `<${symbol.shortName}> ${symbol.name}` : `<${symbol.shortName}>`;
     if (symbol.name) return symbol.name;
     if (symbol.specialization) return symbol.specialization;
     if (symbol.source && symbol.target) return `${symbol.source}→${symbol.target}`;

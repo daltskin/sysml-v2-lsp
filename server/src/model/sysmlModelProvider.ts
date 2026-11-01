@@ -421,6 +421,7 @@ export class SysMLModelProvider {
         return {
             type: symbol.kind as string,
             name: symbol.name,
+            ...(symbol.shortName !== undefined && { shortName: symbol.shortName }),
             displayName: displayName(symbol),
             symbolId: symbol.symbolId,
             range: this.rangeToDTO(symbol.range),

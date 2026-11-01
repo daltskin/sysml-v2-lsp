@@ -3,7 +3,7 @@ import { DocumentManager } from '../documentManager.js';
 import { getLibraryPackageNames, resolveLibraryType } from '../library/libraryIndex.js';
 import { SysMLModelProvider } from '../model/sysmlModelProvider.js';
 import { NamespaceResolver, SymbolIndexes, buildSymbolIndexes, describeConflictingDeclarations, findConflictingDeclarations, NamespaceKey, namespaceKeyOf, otherDeclarations, ownerKeyOf, ownerOf } from '../symbols/namespaceResolver.js';
-import { SysMLElementKind, SysMLSymbol, displayName, isAnonymous, isDefinition } from '../symbols/sysmlElements.js';
+import { SysMLElementKind, SysMLSymbol, displayName, isAnonymous, isDefinition, nameOrShortName } from '../symbols/sysmlElements.js';
 import { describeNamingIssue, NamingIssue } from '../symbols/symbolTable.js';
 import { resolveTypeName } from '../symbols/typeResolution.js';
 import { scanFeaturePaths, splitQualifiedName, stripComments } from '../utils/identUtils.js';
@@ -1504,10 +1504,10 @@ export class SemanticValidator {
                 definitionsByScope.set(scope, scopeMap);
             }
 
-            let defs = scopeMap.get(symbol.name);
+            let defs = scopeMap.get(nameOrShortName(symbol));
             if (!defs) {
                 defs = [];
-                scopeMap.set(symbol.name, defs);
+                scopeMap.set(nameOrShortName(symbol), defs);
             }
             defs.push(symbol);
         }
@@ -1565,10 +1565,10 @@ export class SemanticValidator {
             diagnostics.push({
                 severity: DiagnosticSeverity.Error,
                 range: symbol.selectionRange,
-                message: `Ambiguous name '${symbol.name}': also declared as ${describeConflictingDeclarations(others, symbol.uri)}.`,
+                message: `Ambiguous name '${nameOrShortName(symbol)}': also declared as ${describeConflictingDeclarations(others, symbol.uri)}.`,
                 source: 'sysml',
                 code: 'ambiguous-namespace-name',
-                data: { name: symbol.name },
+                data: { name: nameOrShortName(symbol) },
             });
         }
 

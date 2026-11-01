@@ -360,9 +360,9 @@ package Test {
             const variants = () => provider.getModel(variationUri, 1, ['elements']).elements![0].children
                 .find(e => e.name === 'choice')!.children.map(c => [c.name, c.displayName]);
 
-            expect(variants()).toEqual([['part1', 'part1']]);
+            expect(variants()).toEqual([['part1', '<p1> part1']]);
             docManager.parse(TextDocument.create(libUri, 'sysml', 2, 'package Lib { part <p1> part2; }'));
-            expect(variants()).toEqual([['part2', 'part2']]);
+            expect(variants()).toEqual([['part2', '<p1> part2']]);
         });
 
         it('should report a variant named after itself through another variant', async () => {
@@ -611,6 +611,164 @@ package Test {
             expect(first.range.start.line).toBeGreaterThanOrEqual(0);
             expect(first.range.start.character).toBeGreaterThanOrEqual(0);
             expect(typeof first.range.end.line).toBe('number');
+        });
+
+        describe('short names', () => {
+            /** Depth-first list of every element of the model tree. */
+            function flatten(elements: Array<{ children: unknown[] }>): any[] {
+                return elements.flatMap(e => [e, ...flatten(e.children as Array<{ children: unknown[] }>)]);
+            }
+
+            async function elementsOf(text: string) {
+                const model = await getModelForText(text, ['elements']);
+                return flatten(model.elements!);
+            }
+
+            it('reports the short name of a definition, usage, package and attribute next to its name', async () => {
+                const all = await elementsOf(`
+package <P1> P {
+    part def <PD2> PartDef2;
+    part <w> wheel : PD2;
+    attribute <R0> r0;
+}
+`);
+                const pick = (name: string) => all.find(e => e.name === name);
+                expect(pick('P')).toMatchObject({ type: 'package', shortName: 'P1' });
+                expect(pick('PartDef2')).toMatchObject({ type: 'part def', shortName: 'PD2' });
+                expect(pick('wheel')).toMatchObject({ type: 'part', shortName: 'w' });
+                expect(pick('r0')).toMatchObject({ type: 'attribute', shortName: 'R0' });
+            });
+
+            it('reports a quoted short name without quotes, like name', async () => {
+                const all = await elementsOf(`
+package P {
+    part def <'P D'> 'Part Def';
+}
+`);
+                expect(all.find(e => e.name === 'Part Def')?.shortName).toBe('P D');
+            });
+
+            it('reports short names spelled like keywords and short names equal to the name', async () => {
+                const all = await elementsOf(`
+package P {
+    part def <'part'> Wheel;
+    part def <A> A;
+}
+`);
+                expect(all.find(e => e.name === 'Wheel')?.shortName).toBe('part');
+                expect(all.find(e => e.name === 'A')?.shortName).toBe('A');
+            });
+
+            it('omits shortName for an element without one', async () => {
+                const all = await elementsOf(`
+package P {
+    part def Wheel;
+    part w : Wheel;
+}
+`);
+                for (const e of all) expect(e).not.toHaveProperty('shortName');
+            });
+
+            it('keeps short names to their own element, not owner or members', async () => {
+                const all = await elementsOf(`
+package P {
+    part def Vehicle {
+        part <e> engine;
+    }
+    part def <C> Car {
+        part body;
+        attribute mass;
+    }
+}
+`);
+                const pick = (name: string) => all.find(e => e.name === name);
+                expect(pick('Vehicle')).not.toHaveProperty('shortName');
+                expect(pick('engine')?.shortName).toBe('e');
+                expect(pick('Car')?.shortName).toBe('C');
+                expect(pick('body')).not.toHaveProperty('shortName');
+                expect(pick('mass')).not.toHaveProperty('shortName');
+                expect(pick('P')).not.toHaveProperty('shortName');
+            });
+
+            it('takes no short name from a comment or doc text', async () => {
+                const all = await elementsOf(`
+package P {
+    // <X> y
+    part def Wheel {
+        doc /* <D> Wheel */
+    }
+    /* <Y> z */
+    part w;
+}
+`);
+                for (const e of all) expect(e).not.toHaveProperty('shortName');
+            });
+
+            it("keeps a trigger payload's short name to the payload, not its transition", async () => {
+                const all = await elementsOf(`
+package P {
+    state def <S> S1 {
+        entry; then off;
+        state <o> off;
+        state on;
+        transition off_on first off accept <a> sig then on;
+        transition first on then off;
+    }
+}
+`);
+                const pick = (name: string) => all.find(e => e.name === name);
+                expect(pick('S1')?.shortName).toBe('S');
+                expect(pick('off')?.shortName).toBe('o');
+                expect(pick('on')).not.toHaveProperty('shortName');
+                expect(pick('sig')?.shortName).toBe('a');
+                const transitions = all.filter(e => e.type === 'transition');
+                expect(transitions.map(t => t.name).sort()).toEqual(['', 'off_on']);
+                for (const t of transitions) expect(t).not.toHaveProperty('shortName');
+            });
+
+            it('still reports the typing of a usage typed by a short name as written', async () => {
+                const all = await elementsOf(`
+package P {
+    part def <PD2> PartDef2;
+    part wheel : PD2;
+}
+`);
+                const wheel = all.find(e => e.name === 'wheel');
+                expect(wheel).not.toHaveProperty('shortName');
+                expect(wheel.relationships.filter((r: { type: string }) => r.type === 'typing'))
+                    .toEqual([expect.objectContaining({ source: 'wheel', target: 'PD2' })]);
+            });
+
+            it('reports an element with a short name and no name with an empty name (KerML 8.3.2.1.2)', async () => {
+                const all = await elementsOf(`
+package P {
+    part def <PD3>;
+    part <w> : PD3;
+    part <x> :>> w;
+}
+`);
+                const pd3 = all.find(e => e.type === 'part def');
+                expect(pd3).toMatchObject({ name: '', shortName: 'PD3', displayName: '<PD3>' });
+                expect(pd3.attributes).not.toHaveProperty('isAnonymous');
+                expect(all.find(e => e.shortName === 'w')).toMatchObject({ name: '', displayName: '<w>' });
+                expect(all.find(e => e.shortName === 'x')).toMatchObject({ name: '', displayName: '<x>' });
+            });
+
+            it('reports a transition\'s own short name and name', async () => {
+                const all = await elementsOf(`
+package P {
+    state def S1 {
+        entry; then off;
+        state off;
+        state on;
+        transition <t> off_on first off then on;
+        transition <u> first on then off;
+    }
+}
+`);
+                const transitions = all.filter(e => e.type === 'transition');
+                expect(transitions.map(t => [t.name, t.shortName])).toEqual([['off_on', 't'], ['', 'u']]);
+            });
         });
     });
 

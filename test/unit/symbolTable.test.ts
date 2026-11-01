@@ -202,7 +202,7 @@ package Demo {
         const flows = st.getSymbolsForUri('test://test.sysml').filter(s => s.kind === 'flow');
         expect(flows.map(flow => [flow.name, isAnonymous(flow), displayName(flow)])).toEqual([
             ['', true, 'source.output→target.input'],
-            ['outgoing', false, 'outgoing'],
+            ['outgoing', false, '<f1> outgoing'],
         ]);
         expect(st.findByName('i')).toEqual([]);
         expect(st.findByName('j')).toEqual([]);
@@ -2008,11 +2008,20 @@ describe('anonymous usages and definitions', () => {
         ['perform a0.s1;', 's1'],
         ['exhibit s0;', 's0'],
         ['include u0;', 'u0'],
-        ['part <s> : P;', 's'],
     ])('names `%s` after its naming feature or declared name (`%s`)', async (body, name) => {
         const { st } = await build(body);
         const [element] = membersOfW(st);
         expect([element.name, element.qualifiedName, isAnonymous(element)]).toEqual([name, `D::W::${name}`, false]);
+    });
+
+    it.each([
+        ['part <s> : P;', 's'],
+        ['part <s> :>> p;', 's'],
+    ])('names `%s` by its short name only, not after a naming feature (KerML 8.3.3.3.4)', async (body, shortName) => {
+        const { st } = await build(body);
+        const [element] = membersOfW(st);
+        expect([element.name, element.shortName, element.qualifiedName, isAnonymous(element)])
+            .toEqual(['', shortName, `D::W::${shortName}`, false]);
     });
 
     it('owns the members of an anonymous usage', async () => {
@@ -2415,7 +2424,7 @@ package Demo {
             const { describeNamingIssue } = await import('../../server/src/symbols/symbolTable.js');
             expect(describeNamingIssue(issues[0])).toEqual({
                 code: 'circular-naming',
-                message: `Circular naming: the names of '${issues[0].symbol.name}' keep changing without settling.`,
+                message: `Circular naming: the names of '${displayName(issues[0].symbol)}' keep changing without settling.`,
             });
         });
 

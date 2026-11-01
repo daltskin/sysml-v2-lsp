@@ -9,7 +9,7 @@ import { joinQualifiedName, joinReference, scanFeaturePaths, scanQualifiedNames,
 import { IdRegistry } from './ids.js';
 import { buildSymbolIndexes, NamespaceResolver, SymbolIndexes } from './namespaceResolver.js';
 import { Scope } from './scope.js';
-import { FilterExpr, ImportTarget, OwnedSpecialization, SysMLElementKind, SysMLSymbol, displayName, isAnonymous, isDefinition, isFlowUsage, isUsage as isUsageKind } from './sysmlElements.js';
+import { FilterExpr, ImportTarget, OwnedSpecialization, SysMLElementKind, SysMLSymbol, displayName, isAnonymous, isDefinition, isFlowUsage, isUsage as isUsageKind, nameOrShortName } from './sysmlElements.js';
 
 // ── ruleIndex-based lookup tables ───────────────────────────────────
 // These replace the toLowerCase() + string-comparison chains with O(1)
@@ -955,7 +955,7 @@ export class SymbolTable {
         const viewDefsByName = new Map<string, SysMLSymbol>();
         for (const s of this.getAllSymbols()) {
             if (s.kind === SysMLElementKind.ViewDef) {
-                viewDefsByName.set(s.name, s);
+                viewDefsByName.set(nameOrShortName(s), s);
             }
         }
 
@@ -1033,7 +1033,7 @@ export class SymbolTable {
             }
             this.registerSymbol(symbol, uri, currentScope);
             // Create a child scope for definitions and packages
-            childScope = new Scope(symbol.qualifiedName ?? symbol.name, currentScope);
+            childScope = new Scope(symbol.qualifiedName ?? nameOrShortName(symbol), currentScope);
         }
 
         // Walk children
@@ -1268,9 +1268,9 @@ export class SymbolTable {
         this.symbolsByUri.set(uri, uriSymbols);
         // Maintain name index -- an anonymous element's declaration is not a name to look up
         if (!isAnonymous(symbol)) {
-            const nameList = this.symbolsByName.get(symbol.name) ?? [];
+            const nameList = this.symbolsByName.get(nameOrShortName(symbol)) ?? [];
             nameList.push(symbol);
-            this.symbolsByName.set(symbol.name, nameList);
+            this.symbolsByName.set(nameOrShortName(symbol), nameList);
         }
         // Maintain position-sorted index (insertion sort — symbols arrive
         // in document order so this is nearly always an append → O(1) amortized)
@@ -1357,28 +1357,30 @@ export class SymbolTable {
         const effectiveName = this.effectiveNames?.get(rangeKey(range));
         const declaredName = effectiveName ? effectiveName.name
             : transition ? transition.declaredName : this.extractName(ctx);
+        // A flow's own identification only: never its payload's.
+        const shortName = effectiveName ? effectiveName.shortName
+            : transition ? transition.shortName
+                : isFlowUsage(kind) ? this.ownIdentification(ctx)?.shortName
+                    : this.extractShortName(ctx);
+        // KerML 8.3.2.1.2: an element with a name or a short name is named (`escapedName()`).
+        const identifier = declaredName || shortName;
         // An anonymous transition, flow, connection, interface or allocation usage still gets a
         // symbol, with an empty name and its declaration (`anonymousDeclaration`); without a
-        // declared name, only an element with a declaration to identify it by gets one.
-        const declaration = declaredName ? undefined : this.anonymousDeclaration(ctx, kind, transition);
+        // name or short name, only an element with a declaration to identify it by gets one.
+        const declaration = identifier ? undefined : this.anonymousDeclaration(ctx, kind, transition);
         const specializationPart = declaration === undefined ? undefined
             : this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_featureSpecializationPart)
                 ?? this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_subclassificationPart);
-        if (!declaredName && declaration === undefined) {
+        if (!identifier && declaration === undefined) {
             return undefined;
         }
-        const anonymous = !declaredName;
+        const anonymous = !identifier;
         const name = declaredName ?? '';
-        // Transitions never carry a declared <shortName> alias.
-        const shortName = effectiveName ? effectiveName.shortName
-            : transition || (isFlowUsage(kind) && !declaredName)
-                ? undefined
-                : this.extractShortName(ctx);
 
         // KerML: only an element that is named, like all its owners, has a qualified name.
         const qualifiedName = anonymous || (owner && owner.qualifiedName === undefined)
             ? undefined
-            : owner ? `${owner.qualifiedName}::${joinQualifiedName([name])}` : joinQualifiedName([name]);
+            : owner ? `${owner.qualifiedName}::${joinQualifiedName([identifier])}` : joinQualifiedName([identifier]);
 
         // An anonymous element has no name to select: its first token (`connect`, `transition`, ...)
         // stands for it, never a name in its declaration that refers to another element.
@@ -1499,14 +1501,16 @@ export class SymbolTable {
         return RULE_INDEX_TO_KIND.get(ctx.ruleIndex);
     }
 
-    /** Extract a transition's declaration name, source, target, and accepter. */
+    /** Extract a transition's declared name and short name, source, target, and accepter. */
     private extractTransitionDetails(ctx: ParserRuleContext): {
         declaredName?: string;
+        shortName?: string;
         source?: string;
         target?: string;
         trigger?: string;
     } {
         let declaredName: string | undefined;
+        let shortName: string | undefined;
         let source: string | undefined;
         let target: string | undefined;
         let trigger: string | undefined;
@@ -1516,10 +1520,9 @@ export class SymbolTable {
             if (!(child instanceof ParserRuleContext)) continue;
 
             if (child.ruleIndex === SysMLv2Parser.RULE_usageDeclaration) {
-                declaredName = this.findRuleText(
-                    child,
-                    SysMLv2Parser.RULE_identification,
-                );
+                // SysML 8.2.2.18.3: `'transition' ( UsageDeclaration 'first' )?`, named like any usage.
+                const identification = this.childRule(child, SysMLv2Parser.RULE_identification);
+                ({ name: declaredName, shortName } = identification ? this.parseIdentification(identification) : {});
             } else if (child.ruleIndex === SysMLv2Parser.RULE_featureChainMember) {
                 source = this.cleanTransitionText(child.getText());
             } else if (child.ruleIndex === SysMLv2Parser.RULE_transitionSuccessionMember) {
@@ -1535,7 +1538,7 @@ export class SymbolTable {
             }
         }
 
-        return { declaredName, source, target, trigger };
+        return { declaredName, shortName, source, target, trigger };
     }
 
     /** Extract the payload type and both endpoint paths from a flow declaration. */
@@ -1632,6 +1635,15 @@ export class SymbolTable {
     }
 
     /** Find and clean the text of the first descendant with a given rule. */
+    /** `ctx`'s first direct child of rule `ruleIndex`, if any. */
+    private childRule(ctx: ParserRuleContext, ruleIndex: number): ParserRuleContext | undefined {
+        for (let i = 0; i < ctx.getChildCount(); i++) {
+            const child = ctx.getChild(i);
+            if (child instanceof ParserRuleContext && child.ruleIndex === ruleIndex) return child;
+        }
+        return undefined;
+    }
+
     private findRuleText(ctx: ParserRuleContext, ruleIndex: number): string | undefined {
         if (ctx.ruleIndex === ruleIndex) {
             return this.cleanTransitionText(ctx.getText());
@@ -1757,11 +1769,9 @@ export class SymbolTable {
             // Check child rules named 'identification', 'declarationUsageName', etc.
             if (child instanceof ParserRuleContext) {
                 if (child.ruleIndex === SysMLv2Parser.RULE_identification) {
-                    // `identification: LT name GT name | LT name GT | name` — the
-                    // declared name is the long name when present, else the
-                    // <shortName> alias itself; never their concatenation.
-                    const name = this.parseIdentification(child).name;
-                    if (name) return name;
+                    // `identification: LT name GT name | LT name GT | name`: the
+                    // declared name, if any; never the short name.
+                    return this.parseIdentification(child).name;
                 } else if (NAME_RULE_INDICES.has(child.ruleIndex)) {
                     const name = this.extractTextFromSubtree(child);
                     if (name) return name;
@@ -1804,32 +1814,41 @@ export class SymbolTable {
     }
 
     /**
-     * A definition's or usage's name: the one it declares itself, else the
-     * name of its naming feature (KerML/SysML effective name, 7.6.5) -- the
-     * element it performs, exhibits or includes (8.3.17.14), the usage a
-     * variant reference names (8.3.6.4), or the feature it redefines.
-     * Undefined when it has neither, i.e. when it is anonymous.
+     * A definition's or usage's name: the one it declares itself; without a
+     * declared name or short name, the name of its naming feature (KerML
+     * 8.3.3.3.4 `effectiveName()`, SysML 7.6.5) -- the element it performs,
+     * exhibits or includes (8.3.17.14), the usage a variant reference names
+     * (8.3.6.4), or the feature it redefines.
      */
     private extractOwnName(ctx: ParserRuleContext, kind: SysMLElementKind): string | undefined {
-        // A flow in the feature form (`flow f : F of ...`) names itself in a featureIdentification.
-        const identification = this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_identification)
-            ?? this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_featureIdentification);
-        const declaredName = identification && this.parseIdentification(identification).name;
-        if (declaredName) return declaredName;
+        const identification = this.ownIdentification(ctx);
+        if (identification) return identification.name;
 
         const namingFeature = this.namingReference(ctx, kind) ?? this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_ownedRedefinition);
         return namingFeature ? this.lastNameSegment(namingFeature) : undefined;
     }
 
     /**
+     * The declared short name and name of a definition or usage, from its own
+     * declaration's identification; undefined when it declares neither.
+     */
+    private ownIdentification(ctx: ParserRuleContext): { shortName?: string; name?: string } | undefined {
+        // A flow in the feature form (`flow f : F of ...`) names itself in a featureIdentification.
+        const identification = this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_identification)
+            ?? this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_featureIdentification);
+        const declared = identification && this.parseIdentification(identification);
+        return declared && (declared.name || declared.shortName) ? declared : undefined;
+    }
+
+    /**
      * The reference a usage without a declared name is named after: the element
      * it performs, exhibits or includes (8.3.17.14), or the usage a variant
-     * reference names (8.3.6.4). Undefined for any other usage.
+     * reference names (8.3.6.4). Undefined for any other usage, and for one
+     * that declares a name or short name itself (KerML 8.3.3.3.4).
      */
     private namingReference(ctx: ParserRuleContext, kind: SysMLElementKind): ParserRuleContext | undefined {
         if (!PERFORMING_USAGE_KINDS.has(kind) && ctx.ruleIndex !== SysMLv2Parser.RULE_variantReference) return undefined;
-        const identification = this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_identification);
-        if (identification && this.parseIdentification(identification).name) return undefined;
+        if (this.ownIdentification(ctx)) return undefined;
         return this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_ownedReferenceSubsetting);
     }
 
@@ -1961,9 +1980,9 @@ export class SymbolTable {
     /**
      * Splits an `identification` node (`LT name GT name | LT name GT | name`)
      * into its optional `<shortName>` alias and its primary declared name.
-     * Without angle brackets the single `name` is the declared name only;
-     * with a lone `<shortName>` and no long name, the short name doubles as
-     * the declared name (SysML v2 §identification allows referencing either).
+     * Without angle brackets the single `name` is the declared name; with
+     * them, the first `name` is the declared short name and the second, if
+     * any, the declared name (KerML 8.2.3.1, 8.3.2.1.2).
      */
     private parseIdentification(ctx: ParserRuleContext): { shortName?: string; name?: string } {
         let hasAngleBrackets = false;
@@ -1985,8 +2004,7 @@ export class SymbolTable {
                 name: this.extractTextFromSubtree(nameCtxs[1]),
             };
         }
-        const shortName = nameCtxs[0] ? this.extractTextFromSubtree(nameCtxs[0]) : undefined;
-        return { shortName, name: shortName };
+        return { shortName: nameCtxs[0] ? this.extractTextFromSubtree(nameCtxs[0]) : undefined };
     }
 
     /**

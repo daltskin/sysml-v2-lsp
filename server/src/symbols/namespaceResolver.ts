@@ -15,7 +15,7 @@
 
 import { canonicalUri, isSameDocumentUri } from '../utils/documentUri.js';
 import { splitQualifiedName } from '../utils/identUtils.js';
-import { FilterExpr, ImportTarget, SysMLElementKind, SysMLSymbol, isAnonymous, isDefinition, isUsage } from './sysmlElements.js';
+import { FilterExpr, ImportTarget, SysMLElementKind, SysMLSymbol, isAnonymous, isDefinition, isUsage, nameOrShortName } from './sysmlElements.js';
 
 /**
  * A namespace's identity for name resolution: a declared one by its
@@ -117,7 +117,7 @@ export function findConflictedQualifiedNames(allSymbols: SysMLSymbol[]): Map<str
  * (KerML 8.2.3.5.3, `memberName` and `memberShortName`), each once.
  */
 export function memberNamesOf(symbol: SysMLSymbol): string[] {
-    return symbol.shortName && symbol.shortName !== symbol.name ? [symbol.name, symbol.shortName] : [symbol.name];
+    return [...new Set([symbol.name, symbol.shortName])].filter((name): name is string => !!name);
 }
 
 /**
@@ -326,9 +326,9 @@ export function buildSymbolIndexes(allSymbols: SysMLSymbol[]): SymbolIndexes {
 
     for (const s of allSymbols) {
         if (isAnonymous(s)) continue;
-        const nameList = byName.get(s.name) ?? [];
+        const nameList = byName.get(nameOrShortName(s)) ?? [];
         nameList.push(s);
-        byName.set(s.name, nameList);
+        byName.set(nameOrShortName(s), nameList);
 
         if (s.qualifiedName !== undefined && !conflictedQualifiedNames.has(s.qualifiedName)) {
             byQualifiedName.set(s.qualifiedName, s);
@@ -345,15 +345,15 @@ export function buildSymbolIndexes(allSymbols: SysMLSymbol[]): SymbolIndexes {
         }
 
         if (isDefinition(s.kind)) {
-            const defs = definitionsByName.get(s.name) ?? [];
+            const defs = definitionsByName.get(nameOrShortName(s)) ?? [];
             defs.push(s);
-            definitionsByName.set(s.name, defs);
+            definitionsByName.set(nameOrShortName(s), defs);
         }
 
         if (s.kind === SysMLElementKind.PortUsage || s.kind === SysMLElementKind.PortDef) {
-            const ports = portsByName.get(s.name) ?? [];
+            const ports = portsByName.get(nameOrShortName(s)) ?? [];
             ports.push(s);
-            portsByName.set(s.name, ports);
+            portsByName.set(nameOrShortName(s), ports);
         }
     }
 

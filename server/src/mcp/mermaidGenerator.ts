@@ -7,7 +7,7 @@
  */
 
 import type { SysMLSymbol } from '../symbols/sysmlElements.js';
-import { SysMLElementKind, displayName, isDefinition } from '../symbols/sysmlElements.js';
+import { SysMLElementKind, displayName, isDefinition, nameOrShortName } from '../symbols/sysmlElements.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -82,14 +82,18 @@ function isOwnedBy(sym: SysMLSymbol, ancestor: SysMLSymbol, lookup: SymbolLookup
     return false;
 }
 
-/** Escape label text for Mermaid (quotes and angle brackets, no regex). */
+/** Escape label text for Mermaid: quotes and angle brackets as entity codes (`<PD2>` stays visible), no regex. */
 function escapeLabel(text: string): string {
     let result = '';
     for (let i = 0; i < text.length; i++) {
         const ch = text[i];
         if (ch === '"') {
             result += '#quot;';
-        } else if (ch !== '<' && ch !== '>') {
+        } else if (ch === '<') {
+            result += '#lt;';
+        } else if (ch === '>') {
+            result += '#gt;';
+        } else {
             result += ch;
         }
     }
@@ -311,23 +315,23 @@ export function inferDiagramType(symbols: SysMLSymbol[]): DiagramType {
 function buildDisplayIds(symbols: SysMLSymbol[], lookup: SymbolLookup): Map<string, string> {
     const nameCount = new Map<string, number>();
     for (const s of symbols) {
-        nameCount.set(s.name, (nameCount.get(s.name) ?? 0) + 1);
+        nameCount.set(nameOrShortName(s), (nameCount.get(nameOrShortName(s)) ?? 0) + 1);
     }
 
     const ids = new Map<string, string>();
     for (const s of symbols) {
         // An anonymous element has no name to show: identified by its symbol ID.
-        if (!s.name) {
+        if (!nameOrShortName(s)) {
             ids.set(s.symbolId, nodeId(s));
             continue;
         }
         let displayId: string;
         const owner = ownerOf(s, lookup);
-        if (nameCount.get(s.name)! > 1 && owner) {
+        if (nameCount.get(nameOrShortName(s))! > 1 && owner) {
             // Disambiguate with parent name
-            displayId = safeId(`${owner.name}_${s.name}`);
+            displayId = safeId(`${nameOrShortName(owner)}_${nameOrShortName(s)}`);
         } else {
-            displayId = safeId(s.name);
+            displayId = safeId(nameOrShortName(s));
         }
         ids.set(s.symbolId, displayId);
     }
@@ -384,15 +388,16 @@ function generateGeneralView(symbols: SysMLSymbol[], lookup: SymbolLookup): Merm
         // Track for styling
         nodeStyles.set(id, kindLabel);
 
-        // A named class is shown by its node ID; an anonymous one by its display name as label.
-        const classDecl = sym.name ? `class ${id}` : `class ${id}["${escapeLabel(displayName(sym))}"]`;
+        // A class with a name only is shown by its node ID; any other by its display name (`<PD2> PartDef2`, `: Engine`).
+        const label = displayName(sym);
+        const classDecl = label === sym.name ? `class ${id}` : `class ${id}["${escapeLabel(label)}"]`;
         if (childSymbols.length > 0) {
             lines.push(`    ${classDecl} {`);
             lines.push(`        <<${kindLabel}>>`)
             for (const child of childSymbols) {
                 const typeStr = child.typeNames.length > 0 ? ` : ${child.typeNames[0]}` : '';
                 const mult = child.multiplicity ? `[${child.multiplicity}]` : '';
-                lines.push(`        +${escapeLabel(child.name)}${typeStr}${mult}`);
+                lines.push(`        +${escapeLabel(nameOrShortName(child))}${typeStr}${mult}`);
             }
             lines.push('    }');
         } else {
@@ -407,7 +412,7 @@ function generateGeneralView(symbols: SysMLSymbol[], lookup: SymbolLookup): Merm
 
         for (const typeName of sym.typeNames) {
             const target = lookup.byName.get(typeName)
-                ?? [...lookup.byName.values()].find(s => s.name === typeName);
+                ?? [...lookup.byName.values()].find(s => nameOrShortName(s) === typeName);
             if (target) {
                 const targetId = displayIds.get(target.symbolId) ?? nodeId(target);
                 if (rendered.has(targetId)) {
@@ -873,7 +878,7 @@ function generateUseCaseView(symbols: SysMLSymbol[], lookup: SymbolLookup): Merm
     const untypedUsages = allUseCaseUsages.filter(u =>
         !u.typeNames.some(t => {
             const resolved = lookup.byName.get(t)
-                ?? [...lookup.byName.values()].find(s => s.name === t);
+                ?? [...lookup.byName.values()].find(s => nameOrShortName(s) === t);
             return resolved && resolved.kind === SysMLElementKind.UseCaseDef;
         }),
     );
@@ -975,7 +980,7 @@ function generateUseCaseView(symbols: SysMLSymbol[], lookup: SymbolLookup): Merm
         if (inc.typeNames.length === 0) continue;
         const targetName = inc.typeNames[0];
         const target = lookup.byName.get(targetName)
-            ?? [...lookup.byName.values()].find(s => s.name === targetName);
+            ?? [...lookup.byName.values()].find(s => nameOrShortName(s) === targetName);
         if (!target) continue;
 
         // Source is the parent element (ideally a UseCaseDef).
@@ -1048,8 +1053,8 @@ export function generateMermaidDiagram(
     for (const s of allSymbols) {
         if (s.qualifiedName !== undefined) lookup.byName.set(s.qualifiedName, s);
         // Also index by simple name for type lookups
-        if (!lookup.byName.has(s.name)) {
-            lookup.byName.set(s.name, s);
+        if (!lookup.byName.has(nameOrShortName(s))) {
+            lookup.byName.set(nameOrShortName(s), s);
         }
         lookup.byId.set(s.symbolId, s);
     }

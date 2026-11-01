@@ -6,7 +6,7 @@ import {
     TextDocumentPositionParams,
 } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
-import { isDefinition, SysMLElementKind, SysMLSymbol } from '../symbols/sysmlElements.js';
+import { isDefinition, nameOrShortName, SysMLElementKind, SysMLSymbol } from '../symbols/sysmlElements.js';
 import { quoteName, scanQualifiedNames } from '../utils/identUtils.js';
 
 /**
@@ -118,16 +118,18 @@ export class CompletionProvider {
             const seen = new Set<string>();
             const defItems: CompletionItem[] = [];
             for (const sym of definitionSymbols) {
-                if (!sym.name || seen.has(sym.name)) continue;
-                seen.add(sym.name);
+                // An element with only a short name is referenced by it (KerML 8.3.2.1.2).
+                const name = nameOrShortName(sym);
+                if (!name || seen.has(name)) continue;
+                seen.add(name);
                 defItems.push({
-                    label: sym.name,
-                    insertText: quoteName(sym.name),
+                    label: name,
+                    insertText: quoteName(name),
                     kind: this.mapSymbolKindToCompletionKind(sym.kind),
-                    detail: `${sym.kind}${sym.qualifiedName !== undefined && sym.qualifiedName !== sym.name ? ` (${sym.qualifiedName})` : ''}`,
+                    detail: `${sym.kind}${sym.qualifiedName !== undefined && sym.qualifiedName !== name ? ` (${sym.qualifiedName})` : ''}`,
                     documentation: sym.documentation,
                     data: sym.qualifiedName,
-                    sortText: `1_${sym.name}`,
+                    sortText: `1_${name}`,
                 });
             }
             this._defCache = { symbols: allSymbols, items: defItems };
@@ -141,15 +143,17 @@ export class CompletionProvider {
             );
             const seenPorts = new Set<string>();
             for (const sym of portSymbols) {
-                if (!sym.name || seenPorts.has(sym.name)) continue;
-                seenPorts.add(sym.name);
+                // An element with only a short name is referenced by it (KerML 8.3.2.1.2).
+                const name = nameOrShortName(sym);
+                if (!name || seenPorts.has(name)) continue;
+                seenPorts.add(name);
                 items.push({
-                    label: sym.name,
-                    insertText: quoteName(sym.name),
+                    label: name,
+                    insertText: quoteName(name),
                     kind: CompletionItemKind.Interface,
                     detail: `${sym.kind}${sym.typeNames[0] ? ` : ${sym.typeNames[0]}` : ''}`,
                     data: sym.qualifiedName,
-                    sortText: `0_${sym.name}`,
+                    sortText: `0_${name}`,
                 });
             }
         }

@@ -181,6 +181,12 @@ export interface SysMLElementDTO {
     name: string;
 
     /**
+     * The element's declared short name (`<shortName>`), unquoted like `name`;
+     * omitted when it has none (KerML 8.3.2.1 `Element::shortName`).
+     */
+    shortName?: string;
+
+    /**
      * Text to show for the element, as in the outline: its name; for an
      * anonymous element its declaration without a name (`: Engine`), else what
      * it connects (`a.p→b.p`), else its declaration as written (`decide`).
