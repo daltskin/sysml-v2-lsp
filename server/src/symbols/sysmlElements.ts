@@ -135,6 +135,8 @@ export interface SysMLSymbol {
      * name token is that reference, not a declaration of a name of its own.
      */
     namingReference?: string;
+    /** Whether `namingReference` is the feature its first owned redefinition redefines (KerML 8.3.3.3.4). */
+    namedByRedefinition?: boolean;
     /** Documentation string if available */
     documentation?: string;
     /** Visibility declared on the owning membership; omitted for default public visibility. */

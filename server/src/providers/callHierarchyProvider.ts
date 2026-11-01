@@ -13,6 +13,7 @@ import { DocumentManager } from '../documentManager.js';
 import { displayName, SysMLElementKind, SysMLSymbol } from '../symbols/sysmlElements.js';
 import { scanQualifiedNames, splitQualifiedName } from '../utils/identUtils.js';
 import { NameReferences } from '../symbols/nameReferences.js';
+import { memberNamesOf } from '../symbols/namespaceResolver.js';
 
 /**
  * Action-related keywords that create "call" relationships in SysML.
@@ -140,21 +141,42 @@ export class CallHierarchyProvider {
     provideIncomingCalls(params: CallHierarchyIncomingCallsParams): CallHierarchyIncomingCall[] {
         const symbolTable = this.documentManager.getWorkspaceSymbolTable();
         const item = params.item;
-        const targetName = item.name;
+        // Calls written with the target's name or its short name (KerML 8.3.2.1.2).
+        const target = this.symbolOf(item);
+        const targetNames = target ? memberNamesOf(target) : [item.name];
         const incoming: CallHierarchyIncomingCall[] = [];
 
-        for (const uri of this.documentManager.getUris()) {
-            const text = this.documentManager.getText(uri);
-            if (!text) continue;
+        for (const targetName of targetNames) {
+            for (const uri of this.documentManager.getUris()) {
+                const text = this.documentManager.getText(uri);
+                if (!text) continue;
 
-            const symbols = symbolTable.getSymbolsForUri(uri);
+                const symbols = symbolTable.getSymbolsForUri(uri);
 
-            // 1. Explicit call keywords: `perform Brake`, `accept Accelerate`, etc.
-            for (const keyword of CALL_KEYWORDS) {
-                for (const m of findKeywordTarget(text, keyword, targetName)) {
+                // 1. Explicit call keywords: `perform Brake`, `accept Accelerate`, etc.
+                for (const keyword of CALL_KEYWORDS) {
+                    for (const m of findKeywordTarget(text, keyword, targetName)) {
+                        const pos = offsetToPosition(text, m.index);
+                        const enclosing = this.findEnclosingBehavioral(symbols, pos.line);
+
+                        if (enclosing) {
+                            incoming.push({
+                                from: this.toCallHierarchyItem(enclosing),
+                                fromRanges: [Range.create(
+                                    pos,
+                                    offsetToPosition(text, m.index + m.length),
+                                )],
+                            });
+                        }
+                    }
+                }
+
+                // 2. Typed usages: `action foo : TargetName` — composition is a call.
+                //    skip=1 because the narrowest enclosing behavioral is the usage
+                //    itself; the actual *caller* is the parent action/state.
+                for (const m of findTypedUsageOfTarget(text, USAGE_KEYWORDS, targetName)) {
                     const pos = offsetToPosition(text, m.index);
-                    const enclosing = this.findEnclosingBehavioral(symbols, pos.line);
-
+                    const enclosing = this.findEnclosingBehavioral(symbols, pos.line, 1);
                     if (enclosing) {
                         incoming.push({
                             from: this.toCallHierarchyItem(enclosing),
@@ -164,23 +186,6 @@ export class CallHierarchyProvider {
                             )],
                         });
                     }
-                }
-            }
-
-            // 2. Typed usages: `action foo : TargetName` — composition is a call.
-            //    skip=1 because the narrowest enclosing behavioral is the usage
-            //    itself; the actual *caller* is the parent action/state.
-            for (const m of findTypedUsageOfTarget(text, USAGE_KEYWORDS, targetName)) {
-                const pos = offsetToPosition(text, m.index);
-                const enclosing = this.findEnclosingBehavioral(symbols, pos.line, 1);
-                if (enclosing) {
-                    incoming.push({
-                        from: this.toCallHierarchyItem(enclosing),
-                        fromRanges: [Range.create(
-                            pos,
-                            offsetToPosition(text, m.index + m.length),
-                        )],
-                    });
                 }
             }
         }
@@ -198,11 +203,7 @@ export class CallHierarchyProvider {
         const outgoing: CallHierarchyOutgoingCall[] = [];
 
         // Find the symbol body range
-        const symbols = symbolTable.getSymbolsForUri(item.uri);
-        const sym = symbols.find(s =>
-            s.name === item.name &&
-            s.selectionRange.start.line === item.selectionRange.start.line
-        );
+        const sym = this.symbolOf(item);
         if (!sym) return [];
 
         const startOffset = positionToOffset(fullText, sym.range.start);
@@ -259,9 +260,19 @@ export class CallHierarchyProvider {
         return candidates[skip]?.sym;
     }
 
+    /** The symbol `item` stands for: by the symbol ID it carries, else by its name and line. */
+    private symbolOf(item: CallHierarchyItem): SysMLSymbol | undefined {
+        const symbolTable = this.documentManager.getWorkspaceSymbolTable();
+        const id = (item.data as { symbolId?: string } | undefined)?.symbolId;
+        return (id !== undefined ? symbolTable.getSymbolById(id) : undefined)
+            ?? symbolTable.getSymbolsForUri(item.uri).find(s =>
+                displayName(s) === item.name && s.selectionRange.start.line === item.selectionRange.start.line);
+    }
+
     private toCallHierarchyItem(sym: SysMLSymbol): CallHierarchyItem {
         return {
             name: displayName(sym),
+            data: { symbolId: sym.symbolId },
             kind: sym.kind.includes('action') ? SymbolKind.Method
                 : sym.kind.includes('state') ? SymbolKind.Enum
                     : sym.kind.includes('calc') ? SymbolKind.Function

@@ -17,6 +17,7 @@ import { SemanticValidator } from './providers/semanticValidator.js';
 import { SymbolTable } from './symbols/symbolTable.js';
 import type { SysMLSymbol } from './symbols/sysmlElements.js';
 import { SysMLElementKind, displayName, isDefinition, isUsage } from './symbols/sysmlElements.js';
+import { memberNamesOf } from './symbols/namespaceResolver.js';
 import { SYSML_KEYWORDS_ARRAY as SYSML_KEYWORDS } from './utils/sysmlKeywords.js';
 export { SYSML_KEYWORDS_ARRAY as SYSML_KEYWORDS } from './utils/sysmlKeywords.js';
 
@@ -77,6 +78,7 @@ export function formatSymbol(sym: SysMLSymbol): Record<string, unknown> {
     const typingOnly = sym.typeNames.filter(n => !specSet.has(n));
     return {
         name: sym.name,
+        ...(sym.shortName !== undefined ? { shortName: sym.shortName } : {}),
         kind: sym.kind,
         ...(sym.declaration ? { declaration: sym.declaration } : {}),
         // The text to show, as in the outline: its name, or for an anonymous element `: Engine`, `a.p→b.p`
@@ -168,7 +170,7 @@ export function handleParse(
     const allSymbols = ctx.symbolTable.getSymbolsForUri(docUri);
     const topLevel = allSymbols
         .filter((s) => !s.parentId)
-        .map((s) => `${s.kind} ${s.qualifiedName ?? s.name}`);
+        .map((s) => `${s.kind} ${s.qualifiedName ?? displayName(s)}`);
     if (topLevel.length > 0) {
         summary.topLevelElements = topLevel;
     }
@@ -225,7 +227,7 @@ export function handlePreview(
     const allSymbols = ctx.symbolTable.getSymbolsForUri(docUri);
 
     // Optional semantic validation
-    const allNames = new Set(ctx.symbolTable.getAllSymbols().map(s => s.name));
+    const allNames = new Set(ctx.symbolTable.getAllSymbols().flatMap(memberNamesOf));
     const semanticDiags = SemanticValidator.validateSymbols(allSymbols, allNames, {
         allSymbols: ctx.symbolTable.getAllSymbols(),
         text: opts.code,
@@ -253,7 +255,7 @@ export function handlePreview(
 
         // Find the focused element(s) by name or qualified name
         const focused = allSymbols.filter(s =>
-            s.name === focusName
+            memberNamesOf(s).includes(focusName)
             || s.qualifiedName === focusName
             || s.qualifiedName?.endsWith(`::${focusName}`)
         );
@@ -275,7 +277,7 @@ export function handlePreview(
                 typeSource.push(...child.typeNames);
             }
             for (const tn of typeSource) {
-                const typed = allSymbols.find(s => s.name === tn || s.qualifiedName === tn);
+                const typed = allSymbols.find(s => memberNamesOf(s).includes(tn) || s.qualifiedName === tn);
                 if (typed) {
                     focusSet.add(typed.symbolId);
                     // Include children of the type definition too
@@ -342,7 +344,7 @@ export function handleValidate(
 
     // Run semantic validation on the built symbol table
     const symbols = ctx.symbolTable.getSymbolsForUri(docUri);
-    const allNames = new Set(ctx.symbolTable.getAllSymbols().map(s => s.name));
+    const allNames = new Set(ctx.symbolTable.getAllSymbols().flatMap(memberNamesOf));
     const semanticDiags = SemanticValidator.validateSymbols(symbols, allNames, {
         allSymbols: ctx.symbolTable.getAllSymbols(),
         text: code,
@@ -373,7 +375,7 @@ export function handleGetDiagnostics(
     const docUri = uri ?? 'untitled.sysml';
     ensureParsed(ctx, docUri, code);
     const symbols = ctx.symbolTable.getSymbolsForUri(docUri);
-    const allNames = new Set(ctx.symbolTable.getAllSymbols().map(s => s.name));
+    const allNames = new Set(ctx.symbolTable.getAllSymbols().flatMap(memberNamesOf));
     const diags = SemanticValidator.validateSymbols(symbols, allNames, {
         allSymbols: ctx.symbolTable.getAllSymbols(),
         text: code ?? ctx.loadedDocuments.get(docUri),
@@ -477,7 +479,7 @@ export function handleGetHierarchy(
     const ancestors: Array<{ name: string; declaration?: string; displayName: string; kind: string; qualifiedName: string | null }> = [];
     let parent = ctx.symbolTable.getOwner(target);
     while (parent) {
-        ancestors.unshift({ name: parent.name, ...(parent.declaration ? { declaration: parent.declaration } : {}), displayName: displayName(parent), kind: parent.kind, qualifiedName: parent.qualifiedName ?? null });
+        ancestors.unshift({ name: parent.name, ...(parent.shortName !== undefined ? { shortName: parent.shortName } : {}), ...(parent.declaration ? { declaration: parent.declaration } : {}), displayName: displayName(parent), kind: parent.kind, qualifiedName: parent.qualifiedName ?? null });
         parent = ctx.symbolTable.getOwner(parent);
     }
 
@@ -486,6 +488,7 @@ export function handleGetHierarchy(
         .filter((s): s is SysMLSymbol => s !== undefined)
         .map((s) => ({
             name: s.name,
+            ...(s.shortName !== undefined ? { shortName: s.shortName } : {}),
             kind: s.kind,
             qualifiedName: s.qualifiedName ?? null,
             ...(s.typeNames.length > 0 ? { type: s.typeNames.join(', ') } : {}),
@@ -494,6 +497,7 @@ export function handleGetHierarchy(
     return {
         element: {
             name: target.name,
+            ...(target.shortName !== undefined ? { shortName: target.shortName } : {}),
             kind: target.kind,
             qualifiedName: target.qualifiedName ?? null,
             ...(target.typeNames.length > 0 ? { type: target.typeNames.join(', ') } : {}),
@@ -640,8 +644,8 @@ export function handlePromptReviewSysml(
 
     const context = [
         `Parsed: ${symbolCount} symbols, ${errors.length} syntax errors`,
-        `Definitions: ${defs.map((d) => `${d.kind} ${d.name}`).join(', ') || 'none'}`,
-        `Usages: ${usages.map((u) => `${u.kind} ${u.name}`).join(', ') || 'none'}`,
+        `Definitions: ${defs.map((d) => `${d.kind} ${displayName(d)}`).join(', ') || 'none'}`,
+        `Usages: ${usages.map((u) => `${u.kind} ${displayName(u)}`).join(', ') || 'none'}`,
     ];
     if (errors.length > 0) {
         context.push(`Errors: ${errors.map((e) => `line ${e.line + 1}: ${e.message}`).join('; ')}`);

@@ -2558,8 +2558,9 @@ package Demo {
 }
 `;
             /** The element at `path` (names from the top), its first match at each step. */
+            /** The element at `path`, each step by its name, else its short name (KerML 8.3.2.1.2 `escapedName()`). */
             const find = (model: any, path: string[]): any =>
-                path.reduce((found, name) => found?.children.find((e: { name: string }) => e.name === name),
+                path.reduce((found, name) => found?.children.find((e: { name: string; shortName?: string }) => (e.name || e.shortName) === name),
                     { children: model.elements });
             /** The specialization relationships of the element at `path`, as [type, target, notation]. */
             const specializationsOf = (model: any, path: string[]) => (find(model, path).relationships as any[])

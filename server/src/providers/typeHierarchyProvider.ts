@@ -46,11 +46,7 @@ export class TypeHierarchyProvider {
 
         const item = params.item;
         // Find the symbol for this item
-        const symbols = symbolTable.getSymbolsForUri(item.uri);
-        const sym = symbols.find(s =>
-            s.name === item.name &&
-            s.selectionRange.start.line === item.selectionRange.start.line
-        );
+        const sym = this.symbolOf(item);
         if (!sym || sym.typeNames.length === 0) return [];
 
         // The typeNames holds all supertype names
@@ -85,9 +81,19 @@ export class TypeHierarchyProvider {
         return subtypes.map(s => this.toTypeHierarchyItem(s));
     }
 
+    /** The symbol `item` stands for: by the symbol ID it carries, else by its name and line. */
+    private symbolOf(item: TypeHierarchyItem): SysMLSymbol | undefined {
+        const symbolTable = this.documentManager.getWorkspaceSymbolTable();
+        const id = (item.data as { symbolId?: string } | undefined)?.symbolId;
+        return (id !== undefined ? symbolTable.getSymbolById(id) : undefined)
+            ?? symbolTable.getSymbolsForUri(item.uri).find(s =>
+                displayName(s) === item.name && s.selectionRange.start.line === item.selectionRange.start.line);
+    }
+
     private toTypeHierarchyItem(sym: SysMLSymbol): TypeHierarchyItem {
         return {
             name: displayName(sym),
+            data: { symbolId: sym.symbolId },
             kind: this.toSymbolKind(sym.kind),
             uri: sym.uri,
             range: sym.range,

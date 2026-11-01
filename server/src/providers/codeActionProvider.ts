@@ -8,7 +8,8 @@ import {
     WorkspaceEdit
 } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
-import { SysMLElementKind, isDefinition } from '../symbols/sysmlElements.js';
+import { memberNamesOf } from '../symbols/namespaceResolver.js';
+import { SysMLElementKind, isDefinition, nameOrShortName } from '../symbols/sysmlElements.js';
 import {
     quoteName, scanFeaturePaths, scanQualifiedNames, splitQualifiedName, unquoteName,
 } from '../utils/identUtils.js';
@@ -125,7 +126,7 @@ export class CodeActionProvider {
         const packageNames = new Set<string>();
         for (const s of allSymbols) {
             if (!isDefinition(s.kind)) continue;
-            if (s.name !== unquoteName(unresolvedType)) continue;
+            if (!memberNamesOf(s).includes(unquoteName(unresolvedType))) continue;
             if (s.uri === uri) continue;
 
             // The top-level namespace of its qualified name; one without can't be imported.
@@ -302,8 +303,9 @@ export class CodeActionProvider {
         if (diagnostic.code !== 'missing-doc') return undefined;
 
         // Extract the definition name from structured data or message
-        const data = diagnostic.data as { name?: string } | undefined;
-        const name = data?.name ?? extractQuotedString(diagnostic.message, "Definition '");
+        // The element's name, else its short name (KerML 8.3.2.1.2 `escapedName()`).
+        const data = diagnostic.data as { name?: string; shortName?: string } | undefined;
+        const name = data?.name || data?.shortName || extractQuotedString(diagnostic.message, "Definition '");
         if (!name) return undefined;
 
         const text = this.documentManager.getText(uri);
@@ -411,8 +413,9 @@ export class CodeActionProvider {
     ): CodeAction | undefined {
         if (diagnostic.code !== 'unused-definition') return undefined;
 
-        const data = diagnostic.data as { name?: string } | undefined;
-        const name = data?.name ?? extractQuotedString(diagnostic.message, "Definition '");
+        // The element's name, else its short name (KerML 8.3.2.1.2 `escapedName()`).
+        const data = diagnostic.data as { name?: string; shortName?: string } | undefined;
+        const name = data?.name || data?.shortName || extractQuotedString(diagnostic.message, "Definition '");
         if (!name) return undefined;
 
         // Already prefixed?
@@ -511,8 +514,8 @@ export class CodeActionProvider {
         const symbolsInUri = symbolTable.getSymbolsForUri(uri);
         const compatible = symbolsInUri.find((s) =>
             s.kind === SysMLElementKind.PortUsage
-            && s.name !== left
-            && s.name !== right
+            && !memberNamesOf(s).includes(left)
+            && !memberNamesOf(s).includes(right)
             && (s.typeNames[0] ?? s.typeName) === leftType,
         );
         if (!compatible) return undefined;
@@ -600,12 +603,12 @@ export class CodeActionProvider {
         const symbolsInUri = symbolTable.getSymbolsForUri(uri);
         const allSymbols = symbolTable.getAllSymbols();
 
-        const scope = scopeName ? symbolsInUri.find((s) => s.name === scopeName) : undefined;
+        const scope = scopeName ? symbolsInUri.find((s) => memberNamesOf(s).includes(scopeName)) : undefined;
         const scopeMembers = scope
             ? allSymbols.filter((s) => s.parentId === scope.symbolId)
             : [];
-        const rootUsage = scopeMembers.find((s) => s.name === root)
-            ?? symbolsInUri.find((s) => s.name === root && !!(s.typeNames[0] ?? s.typeName));
+        const rootUsage = scopeMembers.find((s) => memberNamesOf(s).includes(root))
+            ?? symbolsInUri.find((s) => memberNamesOf(s).includes(root) && !!(s.typeNames[0] ?? s.typeName));
 
         const rootType = rootUsage ? (rootUsage.typeNames[0] ?? rootUsage.typeName) : undefined;
         let memberNames: string[] = [];
@@ -614,18 +617,18 @@ export class CodeActionProvider {
             if (typeDef) {
                 memberNames = allSymbols
                     .filter((s) => s.parentId === typeDef.symbolId)
-                    .map((s) => s.name);
+                    .map(nameOrShortName);
             }
         }
         if (memberNames.length === 0) {
             memberNames = symbolsInUri
-                .map((s) => s.name)
+                .map(nameOrShortName)
                 .filter((n) => n !== root);
         }
         if (memberNames.length === 0) {
             memberNames = allSymbols
                 .filter((s) => s.uri === uri)
-                .map((s) => s.name)
+                .map(nameOrShortName)
                 .filter((n) => n !== root);
         }
         if (memberNames.length === 0) return undefined;

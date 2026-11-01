@@ -134,15 +134,26 @@ export function memberNamesOf(symbol: SysMLSymbol): string[] {
  * or short name, e.g. `part def <A> Alpha;` and `part def A;`.
  */
 export function findConflictingDeclarations(allSymbols: SysMLSymbol[]): Map<SysMLSymbol, SysMLSymbol[]> {
-    const conflicting = new Map<SysMLSymbol, SysMLSymbol[]>();
-    const add = (groups: Iterable<SysMLSymbol[]>) => {
-        for (const group of groups) {
-            for (const s of group) {
-                conflicting.set(s, [...new Set([...(conflicting.get(s) ?? []), ...group])]);
-            }
+    return new Map([...findConflicts(allSymbols)].map(([symbol, { declarations }]) => [symbol, declarations]));
+}
+
+/**
+ * As `findConflictingDeclarations`, with the names each declaration clashes
+ * on: a name or short name it shares with another (KerML 8.3.2.4.3), which
+ * need not be the one its qualified name is built from.
+ */
+export function findConflicts(allSymbols: SysMLSymbol[]): Map<SysMLSymbol, { declarations: SysMLSymbol[]; names: string[] }> {
+    const conflicting = new Map<SysMLSymbol, { declarations: SysMLSymbol[]; names: string[] }>();
+    const add = (name: string, group: SysMLSymbol[]) => {
+        for (const s of group) {
+            const found = conflicting.get(s);
+            conflicting.set(s, {
+                declarations: [...new Set([...(found?.declarations ?? []), ...group])],
+                names: [...new Set([...(found?.names ?? []), name])],
+            });
         }
     };
-    add(findConflictedQualifiedNames(allSymbols).values());
+    for (const group of findConflictedQualifiedNames(allSymbols).values()) add(nameOrShortName(group[0]), group);
     const membersOfAnonymous = allSymbols.filter(s => s.qualifiedName === undefined && !isAnonymous(s) && s.parentId !== undefined);
     const byOwner = new Map<string, SysMLSymbol[]>();
     for (const s of membersOfAnonymous) {
@@ -150,8 +161,10 @@ export function findConflictingDeclarations(allSymbols: SysMLSymbol[]): Map<SysM
         list.push(s);
         byOwner.set(s.parentId!, list);
     }
-    for (const members of byOwner.values()) add(groupConflicts(members, s => s.name).values());
-    add([...findConflictingShortNames(allSymbols).values()].map(group => group.symbols));
+    for (const members of byOwner.values()) {
+        for (const [name, group] of groupConflicts(members, nameOrShortName)) add(name, group);
+    }
+    for (const { name, symbols } of findConflictingShortNames(allSymbols).values()) add(name, symbols);
     return conflicting;
 }
 
