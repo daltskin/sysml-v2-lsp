@@ -9,7 +9,7 @@ import { joinQualifiedName, joinReference, scanFeaturePaths, scanQualifiedNames,
 import { IdRegistry } from './ids.js';
 import { buildSymbolIndexes, NamespaceResolver, SymbolIndexes } from './namespaceResolver.js';
 import { Scope } from './scope.js';
-import { FilterExpr, ImportTarget, OwnedSpecialization, SysMLElementKind, SysMLSymbol, displayName, isAnonymous, isDefinition, isFlowUsage, isUsage as isUsageKind, nameOrShortName } from './sysmlElements.js';
+import { FilterExpr, ImportTarget, OwnedSpecialization, SysMLElementKind, SysMLSymbol, displayName, isAnonymous, isDefinition, isFlowUsage, isUsage as isUsageKind, escapedName, memberNamesOf } from './sysmlElements.js';
 
 // ── ruleIndex-based lookup tables ───────────────────────────────────
 // These replace the toLowerCase() + string-comparison chains with O(1)
@@ -668,12 +668,15 @@ export class SymbolTable {
      */
     private resolveNamingFeature(symbol: SysMLSymbol, resolver: NamespaceResolver, indexes: SymbolIndexes): SysMLSymbol | undefined {
         const owner = this.getOwner(symbol);
-        // KerML 8.2.3.5.1: a redefined feature is resolved in the types its owner specializes.
-        if (symbol.namedByRedefinition) return owner && resolver.resolveRedefinedFeature(owner, symbol.namingReference!, indexes).symbol;
         const [path] = scanFeaturePaths(symbol.namingReference!);
         if (!path) return undefined;
         const [first, ...chain] = path.qualifiedNames;
-        let feature = resolver.resolveReferenceIn(owner, first.name, indexes, symbol).symbol;
+        // KerML 8.2.3.5.1: a redefined feature's name is resolved in the types its owner
+        // specializes; the features of a redefined chain (`:>> x2.p`) are resolved as
+        // any reference, from the owner.
+        let feature = symbol.namedByRedefinition && chain.length === 0
+            ? owner && resolver.resolveRedefinedFeature(owner, first.name, indexes).symbol
+            : resolver.resolveReferenceIn(owner, first.name, indexes, symbol).symbol;
         for (const qualified of chain) {
             const [member, ...rest] = qualified.segments;
             feature = feature && resolver.resolveFeatureReference(feature, member.name, indexes).symbol;
@@ -848,7 +851,7 @@ export class SymbolTable {
         const refs = this.typeNameRefs.get(name);
         if (refs) {
             for (const sym of refs) {
-                if (nameOrShortName(sym) !== name) {
+                if (!memberNamesOf(sym).includes(name)) {
                     results.push(sym);
                 }
             }
@@ -866,7 +869,7 @@ export class SymbolTable {
         const refs = this.typeNameRefs.get(name);
         if (refs) {
             for (const sym of refs) {
-                if (nameOrShortName(sym) !== name) count++;
+                if (!memberNamesOf(sym).includes(name)) count++;
             }
         }
         return count;
@@ -910,7 +913,7 @@ export class SymbolTable {
                     }
                     this.removeFromConflictTracking(sym, sym.qualifiedName);
                 }
-                affectedNames.add(nameOrShortName(sym));
+                for (const name of memberNamesOf(sym)) affectedNames.add(name);
                 for (const tn of sym.typeNames) {
                     affectedTypeNames.add(tn);
                 }
@@ -958,7 +961,7 @@ export class SymbolTable {
         const viewDefsByName = new Map<string, SysMLSymbol>();
         for (const s of this.getAllSymbols()) {
             if (s.kind === SysMLElementKind.ViewDef) {
-                viewDefsByName.set(nameOrShortName(s), s);
+                for (const name of memberNamesOf(s)) viewDefsByName.set(name, s);
             }
         }
 
@@ -1036,7 +1039,7 @@ export class SymbolTable {
             }
             this.registerSymbol(symbol, uri, currentScope);
             // Create a child scope for definitions and packages
-            childScope = new Scope(symbol.qualifiedName ?? nameOrShortName(symbol), currentScope);
+            childScope = new Scope(symbol.qualifiedName ?? escapedName(symbol) ?? '', currentScope);
         }
 
         // Walk children
@@ -1271,9 +1274,11 @@ export class SymbolTable {
         this.symbolsByUri.set(uri, uriSymbols);
         // Maintain name index -- an anonymous element's declaration is not a name to look up
         if (!isAnonymous(symbol)) {
-            const nameList = this.symbolsByName.get(nameOrShortName(symbol)) ?? [];
-            nameList.push(symbol);
-            this.symbolsByName.set(nameOrShortName(symbol), nameList);
+            for (const name of memberNamesOf(symbol)) {
+                const nameList = this.symbolsByName.get(name) ?? [];
+                nameList.push(symbol);
+                this.symbolsByName.set(name, nameList);
+            }
         }
         // Maintain position-sorted index (insertion sort — symbols arrive
         // in document order so this is nearly always an append → O(1) amortized)
@@ -1640,7 +1645,6 @@ export class SymbolTable {
         return matches[0];
     }
 
-    /** Find and clean the text of the first descendant with a given rule. */
     /** `ctx`'s first direct child of rule `ruleIndex`, if any. */
     private childRule(ctx: ParserRuleContext, ruleIndex: number): ParserRuleContext | undefined {
         for (let i = 0; i < ctx.getChildCount(); i++) {
@@ -1650,6 +1654,7 @@ export class SymbolTable {
         return undefined;
     }
 
+    /** Find and clean the text of the first descendant with a given rule. */
     private findRuleText(ctx: ParserRuleContext, ruleIndex: number): string | undefined {
         if (ctx.ruleIndex === ruleIndex) {
             return this.cleanTransitionText(ctx.getText());

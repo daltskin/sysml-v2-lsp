@@ -2,11 +2,11 @@ import { Diagnostic, DiagnosticSeverity, Position, Range } from 'vscode-language
 import { DocumentManager } from '../documentManager.js';
 import { getLibraryPackageNames, resolveLibraryType } from '../library/libraryIndex.js';
 import { SysMLModelProvider } from '../model/sysmlModelProvider.js';
-import { NamespaceResolver, SymbolIndexes, buildSymbolIndexes, describeConflictingDeclarations, findConflicts, memberNamesOf, NamespaceKey, namespaceKeyOf, otherDeclarations, ownerKeyOf, ownerOf } from '../symbols/namespaceResolver.js';
-import { SysMLElementKind, SysMLSymbol, displayName, isAnonymous, isDefinition, nameOrShortName } from '../symbols/sysmlElements.js';
+import { NamespaceResolver, SymbolIndexes, buildSymbolIndexes, describeConflictingDeclarations, findConflicts, NamespaceKey, namespaceKeyOf, otherDeclarations, ownerKeyOf, ownerOf } from '../symbols/namespaceResolver.js';
+import { SysMLElementKind, SysMLSymbol, displayName, escapedName, isAnonymous, isDefinition, memberNamesOf, nameText } from '../symbols/sysmlElements.js';
 import { describeNamingIssue, NamingIssue } from '../symbols/symbolTable.js';
 import { resolveTypeName } from '../symbols/typeResolution.js';
-import { quoteName, scanFeaturePaths, splitQualifiedName, stripComments } from '../utils/identUtils.js';
+import { scanFeaturePaths, splitQualifiedName, stripComments } from '../utils/identUtils.js';
 
 const CONSTRAINT_KEYWORDS = new Set([
     'and', 'or', 'not', 'xor', 'implies', 'if', 'then', 'else', 'true', 'false', 'null',
@@ -187,7 +187,7 @@ export class SemanticValidator {
             message,
             source: 'sysml',
             code: 'unresolved-type',
-            data: { typeName, elementName: nameOrShortName(symbol) },
+            data: { typeName, elementName: nameText(symbol), symbolId: symbol.symbolId },
         }];
     }
 
@@ -313,7 +313,7 @@ export class SemanticValidator {
             message: `Definition '${displayName(symbol)}' has no documentation`,
             source: 'sysml',
             code: 'missing-doc',
-            data: { name: symbol.name, shortName: symbol.shortName },
+            data: { name: nameText(symbol), symbolId: symbol.symbolId },
         }];
     }
 
@@ -348,7 +348,7 @@ export class SemanticValidator {
 
         const diagnostics: Diagnostic[] = [];
         for (const def of defsInScope) {
-            const isReferenced = referencedTypes.has(nameOrShortName(def)) ||
+            const isReferenced = memberNamesOf(def).some(name => referencedTypes.has(name)) ||
                 (def.shortName !== undefined && referencedTypes.has(def.shortName));
             const hasBaseType = (def.typeNames?.length ?? 0) > 0;
 
@@ -359,7 +359,7 @@ export class SemanticValidator {
                     message: `Definition '${displayName(def)}' is not referenced by any usage in the workspace`,
                     source: 'sysml',
                     code: 'unused-definition',
-                    data: { name: def.name, shortName: def.shortName },
+                    data: { name: nameText(def), symbolId: def.symbolId },
                 });
             }
         }
@@ -438,8 +438,9 @@ export class SemanticValidator {
 
         for (const def of defsInFile) {
             const visited = new Set<string>();
-            visited.add(nameOrShortName(def));
-            const cycle = this.followSpecializationChain(nameOrShortName(def), def.typeNames, visited, indexes);
+            // A specialization written with either of its names closes the cycle.
+            for (const name of memberNamesOf(def)) visited.add(name);
+            const cycle = this.followSpecializationChain(escapedName(def) ?? '', def.typeNames, visited, indexes);
             if (cycle) {
                 diagnostics.push({
                     severity: DiagnosticSeverity.Error,
@@ -585,7 +586,7 @@ export class SemanticValidator {
                     message: `Requirement '${displayName(req)}' is not satisfied by any element`,
                     source: 'sysml',
                     code: 'unsatisfied-requirement',
-                    data: { name: req.name, shortName: req.shortName, qualifiedName: req.qualifiedName },
+                    data: { name: nameText(req), symbolId: req.symbolId, qualifiedName: req.qualifiedName },
                 });
             }
         }
@@ -756,16 +757,16 @@ export class SemanticValidator {
             if (!isVerified) {
                 const message = isSatisfied
                     ? `Requirement '${displayName(req)}' is satisfied but has no verification case — ` +
-                      `consider adding: verify ${quoteName(nameOrShortName(req))} by <VerificationCase>;`
+                      `consider adding: verify ${escapedName(req)} by <VerificationCase>;`
                     : `Requirement '${displayName(req)}' has no verification case — ` +
-                      `consider adding: verify ${quoteName(nameOrShortName(req))} by <VerificationCase>;`;
+                      `consider adding: verify ${escapedName(req)} by <VerificationCase>;`;
                 diagnostics.push({
                     severity: DiagnosticSeverity.Warning,
                     range: req.selectionRange,
                     message,
                     source: 'sysml',
                     code: 'unverified-requirement',
-                    data: { name: req.name, shortName: req.shortName, qualifiedName: req.qualifiedName },
+                    data: { name: nameText(req), symbolId: req.symbolId, qualifiedName: req.qualifiedName },
                 });
             }
         }
@@ -825,7 +826,7 @@ export class SemanticValidator {
         const _viewpointNames = new Set(
             symbols
                 .filter(s => s.kind === SysMLElementKind.ViewpointDef || s.kind === SysMLElementKind.ViewpointUsage)
-                .map(s => nameOrShortName(s)),
+                .flatMap(memberNamesOf),
         );
 
         for (const view of views) {
@@ -983,8 +984,8 @@ export class SemanticValidator {
                 if (hasCommonAncestor) continue;
 
                 // Check shared feature names (compatible flow items)
-                const lChildNames = new Set(lChildren.map(c => nameOrShortName(c)));
-                const hasSharedFeature = rChildren.some(c => lChildNames.has(nameOrShortName(c)));
+                const lChildNames = new Set(lChildren.flatMap(memberNamesOf));
+                const hasSharedFeature = rChildren.some(c => memberNamesOf(c).some(name => lChildNames.has(name)));
                 if (hasSharedFeature) continue;
             }
 
@@ -1145,7 +1146,7 @@ export class SemanticValidator {
                     message: `Unresolved constraint reference '${expr}' in scope '${displayName(parent)}'`,
                     source: 'sysml',
                     code: 'unresolved-constraint-reference',
-                    data: { uri, scopeName: nameOrShortName(parent) },
+                    data: { uri, scopeName: nameText(parent), scopeId: parent.symbolId },
                 });
             }
         }
@@ -1259,12 +1260,14 @@ export class SemanticValidator {
             for (const member of membersByLevel[level]) {
                 if (level > 0 && member.visibility === 'private') continue;
                 if (publicOnly && member.visibility !== undefined && member.visibility !== 'public') continue;
-                if (hiddenMembers.has(member.symbolId) || membersByName.has(nameOrShortName(member))) continue;
-                membersByName.set(nameOrShortName(member), member);
+                // A member shadows an inherited one known by any of the same names.
+                const names = memberNamesOf(member);
+                if (hiddenMembers.has(member.symbolId) || names.some(name => membersByName.has(name))) continue;
+                for (const name of names) membersByName.set(name, member);
             }
         }
 
-        return [...membersByName.values()];
+        return [...new Set(membersByName.values())];
     }
 
     private resolveInheritedRedefinitionTarget(
@@ -1573,7 +1576,7 @@ export class SemanticValidator {
                 message: `Ambiguous ${conflict.names.length > 1 ? 'names' : 'name'} ${names}: also declared as ${describeConflictingDeclarations(others, symbol.uri)}.`,
                 source: 'sysml',
                 code: 'ambiguous-namespace-name',
-                data: { name: symbol.name, shortName: symbol.shortName },
+                data: { name: nameText(symbol), symbolId: symbol.symbolId },
             });
         }
 

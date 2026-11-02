@@ -7,7 +7,7 @@
  */
 
 import type { SysMLSymbol } from '../symbols/sysmlElements.js';
-import { SysMLElementKind, displayName, isDefinition, nameOrShortName } from '../symbols/sysmlElements.js';
+import { SysMLElementKind, displayName, isAnonymous, isDefinition, memberNamesOf, nameText } from '../symbols/sysmlElements.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -315,23 +315,23 @@ export function inferDiagramType(symbols: SysMLSymbol[]): DiagramType {
 function buildDisplayIds(symbols: SysMLSymbol[], lookup: SymbolLookup): Map<string, string> {
     const nameCount = new Map<string, number>();
     for (const s of symbols) {
-        nameCount.set(nameOrShortName(s), (nameCount.get(nameOrShortName(s)) ?? 0) + 1);
+        nameCount.set(nameText(s), (nameCount.get(nameText(s)) ?? 0) + 1);
     }
 
     const ids = new Map<string, string>();
     for (const s of symbols) {
         // An anonymous element has no name to show: identified by its symbol ID.
-        if (!nameOrShortName(s)) {
+        if (isAnonymous(s)) {
             ids.set(s.symbolId, nodeId(s));
             continue;
         }
         let displayId: string;
         const owner = ownerOf(s, lookup);
-        if (nameCount.get(nameOrShortName(s))! > 1 && owner) {
+        if (nameCount.get(nameText(s))! > 1 && owner) {
             // Disambiguate with parent name
-            displayId = safeId(`${nameOrShortName(owner)}_${nameOrShortName(s)}`);
+            displayId = safeId(`${nameText(owner)}_${nameText(s)}`);
         } else {
-            displayId = safeId(nameOrShortName(s));
+            displayId = safeId(nameText(s));
         }
         ids.set(s.symbolId, displayId);
     }
@@ -397,7 +397,7 @@ function generateGeneralView(symbols: SysMLSymbol[], lookup: SymbolLookup): Merm
             for (const child of childSymbols) {
                 const typeStr = child.typeNames.length > 0 ? ` : ${child.typeNames[0]}` : '';
                 const mult = child.multiplicity ? `[${child.multiplicity}]` : '';
-                lines.push(`        +${escapeLabel(nameOrShortName(child))}${typeStr}${mult}`);
+                lines.push(`        +${escapeLabel(isAnonymous(child) ? '' : displayName(child))}${typeStr}${mult}`);
             }
             lines.push('    }');
         } else {
@@ -412,7 +412,7 @@ function generateGeneralView(symbols: SysMLSymbol[], lookup: SymbolLookup): Merm
 
         for (const typeName of sym.typeNames) {
             const target = lookup.byName.get(typeName)
-                ?? [...lookup.byName.values()].find(s => nameOrShortName(s) === typeName);
+                ?? [...lookup.byName.values()].find(s => memberNamesOf(s).includes(typeName));
             if (target) {
                 const targetId = displayIds.get(target.symbolId) ?? nodeId(target);
                 if (rendered.has(targetId)) {
@@ -878,7 +878,7 @@ function generateUseCaseView(symbols: SysMLSymbol[], lookup: SymbolLookup): Merm
     const untypedUsages = allUseCaseUsages.filter(u =>
         !u.typeNames.some(t => {
             const resolved = lookup.byName.get(t)
-                ?? [...lookup.byName.values()].find(s => nameOrShortName(s) === t);
+                ?? [...lookup.byName.values()].find(s => memberNamesOf(s).includes(t));
             return resolved && resolved.kind === SysMLElementKind.UseCaseDef;
         }),
     );
@@ -980,7 +980,7 @@ function generateUseCaseView(symbols: SysMLSymbol[], lookup: SymbolLookup): Merm
         if (inc.typeNames.length === 0) continue;
         const targetName = inc.typeNames[0];
         const target = lookup.byName.get(targetName)
-            ?? [...lookup.byName.values()].find(s => nameOrShortName(s) === targetName);
+            ?? [...lookup.byName.values()].find(s => memberNamesOf(s).includes(targetName));
         if (!target) continue;
 
         // Source is the parent element (ideally a UseCaseDef).
@@ -1053,8 +1053,8 @@ export function generateMermaidDiagram(
     for (const s of allSymbols) {
         if (s.qualifiedName !== undefined) lookup.byName.set(s.qualifiedName, s);
         // Also index by simple name for type lookups
-        if (!lookup.byName.has(nameOrShortName(s))) {
-            lookup.byName.set(nameOrShortName(s), s);
+        for (const name of memberNamesOf(s)) {
+            if (!lookup.byName.has(name)) lookup.byName.set(name, s);
         }
         lookup.byId.set(s.symbolId, s);
     }

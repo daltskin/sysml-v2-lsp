@@ -7,7 +7,7 @@ import {
     TextDocuments,
 } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
-import { SysMLElementKind, displayName, nameOrShortName } from '../symbols/sysmlElements.js';
+import { SysMLElementKind, displayName, isAnonymous } from '../symbols/sysmlElements.js';
 import { scanQualifiedNames, splitQualifiedName } from '../utils/identUtils.js';
 
 /**
@@ -72,7 +72,7 @@ export class SignatureHelpProvider {
         if (params_list.length === 0) return null;
 
         const paramInfos: ParameterInformation[] = params_list.map(p => ({
-            label: p.typeNames.length > 0 ? `${nameOrShortName(p)} : ${p.typeNames.join(', ')}` : nameOrShortName(p),
+            label: isAnonymous(p) ? `: ${p.typeNames.join(', ')}` : p.typeNames.length > 0 ? `${displayName(p)} : ${p.typeNames.join(', ')}` : displayName(p),
             documentation: p.documentation ?? `${p.kind} parameter`,
         }));
 

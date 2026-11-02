@@ -16,7 +16,7 @@ import { parseDocument } from './parser/parseDocument.js';
 import { SemanticValidator } from './providers/semanticValidator.js';
 import { SymbolTable } from './symbols/symbolTable.js';
 import type { SysMLSymbol } from './symbols/sysmlElements.js';
-import { SysMLElementKind, displayName, isDefinition, isUsage } from './symbols/sysmlElements.js';
+import { SysMLElementKind, displayName, isDefinition, isUsage, nameText } from './symbols/sysmlElements.js';
 import { memberNamesOf } from './symbols/namespaceResolver.js';
 import { SYSML_KEYWORDS_ARRAY as SYSML_KEYWORDS } from './utils/sysmlKeywords.js';
 export { SYSML_KEYWORDS_ARRAY as SYSML_KEYWORDS } from './utils/sysmlKeywords.js';
@@ -77,7 +77,7 @@ export function formatSymbol(sym: SysMLSymbol): Record<string, unknown> {
     const specSet = new Set(sym.specializationNames);
     const typingOnly = sym.typeNames.filter(n => !specSet.has(n));
     return {
-        name: sym.name,
+        name: nameText(sym),
         ...(sym.shortName !== undefined ? { shortName: sym.shortName } : {}),
         kind: sym.kind,
         ...(sym.declaration ? { declaration: sym.declaration } : {}),
@@ -479,7 +479,7 @@ export function handleGetHierarchy(
     const ancestors: Array<{ name: string; declaration?: string; displayName: string; kind: string; qualifiedName: string | null }> = [];
     let parent = ctx.symbolTable.getOwner(target);
     while (parent) {
-        ancestors.unshift({ name: parent.name, ...(parent.shortName !== undefined ? { shortName: parent.shortName } : {}), ...(parent.declaration ? { declaration: parent.declaration } : {}), displayName: displayName(parent), kind: parent.kind, qualifiedName: parent.qualifiedName ?? null });
+        ancestors.unshift({ name: nameText(parent), ...(parent.shortName !== undefined ? { shortName: parent.shortName } : {}), ...(parent.declaration ? { declaration: parent.declaration } : {}), displayName: displayName(parent), kind: parent.kind, qualifiedName: parent.qualifiedName ?? null });
         parent = ctx.symbolTable.getOwner(parent);
     }
 
@@ -487,7 +487,7 @@ export function handleGetHierarchy(
         .map((qn) => ctx.symbolTable.getSymbol(qn))
         .filter((s): s is SysMLSymbol => s !== undefined)
         .map((s) => ({
-            name: s.name,
+            name: nameText(s),
             ...(s.shortName !== undefined ? { shortName: s.shortName } : {}),
             kind: s.kind,
             qualifiedName: s.qualifiedName ?? null,
@@ -496,7 +496,7 @@ export function handleGetHierarchy(
 
     return {
         element: {
-            name: target.name,
+            name: nameText(target),
             ...(target.shortName !== undefined ? { shortName: target.shortName } : {}),
             kind: target.kind,
             qualifiedName: target.qualifiedName ?? null,

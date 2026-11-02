@@ -21,7 +21,7 @@ import {
     isAnonymous,
     isFlowUsage,
     isUsage,
-    nameOrShortName,
+    nameText,
     toMetaclassName,
 } from '../symbols/sysmlElements.js';
 import { resolveTypeName } from '../symbols/typeResolution.js';
@@ -168,6 +168,11 @@ function readWordAfterKeyword(text: string, afterPos: number, allowDots = false)
 /** `symbols` by `symbolId`. */
 function symbolsById(symbols: SysMLSymbol[]): Map<string, SysMLSymbol> {
     return new Map(symbols.map(s => [s.symbolId, s]));
+}
+
+/** An element's name and, when it has one, its short name, as DTO fields (KerML 8.3.2.1.2). */
+function nameFields(symbol: SysMLSymbol): { name: string; shortName?: string } {
+    return symbol.shortName !== undefined ? { name: symbol.name, shortName: symbol.shortName } : { name: symbol.name };
 }
 
 /**
@@ -440,7 +445,7 @@ export class SysMLModelProvider {
     private specializationRelationships(symbol: SysMLSymbol): RelationshipDTO[] {
         return (symbol.ownedSpecializations ?? []).map(({ kind, target, notation }) => ({
             type: kind,
-            source: nameOrShortName(symbol),
+            source: nameText(symbol),
             sourceId: symbol.symbolId,
             target,
             ...(notation ? { notation } : {}),
@@ -462,7 +467,7 @@ export class SysMLModelProvider {
             type: 'flow',
             source: details.source,
             target: details.target,
-            name: details.itemType ?? nameOrShortName(symbol),
+            ...(details.itemType ? { name: details.itemType } : nameFields(symbol)),
             symbolId: symbol.symbolId,
         };
     }
@@ -503,7 +508,7 @@ export class SysMLModelProvider {
                         type: 'connection',
                         source: connectionTargets[0],
                         target: connectionTargets[1],
-                        name: nameOrShortName(symbol),
+                        ...nameFields(symbol),
                         symbolId: symbol.symbolId,
                     });
                 }
@@ -535,7 +540,7 @@ export class SysMLModelProvider {
                         type: 'allocation',
                         source: allocTargets[0],
                         target: allocTargets[1],
-                        name: nameOrShortName(symbol),
+                        ...nameFields(symbol),
                         symbolId: symbol.symbolId,
                     });
                 }
@@ -598,7 +603,7 @@ export class SysMLModelProvider {
                 if (child.kind === SysMLElementKind.PartUsage ||
                     child.kind === SysMLElementKind.ItemUsage) {
                     participants.push({
-                        name: nameOrShortName(child),
+                        ...nameFields(child),
                         type: child.typeNames.join(', ') || child.kind,
                         range: this.rangeToDTO(child.range),
                     });
@@ -622,7 +627,7 @@ export class SysMLModelProvider {
                 if (!target) continue;
                 messages.push({
                     name: `send_${occurrence}`,
-                    from: nameOrShortName(symbol),
+                    from: nameText(symbol),
                     to: target,
                     payload: signal,
                     occurrence: occurrence++,
@@ -644,7 +649,7 @@ export class SysMLModelProvider {
                 messages.push({
                     name: `accept_${occurrence}`,
                     from: source,
-                    to: nameOrShortName(symbol),
+                    to: nameText(symbol),
                     payload: signal,
                     occurrence: occurrence++,
                     range: this.rangeToDTO(symbol.range),
@@ -666,8 +671,8 @@ export class SysMLModelProvider {
                         const [target] = readIdent(childText, tgtStart, true);
                         if (!target) continue;
                         messages.push({
-                            name: nameOrShortName(child),
-                            from: target ?? nameOrShortName(symbol),
+                            ...nameFields(child),
+                            from: target ?? nameText(symbol),
                             to: signal ?? '',
                             payload: signal ?? '',
                             occurrence: occurrence++,
@@ -685,9 +690,9 @@ export class SysMLModelProvider {
                         const [source] = readIdent(childText, srcStart, true);
                         if (!source) continue;
                         messages.push({
-                            name: nameOrShortName(child),
+                            ...nameFields(child),
                             from: source ?? '',
-                            to: nameOrShortName(symbol),
+                            to: nameText(symbol),
                             payload: signal ?? '',
                             occurrence: occurrence++,
                             range: this.rangeToDTO(child.range),
@@ -699,7 +704,7 @@ export class SysMLModelProvider {
             // Only include as explicit sequence diagram if it has participants or messages
             if (participants.length > 0 || messages.length > 0) {
                 diagrams.push({
-                    name: nameOrShortName(symbol),
+                    ...nameFields(symbol),
                     participants,
                     messages,
                     range: this.rangeToDTO(symbol.range),
@@ -736,7 +741,7 @@ export class SysMLModelProvider {
             const participants: ParticipantDTO[] = children
                 .filter(c => c.kind === SysMLElementKind.ActionUsage || c.kind === SysMLElementKind.ActionDef)
                 .map(c => ({
-                    name: nameOrShortName(c),
+                    ...nameFields(c),
                     type: c.typeNames.join(', ') || 'action',
                     range: this.rangeToDTO(c.range),
                 }));
@@ -762,12 +767,12 @@ export class SysMLModelProvider {
 
             if (participants.length > 0 || messages.length > 0) {
                 // Remove any items-only entry from the first pass for this symbol
-                const existingIdx = diagrams.findIndex(d => d.name === nameOrShortName(symbol));
+                const existingIdx = diagrams.findIndex(d => d.name === symbol.name && d.shortName === symbol.shortName);
                 if (existingIdx >= 0) {
                     diagrams.splice(existingIdx, 1);
                 }
                 diagrams.push({
-                    name: nameOrShortName(symbol),
+                    ...nameFields(symbol),
                     participants,
                     messages,
                     range: this.rangeToDTO(symbol.range),
@@ -821,10 +826,10 @@ export class SysMLModelProvider {
                 const details = child.flowDetails;
                 if (!details?.source || !details.target) continue;
                 parsedMessages.push({
-                    name: isAnonymous(child) && details.itemType ? details.itemType : nameOrShortName(child),
+                    ...(isAnonymous(child) && details.itemType ? { name: details.itemType } : nameFields(child)),
                     from: rootName(details.source),
                     to: rootName(details.target),
-                    payload: details.itemType ?? (details.payloadDeclared ? '' : nameOrShortName(child)),
+                    payload: details.itemType ?? (details.payloadDeclared ? '' : nameText(child)),
                     occurrence: occ++,
                     range: this.rangeToDTO(child.range),
                 });
@@ -874,9 +879,9 @@ export class SysMLModelProvider {
                     child.kind === SysMLElementKind.PartDef ||
                     child.kind === SysMLElementKind.ItemDef ||
                     child.kind === SysMLElementKind.RefUsage) {
-                    if (!participants.find(p => p.name === nameOrShortName(child))) {
+                    if (!participants.find(p => p.name === child.name && p.shortName === child.shortName)) {
                         participants.push({
-                            name: nameOrShortName(child),
+                            ...nameFields(child),
                             type: child.typeNames.join(', ') || child.kind,
                             range: this.rangeToDTO(child.range),
                         });
@@ -885,7 +890,7 @@ export class SysMLModelProvider {
             }
             for (const msg of parsedMessages) {
                 for (const endpoint of [msg.from, msg.to]) {
-                    if (endpoint && !participants.find(p => p.name === endpoint)) {
+                    if (endpoint && !participants.find(p => p.name === endpoint || p.shortName === endpoint)) {
                         participants.push({
                             name: endpoint,
                             type: 'participant',
@@ -896,12 +901,12 @@ export class SysMLModelProvider {
             }
 
             // Replace any earlier items-only diagram for this symbol.
-            const existingIdx = diagrams.findIndex(d => d.name === nameOrShortName(symbol));
+            const existingIdx = diagrams.findIndex(d => d.name === symbol.name && d.shortName === symbol.shortName);
             if (existingIdx >= 0) {
                 diagrams.splice(existingIdx, 1);
             }
             diagrams.push({
-                name: nameOrShortName(symbol),
+                ...nameFields(symbol),
                 participants,
                 messages: parsedMessages,
                 range: this.rangeToDTO(symbol.range),
@@ -960,7 +965,7 @@ export class SysMLModelProvider {
                 const controlType = CONTROL_NODE_TYPE.get(child.kind);
                 // An unnamed control node (`decide;`) is taken from the action's text below
                 // (D1), under the name its flows refer to (`decide`).
-                if (controlType !== undefined && !nameOrShortName(child)) continue;
+                if (controlType !== undefined && isAnonymous(child)) continue;
                 if (child.kind === SysMLElementKind.ActionUsage ||
                     child.kind === SysMLElementKind.ActionDef ||
                     controlType !== undefined) {
@@ -982,13 +987,15 @@ export class SysMLModelProvider {
                         .map(c => this.symbolToActionDTO(c, symbolTable, lines));
 
                     actions.push({
-                        name: nameOrShortName(child),
+                        ...nameFields(child),
                         type: actionType,
                         kind: actionType,
                         isDefinition: child.kind === SysMLElementKind.ActionDef,
                         range: this.rangeToDTO(child.range),
-                        parent: nameOrShortName(symbol),
-                        children: subActions.map(a => a.name),
+                        parent: nameText(symbol),
+                        parentId: child.parentId,
+                        // As before: each sub-action's name, else its short name; `subActions` has both.
+                        children: subActions.map(a => a.name || a.shortName || ''),
                         subActions: subActions.length > 0 ? subActions : undefined,
                     });
 
@@ -996,7 +1003,7 @@ export class SysMLModelProvider {
                     if (actionType === 'decision') {
                         const branches = this.extractDecisionBranches(child, lines);
                         decisions.push({
-                            name: nameOrShortName(child),
+                            ...nameFields(child),
                             condition: '',
                             branches,
                             range: this.rangeToDTO(child.range),
@@ -1012,7 +1019,7 @@ export class SysMLModelProvider {
                             ? 'final'
                             : 'intermediate';
                     states.push({
-                        name: nameOrShortName(child),
+                        ...nameFields(child),
                         type: stateType,
                         range: this.rangeToDTO(child.range),
                     });
@@ -1108,7 +1115,7 @@ export class SysMLModelProvider {
 
             if (actions.length > 0 || flows.length > 0 || states.length > 0) {
                 diagrams.push({
-                    name: nameOrShortName(symbol),
+                    ...nameFields(symbol),
                     actions,
                     decisions,
                     flows,
@@ -1161,7 +1168,7 @@ export class SysMLModelProvider {
                 .map(c => {
                     const prefix = prefixAttributesOf(c);
                     return {
-                        name: nameOrShortName(c),
+                        ...nameFields(c),
                         kind: toMetaclassName(c.kind),
                         type: c.typeNames.join(', ') || undefined,
                         multiplicity: c.multiplicity,
@@ -1175,7 +1182,8 @@ export class SysMLModelProvider {
 
             result[qualifiedName] = {
                 qualifiedName,
-                simpleName: nameOrShortName(symbol),
+                simpleName: symbol.name,
+                ...(symbol.shortName !== undefined && { shortName: symbol.shortName }),
                 kind: symbol.kind,
                 isLibraryType: false,
                 specializationChain,
@@ -1237,7 +1245,8 @@ export class SysMLModelProvider {
                     message: `Ambiguous ${conflict.names.length > 1 ? 'names' : 'name'} ${names}: also declared as ${describeConflictingDeclarations(others, symbol.uri)}.`,
                     severity: 'error',
                     range: this.rangeToDTO(symbol.selectionRange),
-                    elementName: nameOrShortName(symbol),
+                    elementName: nameText(symbol),
+                    id: symbol.symbolId,
                 });
             }
 
@@ -1251,7 +1260,8 @@ export class SysMLModelProvider {
                         message: `Type '${strippedTypeName}' could not be resolved in the current scope`,
                         severity: 'warning',
                         range: this.rangeToDTO(symbol.selectionRange),
-                        elementName: nameOrShortName(symbol),
+                        elementName: nameText(symbol),
+                        id: symbol.symbolId,
                     });
                 }
             }
@@ -1269,7 +1279,8 @@ export class SysMLModelProvider {
                         message: `Enumeration '${displayName(symbol)}' has no enum values defined`,
                         severity: 'info',
                         range: this.rangeToDTO(symbol.range),
-                        elementName: nameOrShortName(symbol),
+                        elementName: nameText(symbol),
+                        id: symbol.symbolId,
                     });
                 }
             }
@@ -1281,7 +1292,8 @@ export class SysMLModelProvider {
                 ...describeNamingIssue(issue),
                 severity: 'warning',
                 range: this.rangeToDTO(issue.symbol.selectionRange),
-                elementName: nameOrShortName(issue.symbol),
+                elementName: nameText(issue.symbol),
+                id: issue.symbol.symbolId,
             });
         }
 
@@ -1404,8 +1416,7 @@ export class SysMLModelProvider {
 
     /** Extract relationship keywords from the text of `element`, the relationships' default source. */
     private extractKeywordRelationships(element: SysMLSymbol, elementText: string): RelationshipDTO[] {
-        const elementName = nameOrShortName(element);
-        const fromElement = { source: elementName, sourceId: element.symbolId };
+        const fromElement = { source: nameText(element), sourceId: element.symbolId };
         elementText = stripComments(elementText);
         const rels: RelationshipDTO[] = [];
 
@@ -1793,11 +1804,12 @@ export class SysMLModelProvider {
         }
 
         return {
-            name: nameOrShortName(symbol),
+            ...nameFields(symbol),
             type: actionType,
             kind: actionType,
             isDefinition: symbol.kind === SysMLElementKind.ActionDef,
             range: this.rangeToDTO(symbol.range),
+            parentId: symbol.parentId,
         };
     }
 }

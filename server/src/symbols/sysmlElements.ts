@@ -1,4 +1,5 @@
 import { Range } from 'vscode-languageserver/node';
+import { quoteName } from '../utils/identUtils.js';
 
 /**
  * Kinds of SysML elements tracked in the symbol table.
@@ -265,12 +266,30 @@ export function isAnonymous(symbol: SysMLSymbol): boolean {
 }
 
 /**
- * The name `symbol` is identified by in a qualified name: its name, else its
- * short name (KerML 8.3.2.1.2, `escapedName()`, without the escaping).
- * Empty for an anonymous element.
+ * KerML 8.3.2.1.2 `escapedName()`: the name, else the short name, as written
+ * in the notation (quoted and escaped unless a basic name); undefined for an
+ * anonymous element. For identifiers only, never instead of either name.
  */
-export function nameOrShortName(symbol: SysMLSymbol): string {
+export function escapedName(symbol: SysMLSymbol): string | undefined {
+    const name = symbol.name || symbol.shortName;
+    return name ? quoteName(name) : undefined;
+}
+
+/**
+ * Text naming `symbol` where a field holds one name (a relationship's source,
+ * a message's sender, a diagnostic's element): KerML `escapedName()`, unquoted.
+ * Text only, next to an ID: it never identifies the element.
+ */
+export function nameText(symbol: SysMLSymbol): string {
     return symbol.name || symbol.shortName || '';
+}
+
+/**
+ * The names a membership of `symbol` is known by: its name and its short name
+ * (KerML 8.2.3.5.3, `memberName` and `memberShortName`), each once.
+ */
+export function memberNamesOf(symbol: SysMLSymbol): string[] {
+    return [...new Set([symbol.name, symbol.shortName])].filter((name): name is string => !!name);
 }
 
 /**

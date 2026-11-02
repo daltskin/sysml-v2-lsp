@@ -7,7 +7,7 @@ import {
 } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
 import { getLibraryHoverInfo } from '../library/libraryIndex.js';
-import { displayName, nameOrShortName, toMetaclassName } from '../symbols/sysmlElements.js';
+import { displayName, isAnonymous, memberNamesOf, toMetaclassName } from '../symbols/sysmlElements.js';
 import { NameReferences } from '../symbols/nameReferences.js';
 import { extractQualifiedNameAt } from '../utils/identUtils.js';
 import type { SemanticValidator } from './semanticValidator.js';
@@ -70,12 +70,12 @@ export class HoverProvider {
 
         // Header: metaclass name and symbol name
         const metaclass = toMetaclassName(symbol.kind);
-        lines.push(nameOrShortName(symbol) ? `**${metaclass}** \`${displayName(symbol)}\`` : `**${metaclass}**`);
+        lines.push(isAnonymous(symbol) ? `**${metaclass}**` : `**${metaclass}** \`${displayName(symbol)}\``);
 
         // Qualified name -- an anonymous element, and any member of one, has none (KerML)
         if (symbol.qualifiedName === undefined) {
             lines.push('\nNo qualified name');
-        } else if (symbol.qualifiedName !== nameOrShortName(symbol)) {
+        } else if (!memberNamesOf(symbol).includes(symbol.qualifiedName)) {
             lines.push(`\nQualified name: \`${symbol.qualifiedName}\``);
         }
 

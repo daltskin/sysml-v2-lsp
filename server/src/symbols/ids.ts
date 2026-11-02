@@ -1,7 +1,6 @@
 import { canonicalUri } from '../utils/documentUri.js';
-import { escapeName } from '../utils/names.js';
 import { NAMESPACE_URL, getUrlPrefix, uuidV5 } from '../utils/uuid.js';
-import { SysMLElementKind, SysMLSymbol, isAnonymous, nameOrShortName } from './sysmlElements.js';
+import { SysMLElementKind, SysMLSymbol, escapedName } from './sysmlElements.js';
 
 /**
  * Gives each declaration its `symbolId` and `parentId`, and finds it by
@@ -146,7 +145,7 @@ export class IdRegistry {
     /** `declaration`'s qualified name as written in the notation, each name escaped (`Demo::'my car'`). */
     private qualifiedNameAsWritten(declaration: SysMLSymbol): string {
         const owner = this.owners.get(declaration);
-        const name = escapeName(nameOrShortName(declaration));
+        const name = escapedName(declaration)!;
         return owner ? `${this.qualifiedNameAsWritten(owner)}::${name}` : name;
     }
 
@@ -193,7 +192,7 @@ export class IdRegistry {
  * path segment of it follows a `/`, so it never equals a qualified name.
  */
 function segmentOf(declaration: SysMLSymbol): string {
-    return isAnonymous(declaration) ? declaration.declaration ?? declaration.kind : escapeName(nameOrShortName(declaration));
+    return escapedName(declaration) ?? declaration.declaration ?? declaration.kind;
 }
 
 /**

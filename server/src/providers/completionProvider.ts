@@ -6,7 +6,7 @@ import {
     TextDocumentPositionParams,
 } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
-import { isDefinition, nameOrShortName, SysMLElementKind, SysMLSymbol } from '../symbols/sysmlElements.js';
+import { isDefinition, memberNamesOf, SysMLElementKind, SysMLSymbol } from '../symbols/sysmlElements.js';
 import { quoteName, scanQualifiedNames } from '../utils/identUtils.js';
 
 /**
@@ -117,10 +117,9 @@ export class CompletionProvider {
             const definitionSymbols = allSymbols.filter((s) => isDefinition(s.kind));
             const seen = new Set<string>();
             const defItems: CompletionItem[] = [];
-            for (const sym of definitionSymbols) {
-                // An element with only a short name is referenced by it (KerML 8.3.2.1.2).
-                const name = nameOrShortName(sym);
-                if (!name || seen.has(name)) continue;
+            for (const sym of definitionSymbols) for (const name of memberNamesOf(sym)) {
+                // One item for each name it is referenced by: its name and its short name (KerML 8.2.3.5.3).
+                if (seen.has(name)) continue;
                 seen.add(name);
                 defItems.push({
                     label: name,
@@ -142,10 +141,9 @@ export class CompletionProvider {
                 s.kind === SysMLElementKind.PortUsage || s.kind === SysMLElementKind.PortDef,
             );
             const seenPorts = new Set<string>();
-            for (const sym of portSymbols) {
-                // An element with only a short name is referenced by it (KerML 8.3.2.1.2).
-                const name = nameOrShortName(sym);
-                if (!name || seenPorts.has(name)) continue;
+            for (const sym of portSymbols) for (const name of memberNamesOf(sym)) {
+                // One item for each name it is referenced by: its name and its short name (KerML 8.2.3.5.3).
+                if (seenPorts.has(name)) continue;
                 seenPorts.add(name);
                 items.push({
                     label: name,

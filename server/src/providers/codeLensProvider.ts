@@ -4,7 +4,6 @@ import {
     Command,
 } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
-import { memberNamesOf } from '../symbols/namespaceResolver.js';
 import { isDefinition, SysMLSymbol } from '../symbols/sysmlElements.js';
 
 /**
@@ -57,7 +56,6 @@ export class CodeLensProvider {
     private countReferences(sym: SysMLSymbol): number {
         // Use O(1) counting instead of allocating a result array
         const symbolTable = this.documentManager.getSymbolTable(sym.uri);
-        // References written with its name or its short name (KerML 8.3.2.1.2).
-        return symbolTable ? memberNamesOf(sym).reduce((count, name) => count + symbolTable.countReferences(name), 0) : 0;
+        return symbolTable ? symbolTable.countReferences(sym.name) : 0;
     }
 }

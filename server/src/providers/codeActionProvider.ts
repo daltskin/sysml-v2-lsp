@@ -8,8 +8,7 @@ import {
     WorkspaceEdit
 } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
-import { memberNamesOf } from '../symbols/namespaceResolver.js';
-import { SysMLElementKind, isDefinition, nameOrShortName } from '../symbols/sysmlElements.js';
+import { SysMLElementKind, isDefinition, memberNamesOf } from '../symbols/sysmlElements.js';
 import {
     quoteName, scanFeaturePaths, scanQualifiedNames, splitQualifiedName, unquoteName,
 } from '../utils/identUtils.js';
@@ -303,9 +302,8 @@ export class CodeActionProvider {
         if (diagnostic.code !== 'missing-doc') return undefined;
 
         // Extract the definition name from structured data or message
-        // The element's name, else its short name (KerML 8.3.2.1.2 `escapedName()`).
-        const data = diagnostic.data as { name?: string; shortName?: string } | undefined;
-        const name = data?.name || data?.shortName || extractQuotedString(diagnostic.message, "Definition '");
+        const data = diagnostic.data as { name?: string } | undefined;
+        const name = data?.name ?? extractQuotedString(diagnostic.message, "Definition '");
         if (!name) return undefined;
 
         const text = this.documentManager.getText(uri);
@@ -413,9 +411,8 @@ export class CodeActionProvider {
     ): CodeAction | undefined {
         if (diagnostic.code !== 'unused-definition') return undefined;
 
-        // The element's name, else its short name (KerML 8.3.2.1.2 `escapedName()`).
-        const data = diagnostic.data as { name?: string; shortName?: string } | undefined;
-        const name = data?.name || data?.shortName || extractQuotedString(diagnostic.message, "Definition '");
+        const data = diagnostic.data as { name?: string } | undefined;
+        const name = data?.name ?? extractQuotedString(diagnostic.message, "Definition '");
         if (!name) return undefined;
 
         // Already prefixed?
@@ -583,7 +580,7 @@ export class CodeActionProvider {
             : '';
 
         const m = msg.match(/Unresolved constraint reference\s+'([^']+)'(?:\s+in scope\s+'([^']+)')?/);
-        const data = diagnostic.data as { scopeName?: string } | undefined;
+        const data = diagnostic.data as { scopeName?: string; scopeId?: string } | undefined;
         const expr = (rangeExpr && rangeExpr.includes('.'))
             ? rangeExpr
             : (tokenExpr && tokenExpr.includes('.'))
@@ -603,7 +600,9 @@ export class CodeActionProvider {
         const symbolsInUri = symbolTable.getSymbolsForUri(uri);
         const allSymbols = symbolTable.getAllSymbols();
 
-        const scope = scopeName ? symbolsInUri.find((s) => memberNamesOf(s).includes(scopeName)) : undefined;
+        // The scope by its ID, else by the name in the message.
+        const scope = (data?.scopeId !== undefined ? symbolTable.getSymbolById(data.scopeId) : undefined)
+            ?? (scopeName ? symbolsInUri.find((s) => memberNamesOf(s).includes(scopeName)) : undefined);
         const scopeMembers = scope
             ? allSymbols.filter((s) => s.parentId === scope.symbolId)
             : [];
@@ -617,18 +616,18 @@ export class CodeActionProvider {
             if (typeDef) {
                 memberNames = allSymbols
                     .filter((s) => s.parentId === typeDef.symbolId)
-                    .map(nameOrShortName);
+                    .flatMap(memberNamesOf);
             }
         }
         if (memberNames.length === 0) {
             memberNames = symbolsInUri
-                .map(nameOrShortName)
+                .flatMap(memberNamesOf)
                 .filter((n) => n !== root);
         }
         if (memberNames.length === 0) {
             memberNames = allSymbols
                 .filter((s) => s.uri === uri)
-                .map(nameOrShortName)
+                .flatMap(memberNamesOf)
                 .filter((n) => n !== root);
         }
         if (memberNames.length === 0) return undefined;

@@ -15,7 +15,7 @@
 
 import { canonicalUri, isSameDocumentUri } from '../utils/documentUri.js';
 import { splitQualifiedName } from '../utils/identUtils.js';
-import { FilterExpr, ImportTarget, SysMLElementKind, SysMLSymbol, isAnonymous, isDefinition, isUsage, nameOrShortName } from './sysmlElements.js';
+import { FilterExpr, ImportTarget, SysMLElementKind, SysMLSymbol, isAnonymous, isDefinition, isUsage, memberNamesOf } from './sysmlElements.js';
 
 /**
  * A namespace's identity for name resolution: a declared one by its
@@ -112,13 +112,7 @@ export function findConflictedQualifiedNames(allSymbols: SysMLSymbol[]): Map<str
     return groupConflicts(allSymbols.filter(s => s.qualifiedName !== undefined), s => s.qualifiedName!);
 }
 
-/**
- * The names a membership of `symbol` is known by: its name and its short name
- * (KerML 8.2.3.5.3, `memberName` and `memberShortName`), each once.
- */
-export function memberNamesOf(symbol: SysMLSymbol): string[] {
-    return [...new Set([symbol.name, symbol.shortName])].filter((name): name is string => !!name);
-}
+export { memberNamesOf };
 
 /**
  * Every declaration whose name is not distinguishable from another one's in
@@ -153,7 +147,8 @@ export function findConflicts(allSymbols: SysMLSymbol[]): Map<SysMLSymbol, { dec
             });
         }
     };
-    for (const group of findConflictedQualifiedNames(allSymbols).values()) add(nameOrShortName(group[0]), group);
+    // Declarations sharing a qualified name clash on its last segment.
+    for (const [qualifiedName, group] of findConflictedQualifiedNames(allSymbols)) add(splitQualifiedName(qualifiedName).at(-1)!, group);
     const membersOfAnonymous = allSymbols.filter(s => s.qualifiedName === undefined && !isAnonymous(s) && s.parentId !== undefined);
     const byOwner = new Map<string, SysMLSymbol[]>();
     for (const s of membersOfAnonymous) {
@@ -162,7 +157,8 @@ export function findConflicts(allSymbols: SysMLSymbol[]): Map<SysMLSymbol, { dec
         byOwner.set(s.parentId!, list);
     }
     for (const members of byOwner.values()) {
-        for (const [name, group] of groupConflicts(members, nameOrShortName)) add(name, group);
+        // By name; clashes involving a short name are found below.
+        for (const [name, group] of groupConflicts(members.filter(s => s.name), s => s.name)) add(name, group);
     }
     for (const { name, symbols } of findConflictingShortNames(allSymbols).values()) add(name, symbols);
     return conflicting;
@@ -339,9 +335,12 @@ export function buildSymbolIndexes(allSymbols: SysMLSymbol[]): SymbolIndexes {
 
     for (const s of allSymbols) {
         if (isAnonymous(s)) continue;
-        const nameList = byName.get(nameOrShortName(s)) ?? [];
-        nameList.push(s);
-        byName.set(nameOrShortName(s), nameList);
+        // Under each name it is referenced by (KerML 8.2.3.5.3): its name and its short name.
+        for (const name of memberNamesOf(s)) {
+            const nameList = byName.get(name) ?? [];
+            nameList.push(s);
+            byName.set(name, nameList);
+        }
 
         if (s.qualifiedName !== undefined && !conflictedQualifiedNames.has(s.qualifiedName)) {
             byQualifiedName.set(s.qualifiedName, s);
@@ -358,15 +357,19 @@ export function buildSymbolIndexes(allSymbols: SysMLSymbol[]): SymbolIndexes {
         }
 
         if (isDefinition(s.kind)) {
-            const defs = definitionsByName.get(nameOrShortName(s)) ?? [];
-            defs.push(s);
-            definitionsByName.set(nameOrShortName(s), defs);
+            for (const name of memberNamesOf(s)) {
+                const defs = definitionsByName.get(name) ?? [];
+                defs.push(s);
+                definitionsByName.set(name, defs);
+            }
         }
 
         if (s.kind === SysMLElementKind.PortUsage || s.kind === SysMLElementKind.PortDef) {
-            const ports = portsByName.get(nameOrShortName(s)) ?? [];
-            ports.push(s);
-            portsByName.set(nameOrShortName(s), ports);
+            for (const name of memberNamesOf(s)) {
+                const ports = portsByName.get(name) ?? [];
+                ports.push(s);
+                portsByName.set(name, ports);
+            }
         }
     }
 

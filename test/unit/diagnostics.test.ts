@@ -598,9 +598,7 @@ package P {
 }
 `;
             const diags = await getSemanticDiagnostics(text);
-            // Each declaration by its name, else its short name (KerML 8.3.2.1.2 `escapedName()`).
-            const identifierOf = (data: { name: string; shortName?: string }) => data.name || data.shortName;
-            const names = diags.filter(d => d.code === 'ambiguous-namespace-name').map(d => identifierOf(d.data)).sort();
+            const names = diags.filter(d => d.code === 'ambiguous-namespace-name').map(d => d.data.name).sort();
             expect(names).toEqual(['A', 'Alpha', 'Beta', 'C', 'Delta', 'Gamma']);
         });
 
