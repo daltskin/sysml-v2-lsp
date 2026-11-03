@@ -467,7 +467,7 @@ export class SysMLModelProvider {
             type: 'flow',
             source: details.source,
             target: details.target,
-            ...(details.itemType ? { name: details.itemType } : nameFields(symbol)),
+            name: details.itemType ?? symbol.name,
             symbolId: symbol.symbolId,
         };
     }
@@ -508,7 +508,7 @@ export class SysMLModelProvider {
                         type: 'connection',
                         source: connectionTargets[0],
                         target: connectionTargets[1],
-                        ...nameFields(symbol),
+                        name: symbol.name,
                         symbolId: symbol.symbolId,
                     });
                 }
@@ -540,7 +540,7 @@ export class SysMLModelProvider {
                         type: 'allocation',
                         source: allocTargets[0],
                         target: allocTargets[1],
-                        ...nameFields(symbol),
+                        name: symbol.name,
                         symbolId: symbol.symbolId,
                     });
                 }
@@ -829,7 +829,8 @@ export class SysMLModelProvider {
                     ...(isAnonymous(child) && details.itemType ? { name: details.itemType } : nameFields(child)),
                     from: rootName(details.source),
                     to: rootName(details.target),
-                    payload: details.itemType ?? (details.payloadDeclared ? '' : nameText(child)),
+                    // Without a payload, its name as before: never its short name, reported as `shortName`.
+                    payload: details.itemType ?? (details.payloadDeclared ? '' : child.name),
                     occurrence: occ++,
                     range: this.rangeToDTO(child.range),
                 });

@@ -14,7 +14,7 @@
  */
 
 import { canonicalUri, isSameDocumentUri } from '../utils/documentUri.js';
-import { splitQualifiedName } from '../utils/identUtils.js';
+import { scanFeaturePaths, splitQualifiedName } from '../utils/identUtils.js';
 import { FilterExpr, ImportTarget, SysMLElementKind, SysMLSymbol, isAnonymous, isDefinition, isUsage, memberNamesOf } from './sysmlElements.js';
 
 /**
@@ -562,10 +562,16 @@ export class NamespaceResolver {
         return this.referenceTo(resolved, indexes);
     }
 
+    /**
+     * The element a resolved member refers to, by its symbol ID (one for all
+     * declarations of a package), never another element sharing its
+     * qualified name; none when that qualified name is conflicted
+     * (`byQualifiedName`).
+     */
     private referenceTo(resolved: SysMLSymbol | undefined, indexes: SymbolIndexes): NameResolution {
         if (!resolved) return { ambiguous: false };
-        const symbol = resolved.qualifiedName !== undefined ? indexes.byQualifiedName.get(resolved.qualifiedName) : resolved;
-        return { symbol, ambiguous: symbol === undefined };
+        if (resolved.qualifiedName !== undefined && !indexes.byQualifiedName.has(resolved.qualifiedName)) return { ambiguous: true };
+        return { symbol: indexes.byId.get(resolved.symbolId) ?? resolved, ambiguous: false };
     }
 
     /**
@@ -826,8 +832,9 @@ export class NamespaceResolver {
     /**
      * The types `type` specializes, each once: those it is typed by,
      * subclassifies or subsets, resolved from the namespace owning it (KerML
-     * 8.2.3.5.2), and the features it redefines (`resolveRedefinedFeature`).
-     * Never `type` itself.
+     * 8.2.3.5.2), the feature a shorthand's reference subsetting (`perform a`)
+     * refers to (KerML 8.3.3.3.9, `resolveNamingFeature`), and the features it
+     * redefines (`resolveRedefinedFeature`). Never `type` itself.
      */
     private generalsOf(type: SysMLSymbol, indexes: SymbolIndexes): SysMLSymbol[] {
         const redefinedNames = type.redefinedFeatureTargets ?? [];
@@ -836,9 +843,34 @@ export class NamespaceResolver {
             ...[...new Set([...type.typeNames, ...type.specializationNames])]
                 .filter(name => !redefinedNames.includes(name))
                 .map(name => this.resolveQualifiedNameFrom(ownerKeyOf(type, indexes.byId), name, indexes)),
+            ...(type.namingReference !== undefined && !type.namedByRedefinition ? [this.resolveNamingFeature(type, indexes)] : []),
             ...redefinedNames.map(name => owner ? this.resolveRedefinedFeature(owner, name, indexes).symbol : undefined),
         ];
         return [...new Set(generals.filter((general): general is SysMLSymbol => general !== undefined && general !== type))];
+    }
+
+    /**
+     * The feature `symbol`'s `namingReference` refers to: resolved from the
+     * namespace owning `symbol` (KerML 8.2.3.5.2), never to `symbol` itself, or
+     * for a redefinition from the types its owner specializes (8.2.3.5.1);
+     * through a feature chain, each feature after the first is one of the one
+     * before it.
+     */
+    resolveNamingFeature(symbol: SysMLSymbol, indexes: SymbolIndexes): SysMLSymbol | undefined {
+        const owner = ownerOf(symbol, indexes);
+        const [path] = scanFeaturePaths(symbol.namingReference ?? '');
+        if (!path) return undefined;
+        const [first, ...chain] = path.qualifiedNames;
+        // The features of a redefined chain (`:>> x2.p`) are resolved as any reference, from the owner.
+        let feature = symbol.namedByRedefinition && chain.length === 0
+            ? owner && this.resolveRedefinedFeature(owner, first.name, indexes).symbol
+            : this.resolveReferenceIn(owner, first.name, indexes, symbol).symbol;
+        for (const qualified of chain) {
+            const [member, ...rest] = qualified.segments;
+            feature = feature && this.resolveFeatureReference(feature, member.name, indexes).symbol;
+            for (const segment of rest) feature = feature && this.resolveMemberReference(feature, segment.name, indexes).symbol;
+        }
+        return feature;
     }
 
     /**

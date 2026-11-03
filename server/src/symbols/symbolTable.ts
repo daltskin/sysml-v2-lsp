@@ -5,9 +5,9 @@ import { ConjugatedPortTypingContext, FeatureSpecializationContext, FeatureTypin
 import { ParseResult } from '../parser/parseDocument.js';
 import { contextToRange, tokenToRange } from '../parser/positionUtils.js';
 import { SYSML_KEYWORDS } from '../utils/sysmlKeywords.js';
-import { joinQualifiedName, joinReference, scanFeaturePaths, scanQualifiedNames, splitQualifiedName, unquoteName as decodeName } from '../utils/identUtils.js';
+import { joinQualifiedName, joinReference, scanQualifiedNames, splitQualifiedName, unquoteName as decodeName } from '../utils/identUtils.js';
 import { IdRegistry } from './ids.js';
-import { buildSymbolIndexes, NamespaceResolver, SymbolIndexes } from './namespaceResolver.js';
+import { buildSymbolIndexes, NamespaceResolver } from './namespaceResolver.js';
 import { Scope } from './scope.js';
 import { FilterExpr, ImportTarget, OwnedSpecialization, SysMLElementKind, SysMLSymbol, displayName, isAnonymous, isDefinition, isFlowUsage, isUsage as isUsageKind, escapedName, memberNamesOf } from './sysmlElements.js';
 
@@ -636,7 +636,7 @@ export class SymbolTable {
         const resolver = new NamespaceResolver();
         const features = new Map<SysMLSymbol, SysMLSymbol>();
         for (const symbol of named) {
-            const feature = this.resolveNamingFeature(symbol, resolver, indexes);
+            const feature = resolver.resolveNamingFeature(symbol, indexes);
             if (feature) features.set(symbol, feature);
         }
         const cycles = namingCycles(features);
@@ -659,30 +659,6 @@ export class SymbolTable {
     /** The usages of `uri` whose effective names did not settle when last built, and why. */
     getNamingIssues(uri: string): NamingIssue[] {
         return this.namingIssues.filter(issue => issue.symbol.uri === uri);
-    }
-
-    /**
-     * The feature `symbol`'s `namingReference` resolves to, in its owner's
-     * namespace and never to `symbol` itself; through a feature chain, each
-     * feature after the first is a feature of the one before it.
-     */
-    private resolveNamingFeature(symbol: SysMLSymbol, resolver: NamespaceResolver, indexes: SymbolIndexes): SysMLSymbol | undefined {
-        const owner = this.getOwner(symbol);
-        const [path] = scanFeaturePaths(symbol.namingReference!);
-        if (!path) return undefined;
-        const [first, ...chain] = path.qualifiedNames;
-        // KerML 8.2.3.5.1: a redefined feature's name is resolved in the types its owner
-        // specializes; the features of a redefined chain (`:>> x2.p`) are resolved as
-        // any reference, from the owner.
-        let feature = symbol.namedByRedefinition && chain.length === 0
-            ? owner && resolver.resolveRedefinedFeature(owner, first.name, indexes).symbol
-            : resolver.resolveReferenceIn(owner, first.name, indexes, symbol).symbol;
-        for (const qualified of chain) {
-            const [member, ...rest] = qualified.segments;
-            feature = feature && resolver.resolveFeatureReference(feature, member.name, indexes).symbol;
-            for (const segment of rest) feature = feature && resolver.resolveMemberReference(feature, segment.name, indexes).symbol;
-        }
-        return feature;
     }
 
     /**
@@ -1864,7 +1840,16 @@ export class SymbolTable {
      * `>` is the short name, the one after it the name; never its target.
      */
     private aliasIdentification(ctx: ParserRuleContext): { shortName?: string; name?: string } {
-        const identification: { shortName?: string; name?: string } = {};
+        const { shortName, name } = this.aliasNameContexts(ctx);
+        return {
+            ...(shortName && { shortName: this.extractTextFromSubtree(shortName) }),
+            ...(name && { name: this.extractTextFromSubtree(name) }),
+        };
+    }
+
+    /** The `name` nodes of an alias's own short name and name (SysML 8.2.2.5.1 `AliasMember`). */
+    private aliasNameContexts(ctx: ParserRuleContext): { shortName?: ParserRuleContext; name?: ParserRuleContext } {
+        const contexts: { shortName?: ParserRuleContext; name?: ParserRuleContext } = {};
         let inShortName = false;
         for (let i = 0; i < ctx.getChildCount(); i++) {
             const child = ctx.getChild(i);
@@ -1873,12 +1858,11 @@ export class SymbolTable {
                 else if (child.symbol.type === SysMLv2Lexer.GT) inShortName = false;
                 else if (child.symbol.type === SysMLv2Lexer.FOR) break;
             } else if (child instanceof ParserRuleContext && child.ruleIndex === SysMLv2Parser.RULE_name) {
-                const text = this.extractTextFromSubtree(child);
-                if (inShortName) identification.shortName = text;
-                else identification.name = text;
+                if (inShortName) contexts.shortName = child;
+                else contexts.name = child;
             }
         }
-        return identification;
+        return contexts;
     }
 
     /**
@@ -2215,6 +2199,12 @@ export class SymbolTable {
      * Extract the range of just the name token.
      */
     private extractNameRange(ctx: ParserRuleContext): Range | undefined {
+        // An alias has no `identification`: its name, else its short name (SysML 8.2.2.5.1).
+        if (ctx.ruleIndex === SysMLv2Parser.RULE_aliasMember) {
+            const { shortName, name } = this.aliasNameContexts(ctx);
+            const selected = name ?? shortName;
+            return selected && contextToRange(selected);
+        }
         if (ctx.ruleIndex === SysMLv2Parser.RULE_identification ||
             ctx.ruleIndex === SysMLv2Parser.RULE_featureIdentification) {
             let name: ParserRuleContext | undefined;

@@ -208,6 +208,7 @@ export class SemanticValidator {
                 message: `Invalid multiplicity [${symbol.multiplicity}]: lower bound (${lower}) exceeds upper bound (${upper})`,
                 source: 'sysml',
                 code: 'invalid-multiplicity',
+                data: { symbolId: symbol.symbolId },
             }];
         }
 
@@ -218,6 +219,7 @@ export class SemanticValidator {
                 message: `Invalid multiplicity [${symbol.multiplicity}]: lower bound cannot be negative`,
                 source: 'sysml',
                 code: 'invalid-multiplicity',
+                data: { symbolId: symbol.symbolId },
             }];
         }
 
@@ -247,6 +249,7 @@ export class SemanticValidator {
                 message: `Enumeration '${displayName(symbol)}' has no enum values defined`,
                 source: 'sysml',
                 code: 'empty-enum',
+                data: { symbolId: symbol.symbolId },
             }];
         }
 
@@ -279,7 +282,7 @@ export class SemanticValidator {
                     message: `Definition '${symbol.name}' should use PascalCase`,
                     source: 'sysml',
                     code: 'naming-convention',
-                    data: { name: symbol.name, convention: 'PascalCase' },
+                    data: { name: symbol.name, convention: 'PascalCase', symbolId: symbol.symbolId },
                 }];
             }
         } else {
@@ -292,7 +295,7 @@ export class SemanticValidator {
                     message: `Usage '${symbol.name}' should use camelCase`,
                     source: 'sysml',
                     code: 'naming-convention',
-                    data: { name: symbol.name, convention: 'camelCase' },
+                    data: { name: symbol.name, convention: 'camelCase', symbolId: symbol.symbolId },
                 }];
             }
         }
@@ -448,6 +451,7 @@ export class SemanticValidator {
                     message: `Circular specialization: ${cycle.join(' :> ')} :> ${cycle[0]}`,
                     source: 'sysml',
                     code: 'circular-specialization',
+                    data: { symbolId: def.symbolId },
                 });
             }
         }
@@ -497,6 +501,7 @@ export class SemanticValidator {
             range: issue.symbol.selectionRange,
             source: 'sysml',
             ...describeNamingIssue(issue),
+            data: { symbolId: issue.symbol.symbolId },
         }));
     }
 
@@ -843,6 +848,7 @@ export class SemanticValidator {
                     message: `View '${displayName(view)}' has no expose or filter directives — it will show all elements`,
                     source: 'sysml',
                     code: 'view-no-scope',
+                    data: { symbolId: view.symbolId },
                 });
             }
         }
@@ -898,6 +904,7 @@ export class SemanticValidator {
                     `'${displayName(base)}' multiplicity [${base.multiplicity ?? '?'}]`,
                 source: 'sysml',
                 code: 'invalid-redefinition-multiplicity',
+                data: { symbolId: s.symbolId },
             });
         }
 
@@ -1528,6 +1535,7 @@ export class SemanticValidator {
                             message: `Duplicate definition: '${name}' is defined ${defs.length} times in the same scope`,
                             source: 'sysml',
                             code: 'duplicate-definition',
+                            data: { symbolId: def.symbolId },
                         });
                     }
                 }

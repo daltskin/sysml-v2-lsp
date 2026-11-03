@@ -265,17 +265,21 @@ export interface RelationshipDTO {
     /** `symbolId` of the source element, when the source is the element declaring the relationship. */
     sourceId?: string;
 
-    /** `symbolId` of the element that is the relationship itself (a connection, allocation, transition or flow usage). */
+    /**
+     * `symbolId` of the element that is the relationship itself (a connection,
+     * allocation, transition or flow usage); its name and short name are read
+     * from that element.
+     */
     symbolId?: string;
 
     /** Target element name. */
     target: string;
 
-    /** Optional label/name for the relationship. */
+    /**
+     * Optional label for the relationship: a flow's payload type, else its
+     * name; a transition's trigger; a connection's or allocation's name.
+     */
     name?: string;
-
-    /** The relationship element's short name, if it has one (`connection <cn> ...`). */
-    shortName?: string;
 
     /**
      * The operator or keyword a specialization is written with (`:>`, `subsets`,

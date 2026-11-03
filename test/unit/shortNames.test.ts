@@ -6,6 +6,7 @@ import { formatSymbol } from '../../server/src/mcpCore.js';
 import { CompletionProvider } from '../../server/src/providers/completionProvider.js';
 import { DefinitionProvider } from '../../server/src/providers/definitionProvider.js';
 import { HoverProvider } from '../../server/src/providers/hoverProvider.js';
+import { ReferencesProvider } from '../../server/src/providers/referencesProvider.js';
 import { SysMLModelProvider } from '../../server/src/model/sysmlModelProvider.js';
 import { DocumentSymbolProvider } from '../../server/src/providers/documentSymbolProvider.js';
 import { SemanticValidator } from '../../server/src/providers/semanticValidator.js';
@@ -360,6 +361,22 @@ describe('elements with a short name and no name', () => {
             return new SysMLModelProvider(dm).getModel(uri, 1, ['sequenceDiagrams', 'activityDiagrams', 'relationships', 'resolvedTypes'] as never) as any;
         }
 
+        it('never reports a message\'s short name as its payload', () => {
+            const { dm, uri } = setup(`package Pl {
+    part def Sys {
+        part aa; part bb;
+        message <mm> from aa to bb;
+        message <m3> msg3 of Sig from aa to bb;
+    }
+    item def Sig;
+}
+`);
+            const sys = (new SysMLModelProvider(dm).getModel(uri, 1, ['sequenceDiagrams'] as never) as any).sequenceDiagrams[0];
+            expect(sys.messages.map((m: any) => [m.name, m.shortName, m.payload])).toEqual([
+                ['', 'mm', ''], ['msg3', 'm3', 'Sig'],
+            ]);
+        });
+
         it('matches message endpoints to participants by either name, without adding phantom participants', () => {
             const sys = model().sequenceDiagrams.find((d: any) => d.name === 'Sys');
             expect(sys.participants.map((p: any) => [p.name, p.shortName])).toEqual([['alice', 'a'], ['', 'b']]);
@@ -386,10 +403,15 @@ describe('elements with a short name and no name', () => {
             expect(outer.actions.find((a: any) => a.shortName === 'p1').children).toEqual(['ch1', 'c2']);
         });
 
-        it('reports connections and resolved-type features by name and short name', () => {
+        it('reports connections by symbol ID, and resolved-type features by name and short name', () => {
             const m = model();
-            expect(m.relationships.filter((r: any) => r.type === 'connection').map((r: any) => [r.name, r.shortName]))
-                .toEqual([['c1', 'cn'], ['', 'cn2']]);
+            const { dm, uri } = setup(text);
+            const byId = new Map(dm.getWorkspaceSymbolTable().getSymbolsForUri(uri).map(s => [s.symbolId, s]));
+            // A relationship's names are read from its element, by `symbolId`.
+            expect(m.relationships.filter((r: any) => r.type === 'connection').map((r: any) => {
+                const element = byId.get(r.symbolId)!;
+                return [r.name, r.shortName, element.name, element.shortName];
+            })).toEqual([['c1', undefined, 'c1', 'cn'], ['', undefined, '', 'cn2']]);
             const sys = m.resolvedTypes['Sq::Sys'];
             expect([sys.simpleName, sys.shortName]).toEqual(['Sys', 'SYS']);
             expect(sys.features.map((f: any) => [f.name, f.shortName])).toEqual(expect.arrayContaining([['alice', 'a'], ['', 'b']]));
@@ -484,6 +506,191 @@ describe('elements with a short name and no name', () => {
                 ['Y1', symbols.find(s => s.name === 'Y1')!.symbolId],
             ]);
             for (const d of ambiguous) expect(d.message).toMatch(/^Ambiguous name 'A': /);
+        });
+    });
+
+    describe('a relationship that is an element is identified by its symbol ID, its names read from that element', () => {
+        const text = `package Rl {
+    item def Fuel;
+    port def FP { out item f : Fuel; }
+    part def Tank { port <tp> tport : FP; }
+    part def Eng { port <ep> eport : ~FP; }
+    part sys {
+        part <tk> tank : Tank;
+        part <en> eng : Eng;
+        flow <fl> flow1 of Fuel from tank.tport.f to eng.eport.f;
+        flow <fl2> from tk.tp.f to en.ep.f;
+        succession flow <sf> sflow1 of Fuel from tank.tport.f to eng.eport.f;
+        message <ms> msg1 of Fuel from tank to eng;
+        connection <cn> conn1 connect tank to eng;
+    }
+}
+`;
+
+        it('keeps each relationship\'s label, adds no short name, and its symbol ID is the element with both names', () => {
+            const { dm, uri } = setup(text);
+            const byId = new Map(dm.getWorkspaceSymbolTable().getSymbolsForUri(uri).map(s => [s.symbolId, s]));
+            const m = new SysMLModelProvider(dm).getModel(uri, 1, ['relationships', 'elements'] as never) as any;
+            const own = m.relationships.filter((r: any) => r.symbolId !== undefined && r.type !== 'typing');
+            expect(own.map((r: any) => {
+                const element = byId.get(r.symbolId)!;
+                return [r.type, r.name, element.name, element.shortName];
+            })).toEqual([
+                // A flow's label is its payload type, else its name, as for any flow.
+                ['flow', 'Fuel', 'flow1', 'fl'],
+                ['flow', '', '', 'fl2'],
+                ['succession', undefined, 'sflow1', 'sf'],
+                ['flow', 'Fuel', 'msg1', 'ms'],
+                ['connection', 'conn1', 'conn1', 'cn'],
+            ]);
+            for (const r of m.relationships) expect(r).not.toHaveProperty('shortName');
+            // The relationships of each element's own entry, likewise.
+            const all: any[] = [];
+            const walk = (es: any[]) => es.forEach(e => { all.push(...e.relationships); walk(e.children); });
+            walk(m.elements);
+            for (const r of all) expect(r).not.toHaveProperty('shortName');
+        });
+    });
+
+    describe('a usage referencing a feature (perform, exhibit, include, variant) has that feature\'s features (KerML 8.3.3.3.9)', () => {
+        const text = `package Sb {
+    action def Drive { action <st> start1; }
+    part def Vehicle { action <dr> drive : Drive; }
+    part car8 : Vehicle { perform dr; perform drive.start1; }
+    part car9 : Vehicle { perform dr; perform dr.st; }
+    part car11 : Vehicle { perform action myDr ::> dr; perform myDr.st; }
+    part car12 : Vehicle { perform drive; perform dr.start1; }
+    part car30 : Vehicle { perform dr { action :>> st; } }
+    part car31 : Vehicle { perform drive { action :>> start1; } }
+    part car32 : Vehicle { ref action ra ::> drive { action :>> st; } }
+    part car33 : Vehicle { action ra2 :> drive { action :>> st; } }
+    state def Op { state <on> onState; }
+    part def V2 { state <op> operate : Op; }
+    part car10 : V2 { exhibit op; exhibit operate.on; }
+    part car34 : V2 { exhibit op { state :>> on; } }
+    use case def UC { use case <sc> subCase; }
+    use case def Main { use case <uu> uc1 : UC; }
+    use case m1 : Main { include uu; include uc1.sc; }
+    part def Engine { part <cy> cylinders; }
+    part def Vh { part <e4> engine4 : Engine; }
+    part def Vv :> Vh {
+        variation part eng : Engine { variant e4 { part :>> cy; } }
+    }
+}
+`;
+
+        function membersOf(owner: string) {
+            const { symbols } = setup(text);
+            const o = symbols.find(s => s.qualifiedName === `Sb::${owner}`)!;
+            return symbols.filter(s => s.parentId === o.symbolId).map(s => [s.name, s.shortName]);
+        }
+
+        it('names a chain whose head is a sibling usage named after the same feature after the chain\'s end', () => {
+            expect(membersOf('car8')).toEqual([['drive', 'dr'], ['start1', 'st']]);
+            expect(membersOf('car9')).toEqual([['drive', 'dr'], ['start1', 'st']]);
+            expect(membersOf('car12')).toEqual([['drive', 'dr'], ['start1', 'st']]);
+            expect(membersOf('car10')).toEqual([['operate', 'op'], ['onState', 'on']]);
+            expect(membersOf('m1')).toEqual([['uc1', 'uu'], ['subCase', 'sc']]);
+        });
+
+        it('names a redefinition in such a usage\'s body after the feature of the referenced feature it redefines', () => {
+            expect(membersOf('car8::drive').length).toBe(0);
+            expect(membersOf('car30::drive')).toEqual([['start1', 'st']]);
+            expect(membersOf('car31::drive')).toEqual([['start1', 'st']]);
+            expect(membersOf('car34::operate')).toEqual([['onState', 'on']]);
+            expect(membersOf('Vv::eng::engine4')).toEqual([['cylinders', 'cy']]);
+        });
+
+        it('leaves usages with a written subsetting or reference unchanged', () => {
+            expect(membersOf('car11')).toEqual([['myDr', undefined], ['start1', 'st']]);
+            expect(membersOf('car32::ra')).toEqual([['start1', 'st']]);
+            expect(membersOf('car33::ra2')).toEqual([['start1', 'st']]);
+        });
+
+        it('resolves the reference to a sibling sharing its qualified name, never to the usage itself (KerML 8.2.3.5.2)', () => {
+            const text = 'package Lp {\n    action def D { action <s1> start1; }\n    part loopA { perform loopB; action <lb> loopB : D; perform lb.s1; }\n}\n';
+            const { dm, doc, uri, symbols } = setup(text);
+            const action = symbols.find(s => s.kind === 'action' && s.qualifiedName === 'Lp::loopA::loopB')!;
+            const performs = symbols.filter(s => s.kind === 'perform action');
+            expect(performs.map(s => [s.name, s.shortName])).toEqual([['loopB', 'lb'], ['start1', 's1']]);
+            const location = new DefinitionProvider(dm).provideDefinition({
+                textDocument: { uri }, position: doc.positionAt(text.indexOf('perform loopB') + 9),
+            }) as any;
+            expect(location.range).toEqual(action.selectionRange);
+            expect(diagnosticsOf(dm, uri, 'circular-naming')).toEqual([]);
+        });
+
+        it('still settles, and reports circular naming by symbol ID, for two usages named after each other', () => {
+            const { dm, uri, symbols } = setup(`package Cy {
+    action def Drive { action <st> start1; }
+    part def Vehicle { action <dr> drive : Drive; }
+    part car : Vehicle { perform dr; perform drive; }
+}
+`);
+            const circular = diagnosticsOf(dm, uri, 'circular-naming');
+            const performs = symbols.filter(s => s.kind === 'perform action');
+            expect(circular.map(d => d.data)).toEqual(performs.map(s => ({ symbolId: s.symbolId })));
+        });
+    });
+
+    describe('every diagnostic about one element identifies it by symbol ID', () => {
+        it('puts the symbol ID of the element at its range in data, keeping its other data', () => {
+            const text = `package Dg {
+    part def <B> Base { part <w> wheels[1..2]; }
+    part def Sub :> Base { part :>> wheels[5]; }
+    part bad[3..1];
+    enum def <EN>;
+    part def lowerDef;
+    part UpperUsage;
+    part def <C1> Cyc1 :> Cyc2;
+    part def <C2> Cyc2 :> Cyc1;
+    view <vw>;
+    part def <D> X1;
+    part def <D> Y1;
+    action def Drive { action <st> start1; }
+    part def Vehicle { action <dr> drive : Drive; }
+    part car : Vehicle { perform dr; perform drive; }
+}
+`;
+            const { dm, uri, symbols } = setup(text);
+            const codes = ['invalid-multiplicity', 'empty-enum', 'naming-convention', 'circular-specialization', 'view-no-scope',
+                'invalid-redefinition-multiplicity', 'duplicate-definition', 'circular-naming'];
+            const diagnostics = new SemanticValidator(dm).validate(uri).filter(d => codes.includes(d.code as string));
+            expect(new Set(diagnostics.map(d => d.code))).toEqual(new Set(codes));
+            const at = (line: number, character: number) => symbols.find(s =>
+                s.selectionRange.start.line === line && s.selectionRange.start.character === character)!;
+            for (const d of diagnostics) {
+                expect((d.data as any).symbolId, `${d.code} at ${d.range.start.line}`).toBe(at(d.range.start.line, d.range.start.character).symbolId);
+            }
+            expect(diagnostics.filter(d => d.code === 'naming-convention').map(d => d.data)).toEqual([
+                { name: 'lowerDef', convention: 'PascalCase', symbolId: symbols.find(s => s.name === 'lowerDef')!.symbolId },
+                { name: 'UpperUsage', convention: 'camelCase', symbolId: symbols.find(s => s.name === 'UpperUsage')!.symbolId },
+            ]);
+        });
+    });
+
+    describe('an alias is selected by its name, else its short name (SysML 8.2.2.5.1)', () => {
+        const text = 'package Refs {\n    part def <PD2> PartDef2;\n    alias <AL> AliasN for PartDef2;\n    alias <aOnly> for PartDef2;\n    alias N for PartDef2;\n    part w12 : AL;\n    part w13 : AliasN;\n    part w14 : aOnly;\n}\n';
+
+        it('goes to the alias\'s name from either of its names, and to the short name of an alias with only one', () => {
+            const { dm, doc, uri, symbols } = setup(text);
+            const definition = (at: string) => new DefinitionProvider(dm).provideDefinition({
+                textDocument: { uri }, position: doc.positionAt(text.indexOf(at) + at.length - 1),
+            }) as any;
+            const aliases = symbols.filter(s => s.kind === 'alias');
+            expect(aliases.map(s => doc.getText(s.selectionRange))).toEqual(['AliasN', 'aOnly', 'N']);
+            expect(definition(': AL;').range).toEqual(aliases[0].selectionRange);
+            expect(definition(': AliasN;').range).toEqual(aliases[0].selectionRange);
+            expect(definition(': aOnly;').range).toEqual(aliases[1].selectionRange);
+        });
+
+        it('lists neither of the alias\'s declared names as a reference to it', () => {
+            const { dm, doc, uri } = setup(text);
+            const references = (includeDeclaration: boolean) => new ReferencesProvider(dm).provideReferences({
+                textDocument: { uri }, position: doc.positionAt(text.indexOf('AliasN')), context: { includeDeclaration },
+            }).map(l => doc.getText(l.range));
+            expect(references(false)).toEqual(['AL', 'AliasN']);
+            expect(references(true)).toEqual(['AL', 'AliasN', 'AL', 'AliasN']);
         });
     });
 
