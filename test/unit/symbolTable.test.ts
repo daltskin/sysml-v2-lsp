@@ -284,8 +284,8 @@ package Demo {
         expect(result.errors).toHaveLength(0);
         const messages = st.getSymbolsForUri('test://test.sysml').filter(s => s.kind === 'flow');
         expect(messages.map(message => [message.name, isAnonymous(message), displayName(message), message.flowDetails])).toEqual([
-            ['m1', false, 'm1', { itemType: 'Fuel', payloadDeclared: true, source: 'tank.fuelSent', target: 'engine.fuelReceived' }],
-            ['', true, 'tank.fuelSent→engine.fuelReceived', { itemType: 'Fuel', payloadDeclared: true, source: 'tank.fuelSent', target: 'engine.fuelReceived' }],
+            ['m1', false, 'm1', { itemType: 'Fuel', payloadDeclared: true, source: 'tank.fuelSent', target: 'engine.fuelReceived', isMessage: true }],
+            ['', true, 'tank.fuelSent→engine.fuelReceived', { itemType: 'Fuel', payloadDeclared: true, source: 'tank.fuelSent', target: 'engine.fuelReceived', isMessage: true }],
         ]);
         expect(st.findByName('Fuel').map(fuel => fuel.kind)).toEqual(['item def']);
     });
@@ -315,12 +315,12 @@ package Demo {
         expect(result.errors).toHaveLength(0);
         const messages = st.getSymbolsForUri('test://test.sysml').filter(s => s.kind === 'flow');
         expect(messages.map(m => [displayName(m), m.typeNames, m.flowDetails])).toEqual([
-            ['m1', [], { itemType: 'Fuel', payloadDeclared: true, source: 'tank.sent', target: 'engine.received' }],
-            ['m2', [], { payloadDeclared: false, source: 'tank', target: 'engine' }],
-            ['m3', ['MsgDef'], { itemType: 'Fuel', payloadDeclared: true, source: 'tank.sent', target: 'engine.received' }],
-            ['message of Fuel', [], { itemType: 'Fuel', payloadDeclared: true, source: undefined, target: undefined }],
-            ['m4', [], { payloadDeclared: false, source: undefined, target: undefined }],
-            ['m5', [], { payloadDeclared: false, source: 'p1.e1', target: 'p2.e2' }],
+            ['m1', [], { itemType: 'Fuel', payloadDeclared: true, source: 'tank.sent', target: 'engine.received', isMessage: true }],
+            ['m2', [], { payloadDeclared: false, source: 'tank', target: 'engine', isMessage: true }],
+            ['m3', ['MsgDef'], { itemType: 'Fuel', payloadDeclared: true, source: 'tank.sent', target: 'engine.received', isMessage: true }],
+            ['message of Fuel', [], { itemType: 'Fuel', payloadDeclared: true, source: undefined, target: undefined, isMessage: true }],
+            ['m4', [], { payloadDeclared: false, source: undefined, target: undefined, isMessage: true }],
+            ['m5', [], { payloadDeclared: false, source: 'p1.e1', target: 'p2.e2', isMessage: true }],
         ]);
         // A payload's name is not a member of the vehicle.
         expect(st.findByName('fuel')).toEqual([]);

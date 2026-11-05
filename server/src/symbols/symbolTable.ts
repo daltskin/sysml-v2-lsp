@@ -1570,6 +1570,9 @@ export class SymbolTable {
             payloadDeclared: payload !== undefined,
             source: endpoints[0],
             target: endpoints[1],
+            // A message is a flow usage declared by the `Message` production (SysML 8.2.2.16),
+            // told apart by the rule it was parsed from, not by its text.
+            ...(ctx.ruleIndex === SysMLv2Parser.RULE_message ? { isMessage: true } : {}),
         };
     }
 

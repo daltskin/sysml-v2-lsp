@@ -348,6 +348,9 @@ export class SysMLModelProvider {
         if (symbol.flowDetails?.target) {
             attributes['flowTarget'] = symbol.flowDetails.target;
         }
+        if (symbol.flowDetails?.isMessage) {
+            attributes['isMessage'] = true;
+        }
 
         if (symbol.documentation) {
             attributes['documentation'] = symbol.documentation;
