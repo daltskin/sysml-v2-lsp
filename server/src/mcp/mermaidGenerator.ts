@@ -123,6 +123,26 @@ function buildChildrenIndex(allSymbols: SysMLSymbol[]): Map<string, SysMLSymbol[
     return index;
 }
 
+/**
+ * The member reached from `owner` by `path`, each segment matched against
+ * a member's name or short name (KerML 8.2.3.5.3, `memberName` and
+ * `memberShortName`); undefined when a segment matches no single member.
+ */
+function ownedMemberByPath(
+    owner: SysMLSymbol,
+    path: string[],
+    childrenOf: Map<string, SysMLSymbol[]>,
+): SysMLSymbol | undefined {
+    let current = owner;
+    for (const segment of path) {
+        const [match, ...others] = (childrenOf.get(current.symbolId) ?? [])
+            .filter(member => memberNamesOf(member).includes(segment));
+        if (!match || others.length > 0) return undefined;
+        current = match;
+    }
+    return current === owner ? undefined : current;
+}
+
 // ---------------------------------------------------------------------------
 // Styling — Mermaid classDef / cssClass directives
 // ---------------------------------------------------------------------------
@@ -524,8 +544,12 @@ function generateActivityView(symbols: SysMLSymbol[], lookup: SymbolLookup): Mer
             elementCount++;
         }
 
-        const childByName = new Map(childActions.map(action => [action.name, action]));
-        const declaredEndpoints = new Set(childActions.map(action => action.name));
+        // A succession end may name an action by its name or its short name
+        // (KerML 8.2.3.5.3, `memberName` and `memberShortName`).
+        const childByName = new Map(childActions.flatMap(
+            action => memberNamesOf(action).map(name => [name, action] as const),
+        ));
+        const declaredEndpoints = new Set(childActions.flatMap(memberNamesOf));
         for (const flow of def.controlFlows ?? []) {
             for (const endpoint of [flow.source, flow.target]) {
                 if (declaredEndpoints.has(endpoint)) continue;
@@ -639,11 +663,13 @@ function generateStateView(symbols: SysMLSymbol[], lookup: SymbolLookup): Mermai
 
         const resolveEndpointId = (reference: string): string => {
             const qualifiedReference = reference.replace(/\./g, '::');
-            const ownerName = ownerOf(trans, lookup)?.qualifiedName;
+            const owner = ownerOf(trans, lookup);
+            const ownerName = owner?.qualifiedName;
             const relativeName = ownerName
                 ? `${ownerName}::${qualifiedReference}`
                 : qualifiedReference;
-            const endpoint = lookup.byName.get(relativeName)
+            const endpoint = (owner && ownedMemberByPath(owner, qualifiedReference.split('::'), childrenOf))
+                ?? lookup.byName.get(relativeName)
                 ?? lookup.byName.get(qualifiedReference)
                 ?? lookup.byName.get(reference);
             return endpoint ? nodeId(endpoint) : safeId(reference);
