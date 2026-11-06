@@ -5,11 +5,11 @@ import { ConjugatedPortTypingContext, FeatureSpecializationContext, FeatureTypin
 import { ParseResult } from '../parser/parseDocument.js';
 import { contextToRange, tokenToRange } from '../parser/positionUtils.js';
 import { SYSML_KEYWORDS } from '../utils/sysmlKeywords.js';
-import { joinQualifiedName, joinReference, scanFeaturePaths, scanQualifiedNames, splitQualifiedName, unquoteName as decodeName } from '../utils/identUtils.js';
+import { joinQualifiedName, joinReference, scanQualifiedNames, splitQualifiedName, unquoteName as decodeName } from '../utils/identUtils.js';
 import { IdRegistry } from './ids.js';
-import { buildSymbolIndexes, NamespaceResolver, SymbolIndexes } from './namespaceResolver.js';
+import { buildSymbolIndexes, NamespaceResolver } from './namespaceResolver.js';
 import { Scope } from './scope.js';
-import { FilterExpr, ImportTarget, OwnedSpecialization, SysMLElementKind, SysMLSymbol, displayName, isAnonymous, isDefinition, isFlowUsage, isUsage as isUsageKind } from './sysmlElements.js';
+import { FilterExpr, ImportTarget, OwnedSpecialization, SysMLElementKind, SysMLSymbol, displayName, isAnonymous, isDefinition, isFlowUsage, isUsage as isUsageKind, escapedName, memberNamesOf } from './sysmlElements.js';
 
 // ── ruleIndex-based lookup tables ───────────────────────────────────
 // These replace the toLowerCase() + string-comparison chains with O(1)
@@ -212,7 +212,7 @@ export function describeNamingIssue(issue: NamingIssue): { code: string; message
         case 'limit':
             return {
                 code: 'naming-resolution-limit',
-                message: `The names of ${name} did not settle within ${issue.rounds} rounds of name resolution; it is named '${issue.symbol.name}' for now.`,
+                message: `The names of ${name} did not settle within ${issue.rounds} rounds of name resolution; it is named '${displayName(issue.symbol)}' for now.`,
             };
     }
 }
@@ -636,7 +636,7 @@ export class SymbolTable {
         const resolver = new NamespaceResolver();
         const features = new Map<SysMLSymbol, SysMLSymbol>();
         for (const symbol of named) {
-            const feature = this.resolveNamingFeature(symbol, resolver, indexes);
+            const feature = resolver.resolveNamingFeature(symbol, indexes);
             if (feature) features.set(symbol, feature);
         }
         const cycles = namingCycles(features);
@@ -659,24 +659,6 @@ export class SymbolTable {
     /** The usages of `uri` whose effective names did not settle when last built, and why. */
     getNamingIssues(uri: string): NamingIssue[] {
         return this.namingIssues.filter(issue => issue.symbol.uri === uri);
-    }
-
-    /**
-     * The feature `symbol`'s `namingReference` resolves to, in its owner's
-     * namespace and never to `symbol` itself; through a feature chain, each
-     * feature after the first is a feature of the one before it.
-     */
-    private resolveNamingFeature(symbol: SysMLSymbol, resolver: NamespaceResolver, indexes: SymbolIndexes): SysMLSymbol | undefined {
-        const [path] = scanFeaturePaths(symbol.namingReference!);
-        if (!path) return undefined;
-        const [first, ...chain] = path.qualifiedNames;
-        let feature = resolver.resolveReferenceIn(this.getOwner(symbol), first.name, indexes, symbol).symbol;
-        for (const qualified of chain) {
-            const [member, ...rest] = qualified.segments;
-            feature = feature && resolver.resolveFeatureReference(feature, member.name, indexes).symbol;
-            for (const segment of rest) feature = feature && resolver.resolveMemberReference(feature, segment.name, indexes).symbol;
-        }
-        return feature;
     }
 
     /**
@@ -845,7 +827,7 @@ export class SymbolTable {
         const refs = this.typeNameRefs.get(name);
         if (refs) {
             for (const sym of refs) {
-                if (sym.name !== name) {
+                if (!memberNamesOf(sym).includes(name)) {
                     results.push(sym);
                 }
             }
@@ -863,7 +845,7 @@ export class SymbolTable {
         const refs = this.typeNameRefs.get(name);
         if (refs) {
             for (const sym of refs) {
-                if (sym.name !== name) count++;
+                if (!memberNamesOf(sym).includes(name)) count++;
             }
         }
         return count;
@@ -907,7 +889,7 @@ export class SymbolTable {
                     }
                     this.removeFromConflictTracking(sym, sym.qualifiedName);
                 }
-                affectedNames.add(sym.name);
+                for (const name of memberNamesOf(sym)) affectedNames.add(name);
                 for (const tn of sym.typeNames) {
                     affectedTypeNames.add(tn);
                 }
@@ -955,7 +937,7 @@ export class SymbolTable {
         const viewDefsByName = new Map<string, SysMLSymbol>();
         for (const s of this.getAllSymbols()) {
             if (s.kind === SysMLElementKind.ViewDef) {
-                viewDefsByName.set(s.name, s);
+                for (const name of memberNamesOf(s)) viewDefsByName.set(name, s);
             }
         }
 
@@ -1033,7 +1015,7 @@ export class SymbolTable {
             }
             this.registerSymbol(symbol, uri, currentScope);
             // Create a child scope for definitions and packages
-            childScope = new Scope(symbol.qualifiedName ?? symbol.name, currentScope);
+            childScope = new Scope(symbol.qualifiedName ?? escapedName(symbol) ?? '', currentScope);
         }
 
         // Walk children
@@ -1268,9 +1250,11 @@ export class SymbolTable {
         this.symbolsByUri.set(uri, uriSymbols);
         // Maintain name index -- an anonymous element's declaration is not a name to look up
         if (!isAnonymous(symbol)) {
-            const nameList = this.symbolsByName.get(symbol.name) ?? [];
-            nameList.push(symbol);
-            this.symbolsByName.set(symbol.name, nameList);
+            for (const name of memberNamesOf(symbol)) {
+                const nameList = this.symbolsByName.get(name) ?? [];
+                nameList.push(symbol);
+                this.symbolsByName.set(name, nameList);
+            }
         }
         // Maintain position-sorted index (insertion sort — symbols arrive
         // in document order so this is nearly always an append → O(1) amortized)
@@ -1357,28 +1341,31 @@ export class SymbolTable {
         const effectiveName = this.effectiveNames?.get(rangeKey(range));
         const declaredName = effectiveName ? effectiveName.name
             : transition ? transition.declaredName : this.extractName(ctx);
+        // The short name of the element's own declaration only: never one of a member,
+        // a body element, or an inline-owned payload, end or parameter.
+        const shortName = effectiveName ? effectiveName.shortName
+            : transition ? transition.shortName
+                : kind === SysMLElementKind.Alias ? this.aliasIdentification(ctx).shortName
+                    : this.ownIdentification(ctx)?.shortName;
+        // KerML 8.3.2.1.2: an element with a name or a short name is named (`escapedName()`).
+        const identifier = declaredName || shortName;
         // An anonymous transition, flow, connection, interface or allocation usage still gets a
         // symbol, with an empty name and its declaration (`anonymousDeclaration`); without a
-        // declared name, only an element with a declaration to identify it by gets one.
-        const declaration = declaredName ? undefined : this.anonymousDeclaration(ctx, kind, transition);
+        // name or short name, only an element with a declaration to identify it by gets one.
+        const declaration = identifier ? undefined : this.anonymousDeclaration(ctx, kind, transition);
         const specializationPart = declaration === undefined ? undefined
             : this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_featureSpecializationPart)
                 ?? this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_subclassificationPart);
-        if (!declaredName && declaration === undefined) {
+        if (!identifier && declaration === undefined) {
             return undefined;
         }
-        const anonymous = !declaredName;
+        const anonymous = !identifier;
         const name = declaredName ?? '';
-        // Transitions never carry a declared <shortName> alias.
-        const shortName = effectiveName ? effectiveName.shortName
-            : transition || (isFlowUsage(kind) && !declaredName)
-                ? undefined
-                : this.extractShortName(ctx);
 
         // KerML: only an element that is named, like all its owners, has a qualified name.
         const qualifiedName = anonymous || (owner && owner.qualifiedName === undefined)
             ? undefined
-            : owner ? `${owner.qualifiedName}::${joinQualifiedName([name])}` : joinQualifiedName([name]);
+            : owner ? `${owner.qualifiedName}::${joinQualifiedName([identifier])}` : joinQualifiedName([identifier]);
 
         // An anonymous element has no name to select: its first token (`connect`, `transition`, ...)
         // stands for it, never a name in its declaration that refers to another element.
@@ -1393,7 +1380,8 @@ export class SymbolTable {
                 : this.extractTypeNames(ctx);
         const specializationNames = this.extractSpecializationNames(ctx);
         const redefinitions = this.findRedefinitions(ctx);
-        const namingReference = anonymous ? undefined : this.namingReference(ctx, kind)?.getText();
+        const naming = anonymous ? undefined : this.namingReference(ctx, kind);
+        const namingReference = naming?.reference.getText();
         const typeName = typeNames[0];
         const documentation = this.extractDocumentation(ctx);
         const visibility = this.extractVisibility(ctx);
@@ -1439,6 +1427,7 @@ export class SymbolTable {
             redefinedFeatureTargets: redefinitions.length > 0 ? redefinitions.map(target => target.getText()) : undefined,
             redefinedFeatureTargetRanges: redefinitions.length > 0 ? redefinitions.map(contextToRange) : undefined,
             namingReference,
+            namedByRedefinition: naming?.byRedefinition || undefined,
             documentation,
             visibility,
             featureValue,
@@ -1499,14 +1488,16 @@ export class SymbolTable {
         return RULE_INDEX_TO_KIND.get(ctx.ruleIndex);
     }
 
-    /** Extract a transition's declaration name, source, target, and accepter. */
+    /** Extract a transition's declared name and short name, source, target, and accepter. */
     private extractTransitionDetails(ctx: ParserRuleContext): {
         declaredName?: string;
+        shortName?: string;
         source?: string;
         target?: string;
         trigger?: string;
     } {
         let declaredName: string | undefined;
+        let shortName: string | undefined;
         let source: string | undefined;
         let target: string | undefined;
         let trigger: string | undefined;
@@ -1516,10 +1507,9 @@ export class SymbolTable {
             if (!(child instanceof ParserRuleContext)) continue;
 
             if (child.ruleIndex === SysMLv2Parser.RULE_usageDeclaration) {
-                declaredName = this.findRuleText(
-                    child,
-                    SysMLv2Parser.RULE_identification,
-                );
+                // SysML 8.2.2.18.3: `'transition' ( UsageDeclaration 'first' )?`, named like any usage.
+                const identification = this.childRule(child, SysMLv2Parser.RULE_identification);
+                ({ name: declaredName, shortName } = identification ? this.parseIdentification(identification) : {});
             } else if (child.ruleIndex === SysMLv2Parser.RULE_featureChainMember) {
                 source = this.cleanTransitionText(child.getText());
             } else if (child.ruleIndex === SysMLv2Parser.RULE_transitionSuccessionMember) {
@@ -1535,7 +1525,7 @@ export class SymbolTable {
             }
         }
 
-        return { declaredName, source, target, trigger };
+        return { declaredName, shortName, source, target, trigger };
     }
 
     /** Extract the payload type and both endpoint paths from a flow declaration. */
@@ -1629,6 +1619,15 @@ export class SymbolTable {
         const matches: ParserRuleContext[] = [];
         this.collectDescendantRules(ctx, ruleIndex, matches);
         return matches[0];
+    }
+
+    /** `ctx`'s first direct child of rule `ruleIndex`, if any. */
+    private childRule(ctx: ParserRuleContext, ruleIndex: number): ParserRuleContext | undefined {
+        for (let i = 0; i < ctx.getChildCount(); i++) {
+            const child = ctx.getChild(i);
+            if (child instanceof ParserRuleContext && child.ruleIndex === ruleIndex) return child;
+        }
+        return undefined;
     }
 
     /** Find and clean the text of the first descendant with a given rule. */
@@ -1740,6 +1739,9 @@ export class SymbolTable {
         if (kind !== undefined && (isDefinition(kind) || isUsageKind(kind))) {
             return this.extractOwnName(ctx, kind);
         }
+        // A package's name is in its own `packageDeclaration`, never in its body.
+        if (kind === SysMLElementKind.Package) return this.ownIdentification(ctx)?.name;
+        if (kind === SysMLElementKind.Alias) return this.aliasIdentification(ctx).name;
 
         // Walk children looking for a name-producing rule or IDENT token
         for (let i = 0; i < ctx.getChildCount(); i++) {
@@ -1757,27 +1759,13 @@ export class SymbolTable {
             // Check child rules named 'identification', 'declarationUsageName', etc.
             if (child instanceof ParserRuleContext) {
                 if (child.ruleIndex === SysMLv2Parser.RULE_identification) {
-                    // `identification: LT name GT name | LT name GT | name` — the
-                    // declared name is the long name when present, else the
-                    // <shortName> alias itself; never their concatenation.
-                    const name = this.parseIdentification(child).name;
-                    if (name) return name;
+                    // `identification: LT name GT name | LT name GT | name`: the
+                    // declared name, if any; never the short name.
+                    return this.parseIdentification(child).name;
                 } else if (NAME_RULE_INDICES.has(child.ruleIndex)) {
                     const name = this.extractTextFromSubtree(child);
                     if (name) return name;
                 }
-            }
-        }
-
-        // Fallback: look deeper for any identifier in the first few children.
-        // Skip prefix/extension contexts — they contain metadata annotation
-        // identifiers (e.g. #product) which are not the element's own name.
-        for (let i = 0; i < Math.min(ctx.getChildCount(), 5); i++) {
-            const child = ctx.getChild(i);
-            if (child instanceof ParserRuleContext) {
-                if (this.isPrefixOrExtensionContext(child)) continue;
-                const name = this.extractName(child);
-                if (name) return name;
             }
         }
 
@@ -1804,33 +1792,77 @@ export class SymbolTable {
     }
 
     /**
-     * A definition's or usage's name: the one it declares itself, else the
-     * name of its naming feature (KerML/SysML effective name, 7.6.5) -- the
-     * element it performs, exhibits or includes (8.3.17.14), the usage a
-     * variant reference names (8.3.6.4), or the feature it redefines.
-     * Undefined when it has neither, i.e. when it is anonymous.
+     * A definition's or usage's name: the one it declares itself; without a
+     * declared name or short name, the name of its naming feature (KerML
+     * 8.3.3.3.4 `effectiveName()`, SysML 7.6.5) -- the element it performs,
+     * exhibits or includes (8.3.17.14), the usage a variant reference names
+     * (8.3.6.4), or the feature it redefines.
      */
     private extractOwnName(ctx: ParserRuleContext, kind: SysMLElementKind): string | undefined {
-        // A flow in the feature form (`flow f : F of ...`) names itself in a featureIdentification.
-        const identification = this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_identification)
-            ?? this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_featureIdentification);
-        const declaredName = identification && this.parseIdentification(identification).name;
-        if (declaredName) return declaredName;
+        const identification = this.ownIdentification(ctx);
+        if (identification) return identification.name;
 
-        const namingFeature = this.namingReference(ctx, kind) ?? this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_ownedRedefinition);
-        return namingFeature ? this.lastNameSegment(namingFeature) : undefined;
+        const naming = this.namingReference(ctx, kind);
+        return naming ? this.lastNameSegment(naming.reference) : undefined;
     }
 
     /**
-     * The reference a usage without a declared name is named after: the element
-     * it performs, exhibits or includes (8.3.17.14), or the usage a variant
-     * reference names (8.3.6.4). Undefined for any other usage.
+     * The declared short name and name of a definition or usage, from its own
+     * declaration's identification; undefined when it declares neither.
      */
-    private namingReference(ctx: ParserRuleContext, kind: SysMLElementKind): ParserRuleContext | undefined {
-        if (!PERFORMING_USAGE_KINDS.has(kind) && ctx.ruleIndex !== SysMLv2Parser.RULE_variantReference) return undefined;
-        const identification = this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_identification);
-        if (identification && this.parseIdentification(identification).name) return undefined;
-        return this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_ownedReferenceSubsetting);
+    private ownIdentification(ctx: ParserRuleContext): { shortName?: string; name?: string } | undefined {
+        // A flow in the feature form (`flow f : F of ...`) names itself in a featureIdentification.
+        const identification = this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_identification)
+            ?? this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_featureIdentification);
+        const declared = identification && this.parseIdentification(identification);
+        return declared && (declared.name || declared.shortName) ? declared : undefined;
+    }
+
+    /**
+     * The reference a usage without a declared name or short name is named after
+     * (KerML 8.3.3.3.4 `namingFeature()`): the element it performs, exhibits or
+     * includes (8.3.17.14), the usage a variant reference names (8.3.6.4), else
+     * the feature its first owned redefinition redefines (`byRedefinition`).
+     */
+    private namingReference(ctx: ParserRuleContext, kind: SysMLElementKind): { reference: ParserRuleContext; byRedefinition: boolean } | undefined {
+        if (!isUsageKind(kind) || this.ownIdentification(ctx)) return undefined;
+        if (PERFORMING_USAGE_KINDS.has(kind) || ctx.ruleIndex === SysMLv2Parser.RULE_variantReference) {
+            const reference = this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_ownedReferenceSubsetting);
+            return reference && { reference, byRedefinition: false };
+        }
+        const redefinition = this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_ownedRedefinition);
+        return redefinition && { reference: redefinition, byRedefinition: true };
+    }
+
+    /**
+     * An alias's own short name and name (`ALIAS ( LT name GT )? ( name )? FOR
+     * qualifiedName`, SysML 8.2.2.5.1 `AliasMember`): a `name` between `<` and
+     * `>` is the short name, the one after it the name; never its target.
+     */
+    private aliasIdentification(ctx: ParserRuleContext): { shortName?: string; name?: string } {
+        const { shortName, name } = this.aliasNameContexts(ctx);
+        return {
+            ...(shortName && { shortName: this.extractTextFromSubtree(shortName) }),
+            ...(name && { name: this.extractTextFromSubtree(name) }),
+        };
+    }
+
+    /** The `name` nodes of an alias's own short name and name (SysML 8.2.2.5.1 `AliasMember`). */
+    private aliasNameContexts(ctx: ParserRuleContext): { shortName?: ParserRuleContext; name?: ParserRuleContext } {
+        const contexts: { shortName?: ParserRuleContext; name?: ParserRuleContext } = {};
+        let inShortName = false;
+        for (let i = 0; i < ctx.getChildCount(); i++) {
+            const child = ctx.getChild(i);
+            if (child instanceof TerminalNode) {
+                if (child.symbol.type === SysMLv2Lexer.LT) inShortName = true;
+                else if (child.symbol.type === SysMLv2Lexer.GT) inShortName = false;
+                else if (child.symbol.type === SysMLv2Lexer.FOR) break;
+            } else if (child instanceof ParserRuleContext && child.ruleIndex === SysMLv2Parser.RULE_name) {
+                if (inShortName) contexts.shortName = child;
+                else contexts.name = child;
+            }
+        }
+        return contexts;
     }
 
     /**
@@ -1961,9 +1993,9 @@ export class SymbolTable {
     /**
      * Splits an `identification` node (`LT name GT name | LT name GT | name`)
      * into its optional `<shortName>` alias and its primary declared name.
-     * Without angle brackets the single `name` is the declared name only;
-     * with a lone `<shortName>` and no long name, the short name doubles as
-     * the declared name (SysML v2 §identification allows referencing either).
+     * Without angle brackets the single `name` is the declared name; with
+     * them, the first `name` is the declared short name and the second, if
+     * any, the declared name (KerML 8.2.3.1, 8.3.2.1.2).
      */
     private parseIdentification(ctx: ParserRuleContext): { shortName?: string; name?: string } {
         let hasAngleBrackets = false;
@@ -1985,59 +2017,7 @@ export class SymbolTable {
                 name: this.extractTextFromSubtree(nameCtxs[1]),
             };
         }
-        const shortName = nameCtxs[0] ? this.extractTextFromSubtree(nameCtxs[0]) : undefined;
-        return { shortName, name: shortName };
-    }
-
-    /**
-     * Extract the declared `<shortName>` alias, if any. Mirrors extractName()'s
-     * traversal but only cares about an `identification` node's short-name
-     * production — reaching a bare `name`/`qualifiedName` rule (no
-     * `identification` wrapper) means there is no short name at this level.
-     */
-    private extractShortName(ctx: ParserRuleContext): string | undefined {
-        if (ctx.ruleIndex === SysMLv2Parser.RULE_connectionUsage) {
-            for (let i = 0; i < ctx.getChildCount(); i++) {
-                const child = ctx.getChild(i);
-                if (!(child instanceof ParserRuleContext) ||
-                    child.ruleIndex !== SysMLv2Parser.RULE_usageDeclaration) {
-                    continue;
-                }
-                for (let j = 0; j < child.getChildCount(); j++) {
-                    const declarationChild = child.getChild(j);
-                    if (declarationChild instanceof ParserRuleContext &&
-                        declarationChild.ruleIndex === SysMLv2Parser.RULE_identification) {
-                        return this.parseIdentification(declarationChild).shortName;
-                    }
-                }
-                return undefined;
-            }
-            return undefined;
-        }
-
-        for (let i = 0; i < ctx.getChildCount(); i++) {
-            const child = ctx.getChild(i);
-            if (child instanceof ParserRuleContext) {
-                if (child.ruleIndex === SysMLv2Parser.RULE_identification) {
-                    return this.parseIdentification(child).shortName;
-                }
-                if (NAME_RULE_INDICES.has(child.ruleIndex)) {
-                    return undefined;
-                }
-            }
-        }
-
-        for (let i = 0; i < Math.min(ctx.getChildCount(), 5); i++) {
-            const child = ctx.getChild(i);
-            if (child instanceof ParserRuleContext) {
-                if (this.isPrefixOrExtensionContext(child)) continue;
-                if (RULE_INDEX_TO_KIND.has(child.ruleIndex)) continue;
-                const shortName = this.extractShortName(child);
-                if (shortName) return shortName;
-            }
-        }
-
-        return undefined;
+        return { shortName: nameCtxs[0] ? this.extractTextFromSubtree(nameCtxs[0]) : undefined };
     }
 
     /**
@@ -2219,6 +2199,12 @@ export class SymbolTable {
      * Extract the range of just the name token.
      */
     private extractNameRange(ctx: ParserRuleContext): Range | undefined {
+        // An alias has no `identification`: its name, else its short name (SysML 8.2.2.5.1).
+        if (ctx.ruleIndex === SysMLv2Parser.RULE_aliasMember) {
+            const { shortName, name } = this.aliasNameContexts(ctx);
+            const selected = name ?? shortName;
+            return selected && contextToRange(selected);
+        }
         if (ctx.ruleIndex === SysMLv2Parser.RULE_identification ||
             ctx.ruleIndex === SysMLv2Parser.RULE_featureIdentification) {
             let name: ParserRuleContext | undefined;

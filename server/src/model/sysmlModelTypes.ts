@@ -181,6 +181,12 @@ export interface SysMLElementDTO {
     name: string;
 
     /**
+     * The element's declared short name (`<shortName>`), unquoted like `name`;
+     * omitted when it has none (KerML 8.3.2.1 `Element::shortName`).
+     */
+    shortName?: string;
+
+    /**
      * Text to show for the element, as in the outline: its name; for an
      * anonymous element its declaration without a name (`: Engine`), else what
      * it connects (`a.p→b.p`), else its declaration as written (`decide`).
@@ -253,19 +259,26 @@ export interface RelationshipDTO {
      */
     type: string;
 
-    /** Source element name (absent for shorthand satisfy/verify without `by`). */
+    /** Source element name, else its short name (absent for shorthand satisfy/verify without `by`); see `sourceId`. */
     source?: string;
 
     /** `symbolId` of the source element, when the source is the element declaring the relationship. */
     sourceId?: string;
 
-    /** `symbolId` of the element that is the relationship itself (a connection, allocation, transition or flow usage). */
+    /**
+     * `symbolId` of the element that is the relationship itself (a connection,
+     * allocation, transition or flow usage); its name and short name are read
+     * from that element.
+     */
     symbolId?: string;
 
     /** Target element name. */
     target: string;
 
-    /** Optional label/name for the relationship. */
+    /**
+     * Optional label for the relationship: a flow's payload type, else its
+     * name; a transition's trigger; a connection's or allocation's name.
+     */
     name?: string;
 
     /**
@@ -281,6 +294,8 @@ export interface RelationshipDTO {
 
 export interface SequenceDiagramDTO {
     name: string;
+    /** Its declared short name, if any; `name` is empty when it has only a short name. */
+    shortName?: string;
     participants: ParticipantDTO[];
     messages: MessageDTO[];
     range: RangeDTO;
@@ -288,12 +303,16 @@ export interface SequenceDiagramDTO {
 
 export interface ParticipantDTO {
     name: string;
+    /** Its declared short name, if any; `name` is empty when it has only a short name. */
+    shortName?: string;
     type: string;
     range: RangeDTO;
 }
 
 export interface MessageDTO {
     name: string;
+    /** Its declared short name, if any; `name` is empty when it has only a short name. */
+    shortName?: string;
     from: string;
     to: string;
     payload: string;
@@ -307,6 +326,8 @@ export interface MessageDTO {
 
 export interface ActivityDiagramDTO {
     name: string;
+    /** Its declared short name, if any; `name` is empty when it has only a short name. */
+    shortName?: string;
     actions: ActivityActionDTO[];
     decisions: DecisionNodeDTO[];
     flows: ControlFlowDTO[];
@@ -316,6 +337,8 @@ export interface ActivityDiagramDTO {
 
 export interface ActivityActionDTO {
     name: string;
+    /** Its declared short name, if any; `name` is empty when it has only a short name. */
+    shortName?: string;
     type: string;
     kind?: string;
     inputs?: string[];
@@ -324,12 +347,21 @@ export interface ActivityActionDTO {
     subActions?: ActivityActionDTO[];
     isDefinition?: boolean;
     range?: RangeDTO;
+    /** The owning element's name, else its short name; text only, see `parentId`. */
     parent?: string;
+    /** The `symbolId` of the element owning this action; read its names from that element. */
+    parentId?: string;
+    /**
+     * Each sub-action's name, else its short name, in the order of `subActions`.
+     * Deprecated: it can't tell a short name from a name; use `subActions`.
+     */
     children?: string[];
 }
 
 export interface DecisionNodeDTO {
     name: string;
+    /** Its declared short name, if any; `name` is empty when it has only a short name. */
+    shortName?: string;
     condition: string;
     branches: {
         condition: string;
@@ -348,6 +380,8 @@ export interface ControlFlowDTO {
 
 export interface ActivityStateDTO {
     name: string;
+    /** Its declared short name, if any; `name` is empty when it has only a short name. */
+    shortName?: string;
     type: 'initial' | 'final' | 'intermediate';
     entryActions?: string[];
     exitActions?: string[];
@@ -362,6 +396,8 @@ export interface ActivityStateDTO {
 export interface ResolvedTypeDTO {
     qualifiedName: string;
     simpleName: string;
+    /** Its short name, if it has one; `simpleName` is empty when it has only a short name. */
+    shortName?: string;
     kind: string;
     isLibraryType: boolean;
     specializationChain: string[];
@@ -391,7 +427,10 @@ export interface SemanticDiagnosticDTO {
     message: string;
     severity: 'error' | 'warning' | 'info';
     range: RangeDTO;
+    /** The element's name, else its short name; text only, see `id`. */
     elementName: string;
+    /** The `symbolId` of the element the diagnostic is about. */
+    id?: string;
     relatedInfo?: {
         message: string;
         location?: RangeDTO;

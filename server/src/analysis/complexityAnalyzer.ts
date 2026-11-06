@@ -25,6 +25,7 @@
  * signals into one score that can be displayed in a status bar item.
  */
 
+import { memberNamesOf } from '../symbols/namespaceResolver.js';
 import { SysMLElementKind, SysMLSymbol, isDefinition, isUsage } from '../symbols/sysmlElements.js';
 
 // ---------------------------------------------------------------------------
@@ -147,7 +148,8 @@ export function analyseComplexity(symbols: SysMLSymbol[]): ComplexityReport {
         : 0;
 
     // --- Coupling (type refs that point to definitions in this document) ---
-    const defNames = new Set(defs.map(d => d.name));
+    // Referenced by their names or short names (KerML 8.3.2.1.2).
+    const defNames = new Set(defs.flatMap(memberNamesOf));
     let couplingCount = 0;
     const typeRefsPerDef = new Map<string, number>();
     for (const d of defs) {
@@ -246,7 +248,8 @@ function computeAdvancedSignals(
     defs: SysMLSymbol[],
     byId: Map<string, SysMLSymbol>,
 ): AdvancedSignals {
-    const defNames = new Set(defs.map(d => d.name));
+    // Referenced by their names or short names (KerML 8.3.2.1.2).
+    const defNames = new Set(defs.flatMap(memberNamesOf));
     const behaviorByDef = new Map<string, number>();
     for (const d of defs) {
         behaviorByDef.set(d.symbolId, 0);

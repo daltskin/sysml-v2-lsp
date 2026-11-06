@@ -8,7 +8,7 @@ import {
     WorkspaceEdit
 } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
-import { SysMLElementKind, isDefinition } from '../symbols/sysmlElements.js';
+import { SysMLElementKind, isDefinition, memberNamesOf } from '../symbols/sysmlElements.js';
 import {
     quoteName, scanFeaturePaths, scanQualifiedNames, splitQualifiedName, unquoteName,
 } from '../utils/identUtils.js';
@@ -125,7 +125,7 @@ export class CodeActionProvider {
         const packageNames = new Set<string>();
         for (const s of allSymbols) {
             if (!isDefinition(s.kind)) continue;
-            if (s.name !== unquoteName(unresolvedType)) continue;
+            if (!memberNamesOf(s).includes(unquoteName(unresolvedType))) continue;
             if (s.uri === uri) continue;
 
             // The top-level namespace of its qualified name; one without can't be imported.
@@ -511,8 +511,8 @@ export class CodeActionProvider {
         const symbolsInUri = symbolTable.getSymbolsForUri(uri);
         const compatible = symbolsInUri.find((s) =>
             s.kind === SysMLElementKind.PortUsage
-            && s.name !== left
-            && s.name !== right
+            && !memberNamesOf(s).includes(left)
+            && !memberNamesOf(s).includes(right)
             && (s.typeNames[0] ?? s.typeName) === leftType,
         );
         if (!compatible) return undefined;
@@ -580,7 +580,7 @@ export class CodeActionProvider {
             : '';
 
         const m = msg.match(/Unresolved constraint reference\s+'([^']+)'(?:\s+in scope\s+'([^']+)')?/);
-        const data = diagnostic.data as { scopeName?: string } | undefined;
+        const data = diagnostic.data as { scopeName?: string; scopeId?: string } | undefined;
         const expr = (rangeExpr && rangeExpr.includes('.'))
             ? rangeExpr
             : (tokenExpr && tokenExpr.includes('.'))
@@ -600,12 +600,14 @@ export class CodeActionProvider {
         const symbolsInUri = symbolTable.getSymbolsForUri(uri);
         const allSymbols = symbolTable.getAllSymbols();
 
-        const scope = scopeName ? symbolsInUri.find((s) => s.name === scopeName) : undefined;
+        // The scope by its ID, else by the name in the message.
+        const scope = (data?.scopeId !== undefined ? symbolTable.getSymbolById(data.scopeId) : undefined)
+            ?? (scopeName ? symbolsInUri.find((s) => memberNamesOf(s).includes(scopeName)) : undefined);
         const scopeMembers = scope
             ? allSymbols.filter((s) => s.parentId === scope.symbolId)
             : [];
-        const rootUsage = scopeMembers.find((s) => s.name === root)
-            ?? symbolsInUri.find((s) => s.name === root && !!(s.typeNames[0] ?? s.typeName));
+        const rootUsage = scopeMembers.find((s) => memberNamesOf(s).includes(root))
+            ?? symbolsInUri.find((s) => memberNamesOf(s).includes(root) && !!(s.typeNames[0] ?? s.typeName));
 
         const rootType = rootUsage ? (rootUsage.typeNames[0] ?? rootUsage.typeName) : undefined;
         let memberNames: string[] = [];
@@ -614,18 +616,18 @@ export class CodeActionProvider {
             if (typeDef) {
                 memberNames = allSymbols
                     .filter((s) => s.parentId === typeDef.symbolId)
-                    .map((s) => s.name);
+                    .flatMap(memberNamesOf);
             }
         }
         if (memberNames.length === 0) {
             memberNames = symbolsInUri
-                .map((s) => s.name)
+                .flatMap(memberNamesOf)
                 .filter((n) => n !== root);
         }
         if (memberNames.length === 0) {
             memberNames = allSymbols
                 .filter((s) => s.uri === uri)
-                .map((s) => s.name)
+                .flatMap(memberNamesOf)
                 .filter((n) => n !== root);
         }
         if (memberNames.length === 0) return undefined;
