@@ -28,7 +28,9 @@ import type { RangeDTO } from './sysmlModelTypes.js';
  *   accepted here). Never matches a long name.
  * - `'qualifiedName'` (the default when `kind` is omitted and `name`
  *   contains `::`) -- matches by `qualifiedName`; see `ElementLookupQuery.name`'s
- *   doc comment for exactly how, including the `scope` interaction.
+ *   doc comment for exactly how, including the `scope` interaction. `name`, and
+ *   `scope`, are read as qualified names in the textual notation (KerML 8.2.3.5.1),
+ *   so any valid spelling of the same names matches; other text matches nothing.
  */
 export type ElementLookupQueryKind = 'name' | 'shortName' | 'qualifiedName';
 
@@ -46,7 +48,8 @@ export interface ElementLookupQuery {
     /** See `ElementLookupQueryKind`'s doc comment. */
     kind?: ElementLookupQueryKind;
     /**
-     * A namespace path, not a reference to resolve -- a literal filter over
+     * A namespace path, a qualified name in the textual notation (KerML
+     * 8.2.3.5.1), not a reference to resolve -- a literal filter over
      * `qualifiedName` data the provider already has, not import/visibility
      * resolution (see this fork's "Scope: unscoped only, for now" doc). For
      * `kind: 'name'`/`'shortName'`, restricts the match to within this
@@ -74,8 +77,9 @@ export interface ElementMatch {
     /** The element's declared `<shortName>` alias, e.g. `"whl"`. Omitted
      *  (not an empty string) when the element has no short name. */
     shortName?: string;
-    /** The element's qualified name; null for an element without one (KerML):
-     *  a member of an anonymous element. */
+    /** The element's qualified name, as KerML `qualifiedName` represents it (8.3.2.1.2):
+     *  each segment name as `escapedName()` writes it. Null for an element without
+     *  one (KerML): a member of an anonymous element. */
     qualifiedName: string | null;
     /** The element's unique, stable identifier (see `SysMLElementDTO.symbolId`). */
     symbolId: string;

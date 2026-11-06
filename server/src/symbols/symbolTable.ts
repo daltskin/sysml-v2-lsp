@@ -2167,7 +2167,7 @@ export class SymbolTable {
      * The general type or feature a specialization's target rule names: its
      * qualified name, or its feature chain (`v.engine`), with a global `$::`
      * (KerML 7.2.2) and a conjugated port typing's `~` (`~P`, SysML 8.3.12.3).
-     * Its names are quoted as everywhere in the server (`joinReference`).
+     * Its names are written as in the textual notation (`joinReference`).
      * Undefined for a target missing after a syntax error.
      */
     private specializationTarget(ctx: ParserRuleContext): string | undefined {

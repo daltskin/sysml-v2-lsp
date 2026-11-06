@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `sysml/model` writes names that aren't basic names quoted, as KerML `escapedName()` does (KerML 8.3.2.1.2), in specialization targets, `resolvedTypes` and hotspot qualified names (`~'P-1'`, `Q::'Part Def'`). Reserved keywords are taken from the grammar, which departs from SysML 8.2.2.1.2 for `language`, `locale`, `crosses` and KerML-only keywords.
+- `sysml/elementLookup` reports qualified names in the same form and matches any valid spelling of a qualified name query (`Q::'P-1'`).
+
 ## [0.41.0]
 
 ### Changed

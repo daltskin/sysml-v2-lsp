@@ -744,4 +744,60 @@ part def __proto__;`;
         expect(roundTripped.results.__proto__[0].qualifiedName).toBe('__proto__');
     });
 
+    describe('qualified names in the textual notation (KerML 8.2.3.5.1, 8.3.2.1.2)', () => {
+        const text = `
+package Q {
+    port def 'P-1';
+    part def 'part';
+    part def 'Vehicle';
+    part def type;
+    part def 'it\\'s';
+    package 'P 2' { part def 'a::b'; part def Inner; }
+}`;
+        async function lookup(queries: { name: string; kind?: 'name' | 'shortName' | 'qualifiedName'; scope?: string }[]) {
+            const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+            const dm = await setupMulti([{ uri: 'test://q.sysml', text }]);
+            return new ElementLookupProvider(dm).elementLookup({ queries }).results;
+        }
+
+        it('reports a qualified name with each name as escapedName() writes it', async () => {
+            const results = await lookup([{ name: 'P-1' }, { name: 'part' }, { name: 'Vehicle' }, { name: 'type' }, { name: "it's" }, { name: 'a::b', kind: 'name' }]);
+            expect(results['P-1'].map(m => m.qualifiedName)).toEqual(["Q::'P-1'"]);
+            expect(results.part.map(m => m.qualifiedName)).toEqual(["Q::'part'"]);
+            expect(results.Vehicle.map(m => m.qualifiedName)).toEqual(['Q::Vehicle']);
+            expect(results.type.map(m => m.qualifiedName)).toEqual(['Q::type']);
+            expect(results["it's"].map(m => m.qualifiedName)).toEqual(["Q::'it\\'s'"]);
+            expect(results['a::b'].map(m => [m.name, m.qualifiedName])).toEqual([['a::b', "Q::'P 2'::'a::b'"]]);
+        });
+
+        it('finds an element by any valid spelling of its qualified name, as a full name and as a suffix', async () => {
+            const queries = ["Q::'P-1'", "'P-1'", "Q::'part'", 'Q::Vehicle', "Q::'Vehicle'", 'Q::type', "Q::'it\\'s'", "Q::'P 2'::'a::b'", "'P 2'::'a::b'", "Q :: 'P-1'"];
+            const results = await lookup(queries.map(name => ({ name, kind: 'qualifiedName' as const })));
+            for (const name of queries) expect(results[name], name).toHaveLength(1);
+            expect(results["Q::'Vehicle'"][0].qualifiedName).toBe('Q::Vehicle');
+        });
+
+        it('finds nothing for text that is not a qualified name, including the unquoted spelling of a name that needs quotes', async () => {
+            const queries = ['Q::P-1', 'Q::part', 'Q::P 2::Inner', 'Q::it\\\'s', 'Q::'];
+            const results = await lookup(queries.map(name => ({ name, kind: 'qualifiedName' as const })));
+            for (const name of queries) expect(results[name], name).toEqual([]);
+        });
+
+        it('reads a scope as a qualified name too', async () => {
+            const results = await lookup([
+                { name: "'a::b'", kind: 'qualifiedName', scope: "Q::'P 2'" },
+                { name: 'Inner', scope: "Q::'P 2'" },
+                { name: "'P 2'::Inner", kind: 'qualifiedName', scope: 'Q' },
+                { name: "Q::'P 2'::Inner", kind: 'qualifiedName', scope: 'Q' },
+            ]);
+            expect(results["'a::b'"].map(m => m.qualifiedName)).toEqual(["Q::'P 2'::'a::b'"]);
+            expect(results.Inner.map(m => m.qualifiedName)).toEqual(["Q::'P 2'::Inner"]);
+            expect(results["'P 2'::Inner"].map(m => m.qualifiedName)).toEqual(["Q::'P 2'::Inner"]);
+            expect(results["Q::'P 2'::Inner"].map(m => m.qualifiedName)).toEqual(["Q::'P 2'::Inner"]);
+            // A scope that isn't a qualified name matches nothing.
+            const invalid = await lookup([{ name: 'Inner', scope: 'Q::P 2' }]);
+            expect(invalid.Inner).toEqual([]);
+        });
+    });
+
 });

@@ -1,4 +1,4 @@
-import { SYSML_KEYWORDS } from './sysmlKeywords.js';
+import { SYSML_KEYWORDS, SYSML_RESERVED_KEYWORDS } from './sysmlKeywords.js';
 
 /**
  * Shared character-classification and identifier-scanning utilities.
@@ -45,14 +45,60 @@ export function unquoteName(text: string): string {
     return text.slice(1, -1).replace(/\\([btnfr'"\\])/g, (_, ch: string) => ESCAPES[ch]);
 }
 
-/** Render a semantic name as valid SysML source (basic names remain ASCII, per KerML). */
-export function quoteName(name: string): string {
-    if (/^[A-Za-z_][A-Za-z_0-9]*$/.test(name) && !SYSML_KEYWORDS.has(name)) return name;
+const BASIC_NAME = /^[A-Za-z_][A-Za-z_0-9]*$/;
+
+/** `name` as an unrestricted name: in single quotes, with special characters escaped (KerML 8.2.2.3). */
+function toUnrestrictedName(name: string): string {
     const escaped = name.replace(/[\\'\b\t\n\f\r]/g, ch => {
         const entry = Object.entries(ESCAPES).find(([, value]) => value === ch)!;
         return `\\${entry[0]}`;
     });
     return `'${escaped}'`;
+}
+
+/** Render a semantic name as valid SysML source (basic names remain ASCII, per KerML). */
+export function quoteName(name: string): string {
+    if (BASIC_NAME.test(name) && !SYSML_KEYWORDS.has(name)) return name;
+    return toUnrestrictedName(name);
+}
+
+/**
+ * A name as KerML `escapedName()` writes it (KerML 8.3.2.1.2): as is if it has the form of a basic
+ * name, ASCII and not a reserved keyword (SysML v2 7.2.2, 8.2.2.1.2), otherwise as an
+ * unrestricted name.
+ */
+export function escapedName(name: string): string {
+    return BASIC_NAME.test(name) && !SYSML_RESERVED_KEYWORDS.has(name) ? name : toUnrestrictedName(name);
+}
+
+/**
+ * A qualified name kept internally (`joinQualifiedName`) as KerML `qualifiedName` represents it
+ * (KerML 8.3.2.1.2): its segment names joined by `::`, each as `escapedName` writes it.
+ */
+export function escapedQualifiedName(qualifiedName: string): string {
+    return splitQualifiedName(qualifiedName).map(escapedName).join('::');
+}
+
+/**
+ * The names of a qualified name written in the textual notation (KerML 8.2.3.5.1): segments
+ * separated by `::`, each a basic name that isn't a reserved keyword or an unrestricted name
+ * (SysML v2 7.2.2). Undefined for any other text.
+ */
+export function parseQualifiedName(text: string): string[] | undefined {
+    const names: string[] = [];
+    let pos = 0;
+    for (;;) {
+        while (pos < text.length && /\s/.test(text[pos])) pos++;
+        // An empty unrestricted name is a name too.
+        const span = text.startsWith("''", pos) ? { name: '', end: pos + 2 } : readNameAt(text, pos);
+        if (!span || (text[pos] !== "'" && SYSML_RESERVED_KEYWORDS.has(span.name))) return undefined;
+        names.push(span.name);
+        pos = span.end;
+        while (pos < text.length && /\s/.test(text[pos])) pos++;
+        if (pos === text.length) return names;
+        if (!text.startsWith('::', pos)) return undefined;
+        pos += 2;
+    }
 }
 
 /** Split a semantic or source qualified name without splitting quoted `::` characters. */
@@ -83,14 +129,13 @@ export function joinQualifiedName(parts: readonly string[]): string {
 }
 
 /**
- * A reference as a readable name: a feature chain (`v.engine`, KerML 7.3.4.6) of qualified names,
- * each optionally global (`$::P::a`), optionally conjugated (`~P`, SysML 8.3.12.3). On top of
- * `joinQualifiedName`, a name holding `.` or starting with `~` is quoted, as they'd read as a
- * chain or a conjugation.
+ * A reference in the textual notation: a feature chain (KerML 7.3.4.6) of qualified names, each
+ * optionally global (KerML 7.2.2), optionally conjugated (SysML 8.3.12.3), each name as KerML
+ * `escapedName()` writes it (8.3.2.1.2), the global qualifier, `.` and `~` outside the quotes.
  */
 export function joinReference(chain: readonly { global: boolean; names: readonly string[] }[], conjugated = false): string {
     return (conjugated ? '~' : '') + chain.map(({ global, names }) => (global ? '$::' : '')
-        + names.map(name => /\.|^~/.test(name) ? quoteName(name) : joinQualifiedName([name])).join('::')).join('.');
+        + names.map(escapedName).join('::')).join('.');
 }
 
 /** Read one basic or unrestricted source name at an exact UTF-16 offset. */

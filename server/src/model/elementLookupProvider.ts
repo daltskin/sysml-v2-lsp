@@ -5,6 +5,7 @@
 
 import { DocumentManager } from '../documentManager.js';
 import { SysMLElementKind, SysMLSymbol } from '../symbols/sysmlElements.js';
+import { escapedQualifiedName, joinQualifiedName, parseQualifiedName } from '../utils/identUtils.js';
 import type {
     ElementLookupQueryKind,
     ElementMatch,
@@ -53,18 +54,24 @@ export class ElementLookupProvider {
         scope: string | undefined,
     ): SysMLSymbol[] {
         if (kind === 'qualifiedName') {
+            // `name` and `scope` are qualified names in the textual notation, matched by their names.
+            const names = parseQualifiedName(name);
+            const scopeNames = scope ? parseQualifiedName(scope) : [];
+            if (!names || !scopeNames) return [];
             // A scope that's already the leading segment of `name` (e.g. name
             // "A::Wheel", scope "A") is redundant, not a further restriction --
             // prepending it would build a nonsensical "A::A::Wheel" target, so
             // treat this the same as no scope at all.
-            const isScopeRedundant = scope !== undefined && name.startsWith(`${scope}::`);
-            if (scope && !isScopeRedundant) {
-                const target = `${scope}::${name}`;
+            const isScopeRedundant = scopeNames.length < names.length
+                && scopeNames.every((scopeName, i) => names[i] === scopeName);
+            if (scopeNames.length > 0 && !isScopeRedundant) {
+                const target = joinQualifiedName([...scopeNames, ...names]);
                 return allSymbols.filter(sym => sym.qualifiedName === target);
             }
-            const suffix = `::${name}`;
+            const key = joinQualifiedName(names);
+            const suffix = `::${key}`;
             return allSymbols.filter(sym => sym.qualifiedName !== undefined
-                && (sym.qualifiedName === name || sym.qualifiedName.endsWith(suffix)));
+                && (sym.qualifiedName === key || sym.qualifiedName.endsWith(suffix)));
         }
         if (kind === 'shortName') {
             return this.withinScope(allSymbols, scope).filter(sym => sym.shortName === name);
@@ -79,7 +86,10 @@ export class ElementLookupProvider {
      */
     private withinScope(symbols: SysMLSymbol[], scope: string | undefined): SysMLSymbol[] {
         if (!scope) return symbols;
-        const prefix = `${scope}::`;
+        // `scope` is a qualified name in the textual notation, matched by its names.
+        const scopeNames = parseQualifiedName(scope);
+        if (!scopeNames) return [];
+        const prefix = `${joinQualifiedName(scopeNames)}::`;
         const byId = new Map(symbols.map(sym => [sym.symbolId, sym]));
         return symbols.filter(sym => {
             if (sym.qualifiedName !== undefined) return sym.qualifiedName.startsWith(prefix);
@@ -96,7 +106,7 @@ export class ElementLookupProvider {
         return {
             name: sym.name,
             shortName: sym.shortName,
-            qualifiedName: sym.qualifiedName ?? null,
+            qualifiedName: sym.qualifiedName === undefined ? null : escapedQualifiedName(sym.qualifiedName),
             symbolId: sym.symbolId,
             type: sym.kind,
             uri: sym.uri,

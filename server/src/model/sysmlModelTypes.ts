@@ -83,7 +83,7 @@ export interface SysMLModelResult {
     /** Pre-extracted activity diagrams (when scope includes 'activityDiagrams'). */
     activityDiagrams?: ActivityDiagramDTO[];
 
-    /** Resolved type information keyed by element path (when scope includes 'resolvedTypes'). */
+    /** Resolved type information keyed by qualified name, as KerML 8.3.2.1.2 represents it (when scope includes 'resolvedTypes'). */
     resolvedTypes?: Record<string, ResolvedTypeDTO>;
 
     /** Semantic diagnostics (when scope includes 'diagnostics'). */
@@ -262,7 +262,10 @@ export interface RelationshipDTO {
     /** `symbolId` of the element that is the relationship itself (a connection, allocation, transition or flow usage). */
     symbolId?: string;
 
-    /** Target element name. */
+    /**
+     * Target element name. For a specialization, the reference as in the textual notation, each
+     * name as KerML `escapedName()` writes it (KerML 8.3.2.1.2).
+     */
     target: string;
 
     /** Optional label/name for the relationship. */
@@ -360,6 +363,7 @@ export interface ActivityStateDTO {
 // ---------------------------------------------------------------------------
 
 export interface ResolvedTypeDTO {
+    /** As KerML `qualifiedName` represents it (8.3.2.1.2): each segment name as `escapedName()` writes it. */
     qualifiedName: string;
     simpleName: string;
     kind: string;
