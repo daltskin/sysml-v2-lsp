@@ -2,6 +2,16 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `sysml/model` writes names that aren't basic names quoted, as KerML `escapedName()` does (KerML 8.3.2.1.2), in specialization targets, `resolvedTypes` and hotspot qualified names (`~'P-1'`, `Q::'Part Def'`). Reserved keywords are taken from the grammar, which departs from SysML 8.2.2.1.2 for `language`, `locale`, `crosses` and KerML-only keywords.
+- `sysml/elementLookup` reports qualified names in the same form. A query whose `name` or `scope` isn't a string no longer fails the whole request.
+
+### Changed
+
+- `sysml/elementLookup` reads `name` and `scope` as qualified names in the notation (KerML 8.2.3.5.1), so quoted and unquoted spellings match; the former unquoted form of a name that isn't a basic name (`Q::P-1`) no longer does. Without `kind`, a `name` that is global, has several names, or isn't written exactly as its one name (quoted, or with surrounding whitespace) is a qualified name. A global name (`$::`, KerML 7.2.5.1) matches only from the root.
+- Symbol IDs are derived from names written as `sysml/model` reports them: an element named like an unreserved keyword (`type`, `feature`, ...), and its members, get a new symbol ID.
+
 ## [0.42.0]
 
 ### Security

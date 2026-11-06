@@ -742,4 +742,147 @@ part def __proto__;`;
         expect(roundTripped.results.__proto__[0].qualifiedName).toBe('__proto__');
     });
 
+    describe('qualified names in the textual notation (KerML 8.2.3.5.1, 8.3.2.1.2)', () => {
+        const text = `
+package Q {
+    port def 'P-1';
+    part def 'part';
+    part def 'Vehicle';
+    part def type;
+    part def 'it\\'s';
+    package 'P 2' { part def 'a::b'; part def Inner; }
+}`;
+        async function lookup(queries: { name: string; kind?: 'name' | 'shortName' | 'qualifiedName'; scope?: string }[]) {
+            const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+            const dm = await setupMulti([{ uri: 'test://q.sysml', text }]);
+            return new ElementLookupProvider(dm).elementLookup({ queries }).results;
+        }
+
+        it('reports a qualified name with each name as escapedName() writes it', async () => {
+            const results = await lookup([{ name: 'P-1' }, { name: 'part' }, { name: 'Vehicle' }, { name: 'type' }, { name: "it's" }, { name: 'a::b', kind: 'name' }]);
+            expect(results['P-1'].map(m => m.qualifiedName)).toEqual(["Q::'P-1'"]);
+            expect(results.part.map(m => m.qualifiedName)).toEqual(["Q::'part'"]);
+            expect(results.Vehicle.map(m => m.qualifiedName)).toEqual(['Q::Vehicle']);
+            expect(results.type.map(m => m.qualifiedName)).toEqual(['Q::type']);
+            expect(results["it's"].map(m => m.qualifiedName)).toEqual(["Q::'it\\'s'"]);
+            expect(results['a::b'].map(m => [m.name, m.qualifiedName])).toEqual([['a::b', "Q::'P 2'::'a::b'"]]);
+        });
+
+        it('finds an element by any valid spelling of its qualified name, as a full name and as a suffix', async () => {
+            const queries = ["Q::'P-1'", "'P-1'", "Q::'part'", 'Q::Vehicle', "Q::'Vehicle'", 'Q::type', "Q::'it\\'s'", "Q::'P 2'::'a::b'", "'P 2'::'a::b'", "Q :: 'P-1'"];
+            const results = await lookup(queries.map(name => ({ name, kind: 'qualifiedName' as const })));
+            for (const name of queries) expect(results[name], name).toHaveLength(1);
+            expect(results["Q::'Vehicle'"][0].qualifiedName).toBe('Q::Vehicle');
+        });
+
+        it('finds nothing for text that is not a qualified name, including the unquoted spelling of a name that needs quotes', async () => {
+            const queries = ['Q::P-1', 'Q::part', 'Q::P 2::Inner', 'Q::it\\\'s', 'Q::'];
+            const results = await lookup(queries.map(name => ({ name, kind: 'qualifiedName' as const })));
+            for (const name of queries) expect(results[name], name).toEqual([]);
+        });
+
+        it('reads a scope as a qualified name too', async () => {
+            const results = await lookup([
+                { name: "'a::b'", kind: 'qualifiedName', scope: "Q::'P 2'" },
+                { name: 'Inner', scope: "Q::'P 2'" },
+                { name: "'P 2'::Inner", kind: 'qualifiedName', scope: 'Q' },
+                { name: "Q::'P 2'::Inner", kind: 'qualifiedName', scope: 'Q' },
+            ]);
+            expect(results["'a::b'"].map(m => m.qualifiedName)).toEqual(["Q::'P 2'::'a::b'"]);
+            expect(results.Inner.map(m => m.qualifiedName)).toEqual(["Q::'P 2'::Inner"]);
+            expect(results["'P 2'::Inner"].map(m => m.qualifiedName)).toEqual(["Q::'P 2'::Inner"]);
+            expect(results["Q::'P 2'::Inner"].map(m => m.qualifiedName)).toEqual(["Q::'P 2'::Inner"]);
+            // A scope that isn't a qualified name matches nothing.
+            const invalid = await lookup([{ name: 'Inner', scope: 'Q::P 2' }]);
+            expect(invalid.Inner).toEqual([]);
+        });
+
+        const rooted = `
+part def 'Root Def';
+part def RootB;
+package N2 { part def 'Root Def'; part def RootB; }
+package Q { part def 'Vehicle'; port def 'P-1'; part def <'only-short'>; }`;
+        async function lookupIn(source: string, queries: { name: string; kind?: 'name' | 'shortName' | 'qualifiedName'; scope?: string }[]) {
+            const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+            const dm = await setupMulti([{ uri: 'test://rooted.sysml', text: source }]);
+            return new ElementLookupProvider(dm).elementLookup({ queries }).results;
+        }
+        const qualifiedNames = (matches: { qualifiedName: string | null }[]) => matches.map(m => m.qualifiedName).sort();
+
+        it('reads a query as a qualified name when it is written other than as its one name, also at the root', async () => {
+            const results = await lookupIn(rooted, [
+                { name: "'Root Def'" }, { name: "'RootB'" }, { name: "'Vehicle'" }, { name: "'P-1'" }, { name: 'Root Def' }, { name: 'RootB' },
+            ]);
+            // A qualified name in the notation, matched as before: as the full name or a suffix of one.
+            expect(qualifiedNames(results["'Root Def'"])).toEqual(["'Root Def'", "N2::'Root Def'"]);
+            expect(qualifiedNames(results["'RootB'"])).toEqual(['N2::RootB', 'RootB']);
+            expect(qualifiedNames(results["'Vehicle'"])).toEqual(['Q::Vehicle']);
+            expect(qualifiedNames(results["'P-1'"])).toEqual(["Q::'P-1'"]);
+            // Text that is its own one name, or no qualified name at all, is a name, matched as declared.
+            expect(qualifiedNames(results['Root Def'])).toEqual(["'Root Def'", "N2::'Root Def'"]);
+            expect(qualifiedNames(results.RootB)).toEqual(['N2::RootB', 'RootB']);
+        });
+
+        it('matches a global name (`$::`) exactly from the root, never as a suffix and not relative to scope (KerML 7.2.5.1)', async () => {
+            const results = await lookupIn(rooted, [
+                { name: "$::'Root Def'" }, { name: '$::RootB', kind: 'qualifiedName' }, { name: '$::Q::Vehicle' }, { name: "$::Q::'P-1'" },
+                { name: "$::'P-1'" }, { name: '$::Vehicle', scope: 'Q' }, { name: "$ :: N2 :: 'Root Def'" },
+            ]);
+            expect(qualifiedNames(results["$::'Root Def'"])).toEqual(["'Root Def'"]);
+            expect(qualifiedNames(results['$::RootB'])).toEqual(['RootB']);
+            expect(qualifiedNames(results['$::Q::Vehicle'])).toEqual(['Q::Vehicle']);
+            expect(qualifiedNames(results["$::Q::'P-1'"])).toEqual(["Q::'P-1'"]);
+            expect(results["$::'P-1'"]).toEqual([]);
+            expect(results['$::Vehicle']).toEqual([]);
+            expect(qualifiedNames(results["$ :: N2 :: 'Root Def'"])).toEqual(["N2::'Root Def'"]);
+        });
+
+        it('leaves out a query without a string name, and matches nothing for a scope that is not a string', async () => {
+            const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+            const dm = await setupMulti([{ uri: 'test://rooted.sysml', text: rooted }]);
+            // Malformed queries as a client could send them over JSON-RPC.
+            const queries = [
+                { name: null }, { name: 42 }, {}, null, { name: 'RootB', scope: 7 }, { name: "'P-1'", scope: ['Q'] }, { name: 'Vehicle', scope: null },
+            ] as unknown as { name: string }[];
+            const results = new ElementLookupProvider(dm).elementLookup({ queries }).results;
+            expect(Object.keys(results).sort()).toEqual(["'P-1'", 'RootB', 'Vehicle']);
+            expect(results.RootB).toEqual([]);
+            expect(results["'P-1'"]).toEqual([]);
+            expect(qualifiedNames(results.Vehicle)).toEqual(['Q::Vehicle']);
+        });
+
+        it('reads a global scope as the same path from the root', async () => {
+            const results = await lookupIn(rooted, [
+                { name: 'Vehicle', scope: '$::Q' }, { name: "'P-1'", kind: 'qualifiedName', scope: '$::Q' }, { name: 'RootB', scope: '$::N2' },
+            ]);
+            expect(qualifiedNames(results.Vehicle)).toEqual(['Q::Vehicle']);
+            expect(qualifiedNames(results["'P-1'"])).toEqual(["Q::'P-1'"]);
+            expect(qualifiedNames(results.RootB)).toEqual(['N2::RootB']);
+        });
+
+        it('finds every element by the qualified name it reports, and by that name made global', async () => {
+            const { escapedQualifiedName } = await import('../../server/src/utils/identUtils.js');
+            const { DocumentManager } = await import('../../server/src/documentManager.js');
+            const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
+            const source = `${rooted}
+package 'Top Pkg' {
+    part def 'part'; part def type; part def language; part def 'class'; part def 'it\\'s'; part def 'a\\\\b';
+    part def 'tab\\there'; part def 'Ω'; part def '1st'; part def 'a.b'; part def '~P'; part def '$';
+    part def 'A::B' { part 'x y'; part 'part'; }
+    package 'P 2' { part def <'s-1'> 'Long Name'; part def <only> ; }
+}`;
+            const dm = new DocumentManager();
+            dm.parse(await makeDoc(source, 'test://round-trip.sysml'));
+            const symbols = dm.getWorkspaceSymbolTable().getAllSymbolsIncludingDuplicates().filter(sym => sym.qualifiedName !== undefined);
+            expect(symbols.length).toBeGreaterThan(25);
+            const reported = symbols.map(sym => escapedQualifiedName(sym.qualifiedName!));
+            const queries = reported.flatMap(name => [{ name }, { name: `$::${name}` }]);
+            const results = new ElementLookupProvider(dm).elementLookup({ queries }).results;
+            symbols.forEach((sym, i) => {
+                expect(results[reported[i]].map(m => m.symbolId), reported[i]).toContain(sym.symbolId);
+                expect(results[`$::${reported[i]}`].map(m => m.symbolId), `$::${reported[i]}`).toEqual([sym.symbolId]);
+            });
+        });
+    });
+
 });
