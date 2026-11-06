@@ -216,6 +216,8 @@ export interface SysMLElementDTO {
      *   itemType      – Payload type for a flow usage
      *   flowSource    – Source feature path for a flow usage
      *   flowTarget    – Target feature path for a flow usage
+     *   isMessage     – true for a flow usage declared as a message (`message`,
+     *                   SysML 8.2.2.16 `Message`); a flow's `type` is 'flow' either way
      *   direction     – Feature direction: 'in' | 'out' | 'inout'
      *   multiplicity  – Multiplicity string (e.g., "0..1", "1..*")
      *   ordered       – true when declared `ordered`

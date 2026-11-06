@@ -163,8 +163,11 @@ export interface SysMLSymbol {
     source?: string;
     /** Target reference for a transition usage. */
     target?: string;
-    /** Payload and endpoints declared by a flow usage. */
-    flowDetails?: { itemType?: string; payloadDeclared?: boolean; source?: string; target?: string };
+    /**
+     * Payload and endpoints declared by a flow usage, and `isMessage` when it is declared as a
+     * message (SysML 8.2.2.16 `Message`), not as a flow.
+     */
+    flowDetails?: { itemType?: string; payloadDeclared?: boolean; source?: string; target?: string; isMessage?: boolean };
     /** Accepter text used to trigger a transition usage. */
     transitionTrigger?: string;
     /** Explicit succession edges owned by an action definition or usage. */
