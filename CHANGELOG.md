@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.42.0]
+
 ### Security
 
 - Override `minimatch` used by `@typescript-eslint/typescript-estree` to version 11.0.1 or later to fix CVE-2026-118764, without downgrading `typescript-eslint`.
