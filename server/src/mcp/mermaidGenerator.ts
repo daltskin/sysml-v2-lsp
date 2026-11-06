@@ -7,7 +7,7 @@
  */
 
 import type { SysMLSymbol } from '../symbols/sysmlElements.js';
-import { SysMLElementKind, displayName, isDefinition } from '../symbols/sysmlElements.js';
+import { SysMLElementKind, displayName, isAnonymous, isDefinition, memberNamesOf, nameText } from '../symbols/sysmlElements.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -82,14 +82,18 @@ function isOwnedBy(sym: SysMLSymbol, ancestor: SysMLSymbol, lookup: SymbolLookup
     return false;
 }
 
-/** Escape label text for Mermaid (quotes and angle brackets, no regex). */
+/** Escape label text for Mermaid: quotes and angle brackets as entity codes (`<PD2>` stays visible), no regex. */
 function escapeLabel(text: string): string {
     let result = '';
     for (let i = 0; i < text.length; i++) {
         const ch = text[i];
         if (ch === '"') {
             result += '#quot;';
-        } else if (ch !== '<' && ch !== '>') {
+        } else if (ch === '<') {
+            result += '#lt;';
+        } else if (ch === '>') {
+            result += '#gt;';
+        } else {
             result += ch;
         }
     }
@@ -117,6 +121,26 @@ function buildChildrenIndex(allSymbols: SysMLSymbol[]): Map<string, SysMLSymbol[
         }
     }
     return index;
+}
+
+/**
+ * The member reached from `owner` by `path`, each segment matched against
+ * a member's name or short name (KerML 8.2.3.5.3, `memberName` and
+ * `memberShortName`); undefined when a segment matches no single member.
+ */
+function ownedMemberByPath(
+    owner: SysMLSymbol,
+    path: string[],
+    childrenOf: Map<string, SysMLSymbol[]>,
+): SysMLSymbol | undefined {
+    let current = owner;
+    for (const segment of path) {
+        const [match, ...others] = (childrenOf.get(current.symbolId) ?? [])
+            .filter(member => memberNamesOf(member).includes(segment));
+        if (!match || others.length > 0) return undefined;
+        current = match;
+    }
+    return current === owner ? undefined : current;
 }
 
 // ---------------------------------------------------------------------------
@@ -311,23 +335,23 @@ export function inferDiagramType(symbols: SysMLSymbol[]): DiagramType {
 function buildDisplayIds(symbols: SysMLSymbol[], lookup: SymbolLookup): Map<string, string> {
     const nameCount = new Map<string, number>();
     for (const s of symbols) {
-        nameCount.set(s.name, (nameCount.get(s.name) ?? 0) + 1);
+        nameCount.set(nameText(s), (nameCount.get(nameText(s)) ?? 0) + 1);
     }
 
     const ids = new Map<string, string>();
     for (const s of symbols) {
         // An anonymous element has no name to show: identified by its symbol ID.
-        if (!s.name) {
+        if (isAnonymous(s)) {
             ids.set(s.symbolId, nodeId(s));
             continue;
         }
         let displayId: string;
         const owner = ownerOf(s, lookup);
-        if (nameCount.get(s.name)! > 1 && owner) {
+        if (nameCount.get(nameText(s))! > 1 && owner) {
             // Disambiguate with parent name
-            displayId = safeId(`${owner.name}_${s.name}`);
+            displayId = safeId(`${nameText(owner)}_${nameText(s)}`);
         } else {
-            displayId = safeId(s.name);
+            displayId = safeId(nameText(s));
         }
         ids.set(s.symbolId, displayId);
     }
@@ -384,15 +408,16 @@ function generateGeneralView(symbols: SysMLSymbol[], lookup: SymbolLookup): Merm
         // Track for styling
         nodeStyles.set(id, kindLabel);
 
-        // A named class is shown by its node ID; an anonymous one by its display name as label.
-        const classDecl = sym.name ? `class ${id}` : `class ${id}["${escapeLabel(displayName(sym))}"]`;
+        // A class with a name only is shown by its node ID; any other by its display name (`<PD2> PartDef2`, `: Engine`).
+        const label = displayName(sym);
+        const classDecl = label === sym.name ? `class ${id}` : `class ${id}["${escapeLabel(label)}"]`;
         if (childSymbols.length > 0) {
             lines.push(`    ${classDecl} {`);
             lines.push(`        <<${kindLabel}>>`)
             for (const child of childSymbols) {
                 const typeStr = child.typeNames.length > 0 ? ` : ${child.typeNames[0]}` : '';
                 const mult = child.multiplicity ? `[${child.multiplicity}]` : '';
-                lines.push(`        +${escapeLabel(child.name)}${typeStr}${mult}`);
+                lines.push(`        +${escapeLabel(isAnonymous(child) ? '' : displayName(child))}${typeStr}${mult}`);
             }
             lines.push('    }');
         } else {
@@ -407,7 +432,7 @@ function generateGeneralView(symbols: SysMLSymbol[], lookup: SymbolLookup): Merm
 
         for (const typeName of sym.typeNames) {
             const target = lookup.byName.get(typeName)
-                ?? [...lookup.byName.values()].find(s => s.name === typeName);
+                ?? [...lookup.byName.values()].find(s => memberNamesOf(s).includes(typeName));
             if (target) {
                 const targetId = displayIds.get(target.symbolId) ?? nodeId(target);
                 if (rendered.has(targetId)) {
@@ -519,8 +544,12 @@ function generateActivityView(symbols: SysMLSymbol[], lookup: SymbolLookup): Mer
             elementCount++;
         }
 
-        const childByName = new Map(childActions.map(action => [action.name, action]));
-        const declaredEndpoints = new Set(childActions.map(action => action.name));
+        // A succession end may name an action by its name or its short name
+        // (KerML 8.2.3.5.3, `memberName` and `memberShortName`).
+        const childByName = new Map(childActions.flatMap(
+            action => memberNamesOf(action).map(name => [name, action] as const),
+        ));
+        const declaredEndpoints = new Set(childActions.flatMap(memberNamesOf));
         for (const flow of def.controlFlows ?? []) {
             for (const endpoint of [flow.source, flow.target]) {
                 if (declaredEndpoints.has(endpoint)) continue;
@@ -634,11 +663,13 @@ function generateStateView(symbols: SysMLSymbol[], lookup: SymbolLookup): Mermai
 
         const resolveEndpointId = (reference: string): string => {
             const qualifiedReference = reference.replace(/\./g, '::');
-            const ownerName = ownerOf(trans, lookup)?.qualifiedName;
+            const owner = ownerOf(trans, lookup);
+            const ownerName = owner?.qualifiedName;
             const relativeName = ownerName
                 ? `${ownerName}::${qualifiedReference}`
                 : qualifiedReference;
-            const endpoint = lookup.byName.get(relativeName)
+            const endpoint = (owner && ownedMemberByPath(owner, qualifiedReference.split('::'), childrenOf))
+                ?? lookup.byName.get(relativeName)
                 ?? lookup.byName.get(qualifiedReference)
                 ?? lookup.byName.get(reference);
             return endpoint ? nodeId(endpoint) : safeId(reference);
@@ -873,7 +904,7 @@ function generateUseCaseView(symbols: SysMLSymbol[], lookup: SymbolLookup): Merm
     const untypedUsages = allUseCaseUsages.filter(u =>
         !u.typeNames.some(t => {
             const resolved = lookup.byName.get(t)
-                ?? [...lookup.byName.values()].find(s => s.name === t);
+                ?? [...lookup.byName.values()].find(s => memberNamesOf(s).includes(t));
             return resolved && resolved.kind === SysMLElementKind.UseCaseDef;
         }),
     );
@@ -975,7 +1006,7 @@ function generateUseCaseView(symbols: SysMLSymbol[], lookup: SymbolLookup): Merm
         if (inc.typeNames.length === 0) continue;
         const targetName = inc.typeNames[0];
         const target = lookup.byName.get(targetName)
-            ?? [...lookup.byName.values()].find(s => s.name === targetName);
+            ?? [...lookup.byName.values()].find(s => memberNamesOf(s).includes(targetName));
         if (!target) continue;
 
         // Source is the parent element (ideally a UseCaseDef).
@@ -1048,8 +1079,8 @@ export function generateMermaidDiagram(
     for (const s of allSymbols) {
         if (s.qualifiedName !== undefined) lookup.byName.set(s.qualifiedName, s);
         // Also index by simple name for type lookups
-        if (!lookup.byName.has(s.name)) {
-            lookup.byName.set(s.name, s);
+        for (const name of memberNamesOf(s)) {
+            if (!lookup.byName.has(name)) lookup.byName.set(name, s);
         }
         lookup.byId.set(s.symbolId, s);
     }

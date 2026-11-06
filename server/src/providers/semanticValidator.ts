@@ -2,8 +2,8 @@ import { Diagnostic, DiagnosticSeverity, Position, Range } from 'vscode-language
 import { DocumentManager } from '../documentManager.js';
 import { getLibraryPackageNames, resolveLibraryType } from '../library/libraryIndex.js';
 import { SysMLModelProvider } from '../model/sysmlModelProvider.js';
-import { NamespaceResolver, SymbolIndexes, buildSymbolIndexes, describeConflictingDeclarations, findConflictingDeclarations, NamespaceKey, namespaceKeyOf, otherDeclarations, ownerKeyOf, ownerOf } from '../symbols/namespaceResolver.js';
-import { SysMLElementKind, SysMLSymbol, displayName, isAnonymous, isDefinition } from '../symbols/sysmlElements.js';
+import { NamespaceResolver, SymbolIndexes, buildSymbolIndexes, describeConflictingDeclarations, findConflicts, NamespaceKey, namespaceKeyOf, otherDeclarations, ownerKeyOf, ownerOf } from '../symbols/namespaceResolver.js';
+import { SysMLElementKind, SysMLSymbol, displayName, escapedName, isAnonymous, isDefinition, memberNamesOf, nameText } from '../symbols/sysmlElements.js';
 import { describeNamingIssue, NamingIssue } from '../symbols/symbolTable.js';
 import { resolveTypeName } from '../symbols/typeResolution.js';
 import { scanFeaturePaths, splitQualifiedName, stripComments } from '../utils/identUtils.js';
@@ -187,7 +187,7 @@ export class SemanticValidator {
             message,
             source: 'sysml',
             code: 'unresolved-type',
-            data: { typeName, elementName: symbol.name },
+            data: { typeName, elementName: nameText(symbol), symbolId: symbol.symbolId },
         }];
     }
 
@@ -208,6 +208,7 @@ export class SemanticValidator {
                 message: `Invalid multiplicity [${symbol.multiplicity}]: lower bound (${lower}) exceeds upper bound (${upper})`,
                 source: 'sysml',
                 code: 'invalid-multiplicity',
+                data: { symbolId: symbol.symbolId },
             }];
         }
 
@@ -218,6 +219,7 @@ export class SemanticValidator {
                 message: `Invalid multiplicity [${symbol.multiplicity}]: lower bound cannot be negative`,
                 source: 'sysml',
                 code: 'invalid-multiplicity',
+                data: { symbolId: symbol.symbolId },
             }];
         }
 
@@ -247,6 +249,7 @@ export class SemanticValidator {
                 message: `Enumeration '${displayName(symbol)}' has no enum values defined`,
                 source: 'sysml',
                 code: 'empty-enum',
+                data: { symbolId: symbol.symbolId },
             }];
         }
 
@@ -279,7 +282,7 @@ export class SemanticValidator {
                     message: `Definition '${symbol.name}' should use PascalCase`,
                     source: 'sysml',
                     code: 'naming-convention',
-                    data: { name: symbol.name, convention: 'PascalCase' },
+                    data: { name: symbol.name, convention: 'PascalCase', symbolId: symbol.symbolId },
                 }];
             }
         } else {
@@ -292,7 +295,7 @@ export class SemanticValidator {
                     message: `Usage '${symbol.name}' should use camelCase`,
                     source: 'sysml',
                     code: 'naming-convention',
-                    data: { name: symbol.name, convention: 'camelCase' },
+                    data: { name: symbol.name, convention: 'camelCase', symbolId: symbol.symbolId },
                 }];
             }
         }
@@ -313,7 +316,7 @@ export class SemanticValidator {
             message: `Definition '${displayName(symbol)}' has no documentation`,
             source: 'sysml',
             code: 'missing-doc',
-            data: { name: symbol.name },
+            data: { name: nameText(symbol), symbolId: symbol.symbolId },
         }];
     }
 
@@ -348,7 +351,7 @@ export class SemanticValidator {
 
         const diagnostics: Diagnostic[] = [];
         for (const def of defsInScope) {
-            const isReferenced = referencedTypes.has(def.name) ||
+            const isReferenced = memberNamesOf(def).some(name => referencedTypes.has(name)) ||
                 (def.shortName !== undefined && referencedTypes.has(def.shortName));
             const hasBaseType = (def.typeNames?.length ?? 0) > 0;
 
@@ -356,10 +359,10 @@ export class SemanticValidator {
                 diagnostics.push({
                     severity: DiagnosticSeverity.Warning,
                     range: def.selectionRange,
-                    message: `Definition '${def.name}' is not referenced by any usage in the workspace`,
+                    message: `Definition '${displayName(def)}' is not referenced by any usage in the workspace`,
                     source: 'sysml',
                     code: 'unused-definition',
-                    data: { name: def.name },
+                    data: { name: nameText(def), symbolId: def.symbolId },
                 });
             }
         }
@@ -438,8 +441,9 @@ export class SemanticValidator {
 
         for (const def of defsInFile) {
             const visited = new Set<string>();
-            visited.add(def.name);
-            const cycle = this.followSpecializationChain(def.name, def.typeNames, visited, indexes);
+            // A specialization written with either of its names closes the cycle.
+            for (const name of memberNamesOf(def)) visited.add(name);
+            const cycle = this.followSpecializationChain(escapedName(def) ?? '', def.typeNames, visited, indexes);
             if (cycle) {
                 diagnostics.push({
                     severity: DiagnosticSeverity.Error,
@@ -447,6 +451,7 @@ export class SemanticValidator {
                     message: `Circular specialization: ${cycle.join(' :> ')} :> ${cycle[0]}`,
                     source: 'sysml',
                     code: 'circular-specialization',
+                    data: { symbolId: def.symbolId },
                 });
             }
         }
@@ -496,6 +501,7 @@ export class SemanticValidator {
             range: issue.symbol.selectionRange,
             source: 'sysml',
             ...describeNamingIssue(issue),
+            data: { symbolId: issue.symbol.symbolId },
         }));
     }
 
@@ -575,17 +581,17 @@ export class SemanticValidator {
 
             // Check if this requirement is satisfied by name (simple or qualified).
             const isSatisfied =
-                satisfiedNames.has(req.name) ||
+                memberNamesOf(req).some(name => satisfiedNames.has(name)) ||
                 (req.qualifiedName !== undefined && satisfiedNames.has(req.qualifiedName));
 
             if (!isSatisfied) {
                 diagnostics.push({
                     severity: DiagnosticSeverity.Warning,
                     range: req.selectionRange,
-                    message: `Requirement '${req.name}' is not satisfied by any element`,
+                    message: `Requirement '${displayName(req)}' is not satisfied by any element`,
                     source: 'sysml',
                     code: 'unsatisfied-requirement',
-                    data: { name: req.name, qualifiedName: req.qualifiedName },
+                    data: { name: nameText(req), symbolId: req.symbolId, qualifiedName: req.qualifiedName },
                 });
             }
         }
@@ -746,26 +752,26 @@ export class SemanticValidator {
             if (uriRanges.some(r => reqLine >= r.startLine && reqLine <= r.endLine)) continue;
 
             const isSatisfied =
-                satisfiedNames.has(req.name) ||
+                memberNamesOf(req).some(name => satisfiedNames.has(name)) ||
                 (req.qualifiedName !== undefined && satisfiedNames.has(req.qualifiedName));
 
             const isVerified =
-                verifiedNames.has(req.name) ||
+                memberNamesOf(req).some(name => verifiedNames.has(name)) ||
                 (req.qualifiedName !== undefined && verifiedNames.has(req.qualifiedName));
 
             if (!isVerified) {
                 const message = isSatisfied
-                    ? `Requirement '${req.name}' is satisfied but has no verification case — ` +
-                      `consider adding: verify ${req.name} by <VerificationCase>;`
-                    : `Requirement '${req.name}' has no verification case — ` +
-                      `consider adding: verify ${req.name} by <VerificationCase>;`;
+                    ? `Requirement '${displayName(req)}' is satisfied but has no verification case — ` +
+                      `consider adding: verify ${escapedName(req)} by <VerificationCase>;`
+                    : `Requirement '${displayName(req)}' has no verification case — ` +
+                      `consider adding: verify ${escapedName(req)} by <VerificationCase>;`;
                 diagnostics.push({
                     severity: DiagnosticSeverity.Warning,
                     range: req.selectionRange,
                     message,
                     source: 'sysml',
                     code: 'unverified-requirement',
-                    data: { name: req.name, qualifiedName: req.qualifiedName },
+                    data: { name: nameText(req), symbolId: req.symbolId, qualifiedName: req.qualifiedName },
                 });
             }
         }
@@ -825,7 +831,7 @@ export class SemanticValidator {
         const _viewpointNames = new Set(
             symbols
                 .filter(s => s.kind === SysMLElementKind.ViewpointDef || s.kind === SysMLElementKind.ViewpointUsage)
-                .map(s => s.name),
+                .flatMap(memberNamesOf),
         );
 
         for (const view of views) {
@@ -839,9 +845,10 @@ export class SemanticValidator {
                 diagnostics.push({
                     severity: DiagnosticSeverity.Information,
                     range: view.selectionRange,
-                    message: `View '${view.name}' has no expose or filter directives — it will show all elements`,
+                    message: `View '${displayName(view)}' has no expose or filter directives — it will show all elements`,
                     source: 'sysml',
                     code: 'view-no-scope',
+                    data: { symbolId: view.symbolId },
                 });
             }
         }
@@ -894,9 +901,10 @@ export class SemanticValidator {
                 range: s.selectionRange,
                 message:
                     `Redefinition multiplicity [${s.multiplicity ?? '?'}] is incompatible with base ` +
-                    `'${base.name}' multiplicity [${base.multiplicity ?? '?'}]`,
+                    `'${displayName(base)}' multiplicity [${base.multiplicity ?? '?'}]`,
                 source: 'sysml',
                 code: 'invalid-redefinition-multiplicity',
+                data: { symbolId: s.symbolId },
             });
         }
 
@@ -983,8 +991,8 @@ export class SemanticValidator {
                 if (hasCommonAncestor) continue;
 
                 // Check shared feature names (compatible flow items)
-                const lChildNames = new Set(lChildren.map(c => c.name));
-                const hasSharedFeature = rChildren.some(c => lChildNames.has(c.name));
+                const lChildNames = new Set(lChildren.flatMap(memberNamesOf));
+                const hasSharedFeature = rChildren.some(c => memberNamesOf(c).some(name => lChildNames.has(name)));
                 if (hasSharedFeature) continue;
             }
 
@@ -1041,7 +1049,7 @@ export class SemanticValidator {
 
     /** The feature `name` of `owner`: its own member, else a member of one of its types or their supertypes. */
     private findFeature(owner: SysMLSymbol, name: string, indexes: SymbolIndexes): SysMLSymbol | undefined {
-        const own = (indexes.byParent.get(namespaceKeyOf(owner)) ?? []).find(s => s.name === name);
+        const own = (indexes.byParent.get(namespaceKeyOf(owner)) ?? []).find(s => memberNamesOf(s).includes(name));
         if (own) return own;
         for (const typeName of owner.typeNames) {
             // KerML 1.0 section 7.3.4.6 resolves a chain segment in the
@@ -1049,7 +1057,7 @@ export class SemanticValidator {
             const type = this.namespaceResolver.resolveNameFrom(owner, typeName, indexes);
             if (!type || !isDefinition(type.kind)) continue;
             for (const definition of this.getSpecializationHierarchy(type, indexes).flat()) {
-                const member = (indexes.byParent.get(namespaceKeyOf(definition)) ?? []).find(s => s.name === name);
+                const member = (indexes.byParent.get(namespaceKeyOf(definition)) ?? []).find(s => memberNamesOf(s).includes(name));
                 if (member) return member;
             }
         }
@@ -1145,7 +1153,7 @@ export class SemanticValidator {
                     message: `Unresolved constraint reference '${expr}' in scope '${displayName(parent)}'`,
                     source: 'sysml',
                     code: 'unresolved-constraint-reference',
-                    data: { uri, scopeName: parent.name },
+                    data: { uri, scopeName: nameText(parent), scopeId: parent.symbolId },
                 });
             }
         }
@@ -1180,7 +1188,7 @@ export class SemanticValidator {
     }
 
     private resolvePathFromParent(path: string[], parentMembers: SysMLSymbol[], indexes: SymbolIndexes): boolean {
-        const root = parentMembers.find(s => s.name === path[0]);
+        const root = parentMembers.find(s => memberNamesOf(s).includes(path[0]));
         if (!root) return false;
         if (path.length === 1) return true;
 
@@ -1194,7 +1202,7 @@ export class SemanticValidator {
             // SysML v2.0 §7.6.6 feature-chain segments after the root must resolve
             // as public members of the preceding feature's type.
             const member = this.getConstraintScopeMembers(typeDef, indexes, true)
-                .find(s => s.name === path[i]);
+                .find(s => memberNamesOf(s).includes(path[i]));
             if (!member) return false;
             current = member;
         }
@@ -1259,12 +1267,14 @@ export class SemanticValidator {
             for (const member of membersByLevel[level]) {
                 if (level > 0 && member.visibility === 'private') continue;
                 if (publicOnly && member.visibility !== undefined && member.visibility !== 'public') continue;
-                if (hiddenMembers.has(member.symbolId) || membersByName.has(member.name)) continue;
-                membersByName.set(member.name, member);
+                // A member shadows an inherited one known by any of the same names.
+                const names = memberNamesOf(member);
+                if (hiddenMembers.has(member.symbolId) || names.some(name => membersByName.has(name))) continue;
+                for (const name of names) membersByName.set(name, member);
             }
         }
 
-        return [...membersByName.values()];
+        return [...new Set(membersByName.values())];
     }
 
     private resolveInheritedRedefinitionTarget(
@@ -1294,7 +1304,7 @@ export class SemanticValidator {
                 while (frontier.length > 0 && candidates.length === 0) {
                     for (const type of frontier) {
                         for (const member of indexes.byParent.get(namespaceKeyOf(type)) ?? []) {
-                            if (member.name === targetName && member.visibility !== 'private'
+                            if (memberNamesOf(member).includes(targetName) && member.visibility !== 'private'
                                 && !alreadyRedefined.has(member.symbolId)) {
                                 candidates.push(member);
                             }
@@ -1351,7 +1361,7 @@ export class SemanticValidator {
     }
 
     private matchesSpecializationQualifier(type: SysMLSymbol, qualifier: string): boolean {
-        return type.name === qualifier
+        return memberNamesOf(type).includes(qualifier)
             || type.qualifiedName === qualifier
             || type.qualifiedName?.endsWith(`::${qualifier}`) === true;
     }
@@ -1504,12 +1514,15 @@ export class SemanticValidator {
                 definitionsByScope.set(scope, scopeMap);
             }
 
-            let defs = scopeMap.get(symbol.name);
-            if (!defs) {
-                defs = [];
-                scopeMap.set(symbol.name, defs);
+            // By each name it is known by: `<A> X` and `<A> Y` both define `A` (KerML 8.3.2.4.3).
+            for (const name of memberNamesOf(symbol)) {
+                let defs = scopeMap.get(name);
+                if (!defs) {
+                    defs = [];
+                    scopeMap.set(name, defs);
+                }
+                defs.push(symbol);
             }
-            defs.push(symbol);
         }
 
         for (const scopeMap of definitionsByScope.values()) {
@@ -1522,6 +1535,7 @@ export class SemanticValidator {
                             message: `Duplicate definition: '${name}' is defined ${defs.length} times in the same scope`,
                             source: 'sysml',
                             code: 'duplicate-definition',
+                            data: { symbolId: def.symbolId },
                         });
                     }
                 }
@@ -1554,21 +1568,23 @@ export class SemanticValidator {
      */
     private checkAmbiguousNamespaceName(symbols: SysMLSymbol[], allSymbols: SysMLSymbol[]): Diagnostic[] {
         const diagnostics: Diagnostic[] = [];
-        const conflicts = findConflictingDeclarations(allSymbols);
+        const conflicts = findConflicts(allSymbols);
         if (conflicts.size === 0) return diagnostics;
 
         for (const symbol of symbols) {
-            const conflicting = conflicts.get(symbol);
-            if (!conflicting) continue;
+            const conflict = conflicts.get(symbol);
+            if (!conflict) continue;
 
-            const others = otherDeclarations(conflicting, symbol);
+            // The names it clashes on, which may be a short name (`<A> X` and `<A> Y` clash on `A`).
+            const names = conflict.names.map(name => `'${name}'`).join(', ');
+            const others = otherDeclarations(conflict.declarations, symbol);
             diagnostics.push({
                 severity: DiagnosticSeverity.Error,
                 range: symbol.selectionRange,
-                message: `Ambiguous name '${symbol.name}': also declared as ${describeConflictingDeclarations(others, symbol.uri)}.`,
+                message: `Ambiguous ${conflict.names.length > 1 ? 'names' : 'name'} ${names}: also declared as ${describeConflictingDeclarations(others, symbol.uri)}.`,
                 source: 'sysml',
                 code: 'ambiguous-namespace-name',
-                data: { name: symbol.name },
+                data: { name: nameText(symbol), symbolId: symbol.symbolId },
             });
         }
 

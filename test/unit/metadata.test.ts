@@ -43,7 +43,8 @@ package test{
 
         const metadataSymbols = symbols.filter(s => s.kind === 'metadata def');
         expect(metadataSymbols.length).toBe(2);
-        expect(metadataSymbols.map(s => s.name)).toEqual(['product', 'component']);
+        // `metadata def <product>` declares a short name and no name (KerML 8.3.2.1.2).
+        expect(metadataSymbols.map(s => [s.name, s.shortName])).toEqual([['', 'product'], ['', 'component']]);
 
         // Verify annotated elements have correct names (not annotation names)
         const myProductType = symbols.find(s => s.name === 'myProductType');

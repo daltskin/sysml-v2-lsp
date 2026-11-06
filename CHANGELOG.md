@@ -6,6 +6,32 @@
 
 - `sysml/model` marks a flow usage declared as a message with the attribute `isMessage: true` (SysML 8.2.2.16 `Message`), told apart by the production it was parsed from. Its `type` stays `flow`; a flow and a succession flow are unchanged.
 
+## [0.42.0]
+
+### Security
+
+- Override `minimatch` used by `@typescript-eslint/typescript-estree` to version 11.0.1 or later to fix CVE-2026-118764, without downgrading `typescript-eslint`.
+
+### Fixed
+
+- `sysml/model` reports an element's short name, `shortName`, next to its `name` (KerML 8.3.2.1.2): in `elements`, as a node of `activityDiagrams` and `sequenceDiagrams`, and in `resolvedTypes`. A relationship that is itself an element (a connection, flow, allocation or transition) keeps its label as `name` and is identified by its `symbolId`, from which its names are read. An element declared with only a short name has an empty `name` instead of its short name; it stays named, keeps its qualified name and is still referenced, completed and checked by its short name. A message or flow without a payload no longer reports its short name as its payload.
+- An element's short name comes only from its own declaration (KerML 8.2.3.1): a member's short name no longer names its owner. A transition (SysML 8.2.2.18.3) and an alias (SysML 8.2.2.5.1) report their own name and short name instead of joining them or taking the short name as the name; an alias is selected, and go to definition goes to it, by its name, else its short name.
+- A usage without a name or short name of its own that redefines a feature takes that feature's name and short name (KerML 8.3.3.3.4 `namingFeature()`), and go to definition on the reference goes to that feature. A redefined feature chain is named after the feature the chain ends at, the one go to definition finds, its features resolved from the owner (KerML 8.2.3.5.1); this departs from a strict reading of KerML, in which a chain has no naming feature and the usage no name.
+- A `perform`, `exhibit`, `include` or `variant` usage written as a reference has the features of the feature it references, as for any subsetting (KerML 8.3.3.3.9 `ReferenceSubsetting`, SysML 8.3.17.14): a redefinition in its body, and a chain through a sibling usage named after the same feature, are named after the referenced feature's feature. The reference is resolved from the namespace owning the usage, never to the usage itself (KerML 8.2.3.5.2).
+- A resolved reference is identified by its symbol ID: it is no longer swapped for another element of a different kind that shares its qualified name.
+- A clash through a short name (KerML 8.3.2.4.3) is reported by the name the declarations clash on, both as an ambiguous name and as a duplicate definition.
+- A reference by the short name of an element that also has a name counts like one by its name in `satisfy` and `verify`, and completion offers each of an element's names.
+- A diagnostic about one element identifies it by its symbol ID: `symbolId` in the editor diagnostics' data, `id` in `sysml/model` diagnostics. Their name fields are unchanged.
+
+### Changed
+
+- Display text (outline, workspace symbols, hover, messages, `displayName`, Mermaid class labels) shows an element's short name and name as declared, as in the graphical name compartment (SysML 8.2.3, Table 4). MCP tool output reports `shortName` next to `name`, which is unchanged.
+- An activity action in `sysml/model` identifies its owner by ID, `parentId` (KerML 8.3.2.1.2 `owner`), also when it is a sub-action, next to `parent`, its owner's name as before.
+
+### Deprecated
+
+- An activity action's `children`, its sub-actions' names (or short names): it can't tell a short name from a name. Use `subActions`, which lists the same sub-actions in the same order with their names and short names.
+
 ## [0.41.0]
 
 ### Changed

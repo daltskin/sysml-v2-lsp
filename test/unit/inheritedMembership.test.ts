@@ -251,9 +251,10 @@ package Example {
             outline.provideDocumentSymbols({ textDocument: { uri } })[0].children![0].children![0].name,
             model.getModel(uri, 1, ['elements']).elements![0].children[0].children[0].name,
         ];
-        expect(names()).toEqual(['spare', 'spare']);
+        // The outline shows the short name the variant takes from `<s> spare` too (KerML 8.3.3.3.4).
+        expect(names()).toEqual(['<s> spare', 'spare']);
         dm.parse(TextDocument.create(libUri, 'sysml', 2, libText.replace('spare', 'replacement')));
-        expect(names()).toEqual(['replacement', 'replacement']);
+        expect(names()).toEqual(['<s> replacement', 'replacement']);
         expect(definition.provideDefinition({ textDocument: { uri }, position: variantPosition }))
             .toMatchObject({ uri: libUri, range: { start: { line: 6 } } });
     });

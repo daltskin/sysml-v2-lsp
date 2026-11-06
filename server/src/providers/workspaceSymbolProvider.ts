@@ -25,7 +25,7 @@ export class WorkspaceSymbolProvider {
 
         for (const sym of allSymbols) {
             // Filter by query (empty query returns all)
-            if (query && !sym.name.toLowerCase().includes(query) &&
+            if (query && !displayName(sym).toLowerCase().includes(query) &&
                 !sym.qualifiedName?.toLowerCase().includes(query)) {
                 continue;
             }

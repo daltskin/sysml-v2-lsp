@@ -592,7 +592,7 @@ part def <whl> Wheel;`;
         expect(results.whl).toEqual([]);
     });
 
-    it('treats a declared <shortName> with no long name as the element\'s only name', async () => {
+    it('finds an element with a short name and no name by its short name only (KerML 8.3.2.1.2)', async () => {
         const { ElementLookupProvider } = await import('../../server/src/model/elementLookupProvider.js');
 
         const text = `
@@ -604,13 +604,11 @@ part def <whl>;`;
         const { results } = provider.elementLookup({ queries: [{ name: 'whl', kind: 'shortName' }] });
 
         expect(results.whl).toHaveLength(1);
-        expect(results.whl[0].qualifiedName).toBe('whl');
+        expect(results.whl[0]).toMatchObject({ name: '', shortName: 'whl', qualifiedName: 'whl' });
 
-        // Same underlying element, reached the other way: its only name also serves as its
-        // plain declared `name`.
-        const { results: byPlainName } = provider.elementLookup({ queries: [{ name: 'whl' }] });
-        expect(byPlainName.whl).toHaveLength(1);
-        expect(byPlainName.whl[0].qualifiedName).toBe('whl');
+        // It has no name, so a name query does not find it.
+        const { results: byPlainName } = provider.elementLookup({ queries: [{ name: 'whl', kind: 'name' }] });
+        expect(byPlainName.whl ?? []).toHaveLength(0);
     });
 
     it('restricts a shortName-kind match to the given scope too', async () => {

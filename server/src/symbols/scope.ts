@@ -1,4 +1,4 @@
-import { SysMLSymbol } from './sysmlElements.js';
+import { SysMLSymbol, memberNamesOf } from './sysmlElements.js';
 
 /**
  * A lexical scope in the SysML model.
@@ -19,7 +19,7 @@ export class Scope {
      * Define a new symbol in this scope.
      */
     define(symbol: SysMLSymbol): void {
-        this.symbols.set(symbol.name, symbol);
+        for (const name of memberNamesOf(symbol)) this.symbols.set(name, symbol);
     }
 
     /**
