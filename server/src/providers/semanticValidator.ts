@@ -3,10 +3,10 @@ import { DocumentManager } from '../documentManager.js';
 import { getLibraryPackageNames, resolveLibraryType } from '../library/libraryIndex.js';
 import { SysMLModelProvider } from '../model/sysmlModelProvider.js';
 import { NamespaceResolver, SymbolIndexes, buildSymbolIndexes, describeConflictingDeclarations, findConflicts, NamespaceKey, namespaceKeyOf, otherDeclarations, ownerKeyOf, ownerOf } from '../symbols/namespaceResolver.js';
-import { SysMLElementKind, SysMLSymbol, displayName, escapedName, isAnonymous, isDefinition, memberNamesOf, nameText } from '../symbols/sysmlElements.js';
+import { SysMLElementKind, SysMLSymbol, displayName, isAnonymous, isDefinition, memberNamesOf, nameText } from '../symbols/sysmlElements.js';
 import { describeNamingIssue, NamingIssue } from '../symbols/symbolTable.js';
 import { resolveTypeName } from '../symbols/typeResolution.js';
-import { scanFeaturePaths, splitQualifiedName, stripComments } from '../utils/identUtils.js';
+import { escapedName, scanFeaturePaths, splitQualifiedName, stripComments } from '../utils/identUtils.js';
 
 const CONSTRAINT_KEYWORDS = new Set([
     'and', 'or', 'not', 'xor', 'implies', 'if', 'then', 'else', 'true', 'false', 'null',
@@ -443,7 +443,7 @@ export class SemanticValidator {
             const visited = new Set<string>();
             // A specialization written with either of its names closes the cycle.
             for (const name of memberNamesOf(def)) visited.add(name);
-            const cycle = this.followSpecializationChain(escapedName(def) ?? '', def.typeNames, visited, indexes);
+            const cycle = this.followSpecializationChain(isAnonymous(def) ? '' : escapedName(nameText(def)), def.typeNames, visited, indexes);
             if (cycle) {
                 diagnostics.push({
                     severity: DiagnosticSeverity.Error,
@@ -762,9 +762,9 @@ export class SemanticValidator {
             if (!isVerified) {
                 const message = isSatisfied
                     ? `Requirement '${displayName(req)}' is satisfied but has no verification case — ` +
-                      `consider adding: verify ${escapedName(req)} by <VerificationCase>;`
+                      `consider adding: verify ${escapedName(nameText(req))} by <VerificationCase>;`
                     : `Requirement '${displayName(req)}' has no verification case — ` +
-                      `consider adding: verify ${escapedName(req)} by <VerificationCase>;`;
+                      `consider adding: verify ${escapedName(nameText(req))} by <VerificationCase>;`;
                 diagnostics.push({
                     severity: DiagnosticSeverity.Warning,
                     range: req.selectionRange,

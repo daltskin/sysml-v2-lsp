@@ -1,3 +1,6 @@
+import { BailErrorStrategy, BaseErrorListener, CharStream, CommonTokenStream, Token } from 'antlr4ng';
+import { SysMLv2Lexer } from '../generated/SysMLv2Lexer.js';
+import { SysMLv2Parser } from '../generated/SysMLv2Parser.js';
 import { SYSML_KEYWORDS, SYSML_RESERVED_KEYWORDS } from './sysmlKeywords.js';
 
 /**
@@ -47,7 +50,11 @@ export function unquoteName(text: string): string {
 
 const BASIC_NAME = /^[A-Za-z_][A-Za-z_0-9]*$/;
 
-/** `name` as an unrestricted name: in single quotes, with special characters escaped (KerML 8.2.2.3). */
+/**
+ * `name` as an unrestricted name: in single quotes, with special characters escaped (KerML 8.2.2.3).
+ * Departs from KerML Table 4, which has no escape for a carriage return and no way to write another
+ * control character: a carriage return is written `\r`, which the lexer reads back, others as is.
+ */
 function toUnrestrictedName(name: string): string {
     const escaped = name.replace(/[\\'\b\t\n\f\r]/g, ch => {
         const entry = Object.entries(ESCAPES).find(([, value]) => value === ch)!;
@@ -64,8 +71,9 @@ export function quoteName(name: string): string {
 
 /**
  * A name as KerML `escapedName()` writes it (KerML 8.3.2.1.2): as is if it has the form of a basic
- * name, ASCII and not a reserved keyword (SysML v2 7.2.2, 8.2.2.1.2), otherwise as an
- * unrestricted name.
+ * name, ASCII and not a reserved keyword (SysML v2 7.2.2), otherwise as an unrestricted name. The
+ * reserved keywords are the grammar's, see `SYSML_RESERVED_KEYWORDS` for how they depart from
+ * SysML 8.2.2.1.2.
  */
 export function escapedName(name: string): string {
     return BASIC_NAME.test(name) && !SYSML_RESERVED_KEYWORDS.has(name) ? name : toUnrestrictedName(name);
@@ -79,25 +87,42 @@ export function escapedQualifiedName(qualifiedName: string): string {
     return splitQualifiedName(qualifiedName).map(escapedName).join('::');
 }
 
+/** A qualified name read from the textual notation: whether it starts with `$::`, and its names. */
+export interface ParsedQualifiedName {
+    readonly global: boolean;
+    readonly names: readonly string[];
+}
+
+/** Records that the lexer or parser met text outside the rule it was asked for. */
+class FailureListener extends BaseErrorListener {
+    failed = false;
+
+    override syntaxError(): void {
+        this.failed = true;
+    }
+}
+
 /**
- * The names of a qualified name written in the textual notation (KerML 8.2.3.5.1): segments
- * separated by `::`, each a basic name that isn't a reserved keyword or an unrestricted name
- * (SysML v2 7.2.2). Undefined for any other text.
+ * `text` read as a qualified name in the textual notation (KerML 8.2.3.5.1), by the grammar's own
+ * lexer and `qualifiedName` rule: an optional global `$::` (KerML 7.2.5.1), then names separated
+ * by `::`, each decoded as `unquoteName` does. Undefined unless the whole text is one qualified name.
  */
-export function parseQualifiedName(text: string): string[] | undefined {
-    const names: string[] = [];
-    let pos = 0;
-    for (;;) {
-        while (pos < text.length && /\s/.test(text[pos])) pos++;
-        // An empty unrestricted name is a name too.
-        const span = text.startsWith("''", pos) ? { name: '', end: pos + 2 } : readNameAt(text, pos);
-        if (!span || (text[pos] !== "'" && SYSML_RESERVED_KEYWORDS.has(span.name))) return undefined;
-        names.push(span.name);
-        pos = span.end;
-        while (pos < text.length && /\s/.test(text[pos])) pos++;
-        if (pos === text.length) return names;
-        if (!text.startsWith('::', pos)) return undefined;
-        pos += 2;
+export function parseQualifiedName(text: string): ParsedQualifiedName | undefined {
+    const listener = new FailureListener();
+    const lexer = new SysMLv2Lexer(CharStream.fromString(text));
+    lexer.removeErrorListeners();
+    lexer.addErrorListener(listener);
+    const tokens = new CommonTokenStream(lexer);
+    const parser = new SysMLv2Parser(tokens);
+    parser.removeErrorListeners();
+    parser.addErrorListener(listener);
+    parser.errorHandler = new BailErrorStrategy();
+    try {
+        const ctx = parser.qualifiedName();
+        if (listener.failed || tokens.LA(1) !== Token.EOF) return undefined;
+        return { global: ctx.DOLLAR() !== null, names: ctx.name().map(name => unquoteName(name.getText())) };
+    } catch {
+        return undefined;
     }
 }
 
@@ -122,7 +147,7 @@ export function splitQualifiedName(text: string): string[] {
 /**
  * Keep internal names readable, quoting only segments that would be ambiguous when joined or split
  * again: one holding `::`, a quote, a backslash or a control character, starting or ending with
- * `:` or whitespace, spelled `$` (the global qualifier, KerML 7.2.2), or empty.
+ * `:` or whitespace, spelled `$` (the global qualifier, KerML 7.2.5.1), or empty.
  */
 export function joinQualifiedName(parts: readonly string[]): string {
     return parts.map(part => /::|^:|:$|['\\\r\n\t\b\f]|^\s|\s$|^\$?$/.test(part) ? quoteName(part) : part).join('::');
@@ -130,7 +155,7 @@ export function joinQualifiedName(parts: readonly string[]): string {
 
 /**
  * A reference in the textual notation: a feature chain (KerML 7.3.4.6) of qualified names, each
- * optionally global (KerML 7.2.2), optionally conjugated (SysML 8.3.12.3), each name as KerML
+ * optionally global (`$::`, KerML 7.2.5.1, 8.2.3.5.1), optionally conjugated (SysML 8.3.12.3), each name as KerML
  * `escapedName()` writes it (8.3.2.1.2), the global qualifier, `.` and `~` outside the quotes.
  */
 export function joinReference(chain: readonly { global: boolean; names: readonly string[] }[], conjugated = false): string {

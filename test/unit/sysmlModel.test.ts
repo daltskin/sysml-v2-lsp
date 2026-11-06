@@ -3037,6 +3037,73 @@ package Q {
                 expect(hotspots).not.toContain('Q::Part Def');
             });
 
+            it('quotes each target name in the keyword and the symbol notation of every specialization kind', async () => {
+                const model = await getModelForText(`
+package 'Top Pkg' {
+    part def 'Base 1';
+    part def 'part';
+    part def S1 :> 'Base 1';
+    part def S2 specializes 'part';
+    part def H { part 'p-1'; part 'part'; ref part 'r 1'; part 'type'; }
+    part h1 : H {
+        part a :> 'p-1';
+        part b subsets 'part';
+        part c :>> 'p-1';
+        part d redefines 'part';
+        part e ::> 'r 1';
+        part f references 'r 1';
+        part g defined by 'Base 1';
+        part k typed by 'part';
+        part m : type;
+    }
+}
+`, ['elements']);
+                const pkg = ['Top Pkg'];
+                expect(specializationsOf(model, [...pkg, 'S1'])).toEqual([['specializes', "'Base 1'", ':>']]);
+                expect(specializationsOf(model, [...pkg, 'S2'])).toEqual([['specializes', "'part'", 'specializes']]);
+                expect(specializationsOf(model, [...pkg, 'h1', 'a'])).toEqual([['subsetting', "'p-1'", ':>']]);
+                expect(specializationsOf(model, [...pkg, 'h1', 'b'])).toEqual([['subsetting', "'part'", 'subsets']]);
+                expect(specializationsOf(model, [...pkg, 'h1', 'c'])).toEqual([['redefinition', "'p-1'", ':>>']]);
+                expect(specializationsOf(model, [...pkg, 'h1', 'd'])).toEqual([['redefinition', "'part'", 'redefines']]);
+                expect(specializationsOf(model, [...pkg, 'h1', 'e'])).toEqual([['referenceSubsetting', "'r 1'", '::>']]);
+                expect(specializationsOf(model, [...pkg, 'h1', 'f'])).toEqual([['referenceSubsetting', "'r 1'", 'references']]);
+                expect(specializationsOf(model, [...pkg, 'h1', 'g'])).toEqual([['typing', "'Base 1'", undefined]]);
+                expect(specializationsOf(model, [...pkg, 'h1', 'k'])).toEqual([['typing', "'part'", undefined]]);
+                expect(specializationsOf(model, [...pkg, 'h1', 'm'])).toEqual([['typing', 'type', undefined]]);
+            });
+
+            it('quotes the names of a feature chain, global or not, with `$::` and `.` outside the quotes', async () => {
+                const model = await getModelForText(`
+package 'Top Pkg' {
+    part def 'B C' { part 'e-f'; part d; part 'part'; }
+    part v : 'B C';
+    part h : 'B C';
+    part w1 :> v.'e-f';
+    part w2 :> h.'part';
+    part w3 :> $::'Top Pkg'::v.'e-f';
+    part w4 :> $::'Top Pkg'::v.d;
+}
+`, ['elements']);
+                const pkg = ['Top Pkg'];
+                expect(specializationsOf(model, [...pkg, 'w1'])).toEqual([['subsetting', "v.'e-f'", ':>']]);
+                expect(specializationsOf(model, [...pkg, 'w2'])).toEqual([['subsetting', "h.'part'", ':>']]);
+                expect(specializationsOf(model, [...pkg, 'w3'])).toEqual([['subsetting', "$::'Top Pkg'::v.'e-f'", ':>']]);
+                expect(specializationsOf(model, [...pkg, 'w4'])).toEqual([['subsetting', "$::'Top Pkg'::v.d", ':>']]);
+            });
+
+            it('keeps a short name unquoted, and quotes it in the qualified name of an element with only a short name', async () => {
+                const model = await getModelForText(`
+package Q {
+    part def <'s-1'> 'Long Name';
+    part def <'only-short'>;
+}
+`, ['elements', 'resolvedTypes']);
+                const children = model.elements![0].children!;
+                expect(children.map(e => [e.name, e.shortName])).toEqual([['Long Name', 's-1'], ['', 'only-short']]);
+                expect(model.resolvedTypes!["Q::'Long Name'"]).toMatchObject({ simpleName: 'Long Name', shortName: 's-1' });
+                expect(model.resolvedTypes!["Q::'only-short'"]).toMatchObject({ qualifiedName: "Q::'only-short'" });
+            });
+
             it('keeps names and simple names unquoted', async () => {
                 const model = await getModelForText(`
 package Q {

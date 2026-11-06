@@ -19,25 +19,30 @@ import type { RangeDTO } from './sysmlModelTypes.js';
  * be spelled identically, and nothing marks a query as "this is a short
  * name" other than the caller saying so).
  *
- * - `'name'` (the default when `kind` is omitted and `name` contains no
- *   `::`) -- matches a declared long `name` only. Never matches a short-name
+ * - `'name'` (the default when `kind` is omitted and `name` isn't inferred
+ *   to be a qualified name, see `ElementLookupQuery`) -- matches a declared
+ *   long `name` only, as declared (unquoted). Never matches a short-name
  *   alias, even one spelled the same.
  * - `'shortName'` -- matches a declared `<shortName>` alias only, by its
  *   plain value (no angle brackets in `name` -- those are grammar syntax for
  *   *declaring* a short name, not part of the name itself, and are not
  *   accepted here). Never matches a long name.
- * - `'qualifiedName'` (the default when `kind` is omitted and `name`
- *   contains `::`) -- matches by `qualifiedName`; see `ElementLookupQuery.name`'s
+ * - `'qualifiedName'` -- matches by `qualifiedName`; see `ElementLookupQuery.name`'s
  *   doc comment for exactly how, including the `scope` interaction. `name`, and
  *   `scope`, are read as qualified names in the textual notation (KerML 8.2.3.5.1),
- *   so any valid spelling of the same names matches; other text matches nothing.
+ *   by the grammar's lexer and `qualifiedName` rule, so any spelling of the same
+ *   names matches, quoted or not; other text matches nothing. A global name
+ *   (`$::`, KerML 7.2.5.1) matches only the element with exactly that qualified
+ *   name, from the root, and ignores `scope`.
  */
 export type ElementLookupQueryKind = 'name' | 'shortName' | 'qualifiedName';
 
 /**
  * One name to look up. `kind` says which of the three forms `name` is;
- * when omitted, it's inferred from `name`'s shape (`'qualifiedName'` if it
- * contains `::`, else `'name'`) -- `'shortName'` is never inferred and must
+ * when omitted, it's inferred: `'qualifiedName'` if `name` is a qualified
+ * name in the textual notation that is global, has several names, or is
+ * written other than as its one name, such as quoted, else `'name'` --
+ * `'shortName'` is never inferred and must
  * be requested explicitly, since a short name can't otherwise be told apart
  * from a same-spelled long name. For `kind: 'qualifiedName'`, `name` need
  * not be the complete/absolute path -- see `scope`'s doc comment for how an

@@ -15,7 +15,7 @@ describe('escapedName', () => {
     });
 
     it('quotes a name spelled like a reserved keyword (SysML v2 7.2.2, 8.2.2.1.2)', () => {
-        for (const name of ['part', 'specializes', 'true', 'class']) expect(escapedName(name)).toBe(`'${name}'`);
+        for (const name of ['part', 'specializes', 'true', 'class', 'datatype', 'bool']) expect(escapedName(name)).toBe(`'${name}'`);
     });
 
     it('quotes a name that has not the form of a basic name', () => {
@@ -34,6 +34,12 @@ describe('escapedName', () => {
         expect(escapedName("it's")).toBe("'it\\'s'");
         expect(escapedName('a\\b')).toBe("'a\\\\b'");
         expect(escapedName('a\tb\nc')).toBe("'a\\tb\\nc'");
+        expect(escapedName('a\bb\fc"d')).toBe("'a\\bb\\fc\"d'");
+    });
+
+    it('writes a carriage return `\\r`, which KerML Table 4 lacks, and other control characters as is', () => {
+        expect(escapedName('a\rb')).toBe("'a\\rb'");
+        expect(escapedName('a\u0001b')).toBe("'a\u0001b'");
     });
 
     it("takes the reserved keywords from the grammar: every lexer keyword its `name` rule doesn't accept", () => {
@@ -66,26 +72,50 @@ describe('joinReference', () => {
 });
 
 describe('parseQualifiedName', () => {
+    const local = (...names: string[]) => ({ global: false, names });
+
     it('reads basic and unrestricted names, separated by `::`', () => {
-        expect(parseQualifiedName("Q::'P-1'")).toEqual(['Q', 'P-1']);
-        expect(parseQualifiedName("Q::'part'")).toEqual(['Q', 'part']);
-        expect(parseQualifiedName("'Vehicle'")).toEqual(['Vehicle']);
-        expect(parseQualifiedName('Q::type')).toEqual(['Q', 'type']);
-        expect(parseQualifiedName("Q::'class'")).toEqual(['Q', 'class']);
-        expect(parseQualifiedName("'a::b'::c")).toEqual(['a::b', 'c']);
-        expect(parseQualifiedName("'it\\'s'::'a\\\\b'")).toEqual(["it's", 'a\\b']);
-        expect(parseQualifiedName("''")).toEqual(['']);
-        expect(parseQualifiedName("Q :: 'P-1'")).toEqual(['Q', 'P-1']);
+        expect(parseQualifiedName("Q::'P-1'")).toEqual(local('Q', 'P-1'));
+        expect(parseQualifiedName("Q::'part'")).toEqual(local('Q', 'part'));
+        expect(parseQualifiedName("'Vehicle'")).toEqual(local('Vehicle'));
+        expect(parseQualifiedName('Q::type')).toEqual(local('Q', 'type'));
+        expect(parseQualifiedName("Q::'class'")).toEqual(local('Q', 'class'));
+        expect(parseQualifiedName("'a::b'::c")).toEqual(local('a::b', 'c'));
+        expect(parseQualifiedName("'it\\'s'::'a\\\\b'")).toEqual(local("it's", 'a\\b'));
+        expect(parseQualifiedName("''")).toEqual(local(''));
+        expect(parseQualifiedName("Q :: 'P-1'")).toEqual(local('Q', 'P-1'));
+        expect(parseQualifiedName("\tQ ::\n'P-1' ")).toEqual(local('Q', 'P-1'));
     });
 
-    it('reads nothing from text that is not a qualified name', () => {
-        for (const text of ['', 'Q::P-1', 'Q::part', 'Q::class', 'Part Def', 'Q::', '::Q', 'Q:::R', "Q::'open", '$::Q', 'a.b', '~P']) {
-            expect(parseQualifiedName(text)).toBeUndefined();
+    it('reads a global qualified name, `$::` first (KerML 7.2.5.1, 8.2.3.5.1)', () => {
+        expect(parseQualifiedName('$::Q')).toEqual({ global: true, names: ['Q'] });
+        expect(parseQualifiedName("$::Q::'P-1'")).toEqual({ global: true, names: ['Q', 'P-1'] });
+        expect(parseQualifiedName("$ :: 'Root Def'")).toEqual({ global: true, names: ['Root Def'] });
+    });
+
+    it('reads names, whitespace and notes as the lexer does: any escape, only space, tab, CR and LF, `//` notes skipped', () => {
+        // The lexer accepts any character after `\`; one KerML Table 4 doesn't list stays as written.
+        expect(parseQualifiedName("E::'unk\\qx'")).toEqual(local('E', 'unk\\qx'));
+        expect(parseQualifiedName("E::'a\\'b'")).toEqual(local('E', "a'b"));
+        expect(parseQualifiedName("E::'line\nbreak'")).toEqual(local('E', 'line\nbreak'));
+        expect(parseQualifiedName("\r\nQ\t::\r\nVehicle\n")).toEqual(local('Q', 'Vehicle'));
+        expect(parseQualifiedName("Q:: // note\nVehicle")).toEqual(local('Q', 'Vehicle'));
+        for (const space of ['\u00a0', '\u2003', '\f', '\v']) {
+            expect(parseQualifiedName(`Q::${space}Vehicle`), JSON.stringify(space)).toBeUndefined();
+        }
+    });
+
+    it('reads nothing from text that is not one qualified name', () => {
+        for (const text of ['', ' ', 'Q::P-1', 'Q::part', 'Q::class', 'part', 'Part Def', 'Q::', '::Q', 'Q:::R',
+            "Q::'open", '$Q', '$::', 'Q::$::R', 'a.b', '~P', 'Q::Vehicle;', 'Q Vehicle',
+            'Q::/* c */Vehicle', "Q::'a\\'"]) {
+            expect(parseQualifiedName(text), text).toBeUndefined();
         }
     });
 
     it('reads back what escapedQualifiedName() writes', () => {
-        const names = ['Q', 'P-1', 'part', 'a::b', "it's", '', 'Ω', 'type'];
-        expect(parseQualifiedName(escapedQualifiedName(joinQualifiedName(names)))).toEqual(names);
+        const names = ['Q', 'P-1', 'part', 'a::b', "it's", '', 'Ω', 'type', 'language', 'class', 'a\\b',
+            '"x"', 'tab\there', 'line\nbreak', 'bs\bff\f', 'cr\rx', '$', '~P', 'a.b', '1st'];
+        expect(parseQualifiedName(escapedQualifiedName(joinQualifiedName(names)))).toEqual(local(...names));
     });
 });
