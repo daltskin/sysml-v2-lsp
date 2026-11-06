@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Security
+
+- Override `minimatch` used by `@typescript-eslint/typescript-estree` to version 11.0.1 or later to fix CVE-2026-118764, without downgrading `typescript-eslint`.
+
 ### Fixed
 
 - `sysml/model` reports an element's short name, `shortName`, next to its `name` (KerML 8.3.2.1.2): in `elements`, as a node of `activityDiagrams` and `sequenceDiagrams`, and in `resolvedTypes`. A relationship that is itself an element (a connection, flow, allocation or transition) keeps its label as `name` and is identified by its `symbolId`, from which its names are read. An element declared with only a short name has an empty `name` instead of its short name; it stays named, keeps its qualified name and is still referenced, completed and checked by its short name. A message or flow without a payload no longer reports its short name as its payload.

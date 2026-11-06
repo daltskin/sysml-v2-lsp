@@ -190,6 +190,9 @@
     "zod": "^4.3.6"
   },
   "overrides": {
-    "@hono/node-server": "^2.0.9"
+    "@hono/node-server": "^2.0.9",
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "^11.0.1"
+    }
   }
 }
