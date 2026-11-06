@@ -2,7 +2,7 @@
   "name": "sysml-v2-lsp",
   "displayName": "SysML v2 Language Server",
   "description": "Language Server Protocol implementation for SysML v2, powered by ANTLR4",
-  "version": "0.41.0",
+  "version": "0.42.0",
   "publisher": "JamieD",
   "license": "MIT",
   "repository": {
@@ -185,11 +185,14 @@
     "typescript-eslint": "^8.58.2",
     "uuid": "^14.0.2",
     "vitest": "^5.0.3",
-    "vscode-languageserver": "^10.0.0",
+    "vscode-languageserver": "^11.0.0",
     "vscode-languageserver-textdocument": "^1.0.12",
     "zod": "^4.3.6"
   },
   "overrides": {
-    "@hono/node-server": "^2.0.9"
+    "@hono/node-server": "^2.0.9",
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "^11.0.1"
+    }
   }
 }

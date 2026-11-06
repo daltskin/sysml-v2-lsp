@@ -988,6 +988,68 @@ requirement def Safety { stakeholder : Owner; stakeholder regulator; }`;
             );
         });
 
+        it('connects a succession to the action it names by its name or short name', () => {
+            const code = `package P {
+    action def Base { action <a> alpha; }
+    action def Flow :> Base {
+        action :>> a;
+        action b;
+        first a then b;
+    }
+    action def F2 {
+        action <x1> one;
+        action two;
+        action <c>;
+        first start then one;
+        first x1 then two;
+        first two then c;
+    }
+}`;
+            const result = handlePreview(ctx, { code, diagramType: 'activity', uri: 'short-name-successions.sysml' });
+
+            expect(result.errors).toHaveLength(0);
+            const lines = result.diagram.split('\n').map(l => l.trim());
+            const nodes = lines.filter(l => /^P__\w+(\[|\(\()/.test(l));
+            expect(nodes).toEqual([
+                'P__Base__alpha["▶ #lt;a#gt; alpha"]',
+                'P__Flow__alpha["▶ #lt;a#gt; alpha"]',
+                'P__Flow__b["▶ b"]',
+                'P__F2__one["▶ #lt;x1#gt; one"]',
+                'P__F2__two["▶ two"]',
+                'P__F2__c["▶ #lt;c#gt;"]',
+                'P__F2__start((start))',
+            ]);
+            expect(lines.filter(l => l.includes('-->'))).toEqual([
+                'P__Flow__alpha --> P__Flow__b',
+                'P__F2__start --> P__F2__one',
+                'P__F2__one --> P__F2__two',
+                'P__F2__two --> P__F2__c',
+            ]);
+        });
+
+        it('connects a transition to the state it names by its name or short name, in its own owner', () => {
+            const code = `package P {
+    state def T { state <o> other; }
+    state def S {
+        state <o> off;
+        state on;
+        state <h>;
+        transition first o then on;
+        transition first on then h;
+        transition first h then off;
+    }
+}`;
+            const result = handlePreview(ctx, { code, diagramType: 'state', uri: 'short-name-transitions.sysml' });
+
+            expect(result.errors).toHaveLength(0);
+            const lines = result.diagram.split('\n').map(l => l.trim());
+            expect(lines.filter(l => l.includes('-->'))).toEqual([
+                'P__S__off --> P__S__on',
+                'P__S__on --> P__S__h',
+                'P__S__h --> P__S__off',
+            ]);
+        });
+
         it('should respect forced diagramType override', () => {
             const result = handlePreview(ctx, {
                 code: VALID_MODEL,

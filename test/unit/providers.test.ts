@@ -929,9 +929,9 @@ describe('Document Symbol Provider', () => {
         const variantName = () => provider.provideDocumentSymbols({ textDocument: { uri: variationUri } })[0]
             .children!.find(s => s.name !== 'I')!.children!.map(s => s.name);
 
-        expect(variantName()).toEqual(['part1']);
+        expect(variantName()).toEqual(['<p1> part1']);
         dm.parse(TextDocument.create(libUri, 'sysml', 2, 'package Lib { part <p1> part2; }'));
-        expect(variantName()).toEqual(['part2']);
+        expect(variantName()).toEqual(['<p1> part2']);
     });
 
     it('should return empty for unknown URI', async () => {

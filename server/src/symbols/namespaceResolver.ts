@@ -14,8 +14,8 @@
  */
 
 import { canonicalUri, isSameDocumentUri } from '../utils/documentUri.js';
-import { splitQualifiedName } from '../utils/identUtils.js';
-import { FilterExpr, ImportTarget, SysMLElementKind, SysMLSymbol, isAnonymous, isDefinition, isUsage } from './sysmlElements.js';
+import { scanFeaturePaths, splitQualifiedName } from '../utils/identUtils.js';
+import { FilterExpr, ImportTarget, SysMLElementKind, SysMLSymbol, isAnonymous, isDefinition, isUsage, memberNamesOf } from './sysmlElements.js';
 
 /**
  * A namespace's identity for name resolution: a declared one by its
@@ -112,13 +112,7 @@ export function findConflictedQualifiedNames(allSymbols: SysMLSymbol[]): Map<str
     return groupConflicts(allSymbols.filter(s => s.qualifiedName !== undefined), s => s.qualifiedName!);
 }
 
-/**
- * The names a membership of `symbol` is known by: its name and its short name
- * (KerML 8.2.3.5.3, `memberName` and `memberShortName`), each once.
- */
-export function memberNamesOf(symbol: SysMLSymbol): string[] {
-    return symbol.shortName && symbol.shortName !== symbol.name ? [symbol.name, symbol.shortName] : [symbol.name];
-}
+export { memberNamesOf };
 
 /**
  * Every declaration whose name is not distinguishable from another one's in
@@ -134,15 +128,27 @@ export function memberNamesOf(symbol: SysMLSymbol): string[] {
  * or short name, e.g. `part def <A> Alpha;` and `part def A;`.
  */
 export function findConflictingDeclarations(allSymbols: SysMLSymbol[]): Map<SysMLSymbol, SysMLSymbol[]> {
-    const conflicting = new Map<SysMLSymbol, SysMLSymbol[]>();
-    const add = (groups: Iterable<SysMLSymbol[]>) => {
-        for (const group of groups) {
-            for (const s of group) {
-                conflicting.set(s, [...new Set([...(conflicting.get(s) ?? []), ...group])]);
-            }
+    return new Map([...findConflicts(allSymbols)].map(([symbol, { declarations }]) => [symbol, declarations]));
+}
+
+/**
+ * As `findConflictingDeclarations`, with the names each declaration clashes
+ * on: a name or short name it shares with another (KerML 8.3.2.4.3), which
+ * need not be the one its qualified name is built from.
+ */
+export function findConflicts(allSymbols: SysMLSymbol[]): Map<SysMLSymbol, { declarations: SysMLSymbol[]; names: string[] }> {
+    const conflicting = new Map<SysMLSymbol, { declarations: SysMLSymbol[]; names: string[] }>();
+    const add = (name: string, group: SysMLSymbol[]) => {
+        for (const s of group) {
+            const found = conflicting.get(s);
+            conflicting.set(s, {
+                declarations: [...new Set([...(found?.declarations ?? []), ...group])],
+                names: [...new Set([...(found?.names ?? []), name])],
+            });
         }
     };
-    add(findConflictedQualifiedNames(allSymbols).values());
+    // Declarations sharing a qualified name clash on its last segment.
+    for (const [qualifiedName, group] of findConflictedQualifiedNames(allSymbols)) add(splitQualifiedName(qualifiedName).at(-1)!, group);
     const membersOfAnonymous = allSymbols.filter(s => s.qualifiedName === undefined && !isAnonymous(s) && s.parentId !== undefined);
     const byOwner = new Map<string, SysMLSymbol[]>();
     for (const s of membersOfAnonymous) {
@@ -150,8 +156,11 @@ export function findConflictingDeclarations(allSymbols: SysMLSymbol[]): Map<SysM
         list.push(s);
         byOwner.set(s.parentId!, list);
     }
-    for (const members of byOwner.values()) add(groupConflicts(members, s => s.name).values());
-    add([...findConflictingShortNames(allSymbols).values()].map(group => group.symbols));
+    for (const members of byOwner.values()) {
+        // By name; clashes involving a short name are found below.
+        for (const [name, group] of groupConflicts(members.filter(s => s.name), s => s.name)) add(name, group);
+    }
+    for (const { name, symbols } of findConflictingShortNames(allSymbols).values()) add(name, symbols);
     return conflicting;
 }
 
@@ -326,9 +335,12 @@ export function buildSymbolIndexes(allSymbols: SysMLSymbol[]): SymbolIndexes {
 
     for (const s of allSymbols) {
         if (isAnonymous(s)) continue;
-        const nameList = byName.get(s.name) ?? [];
-        nameList.push(s);
-        byName.set(s.name, nameList);
+        // Under each name it is referenced by (KerML 8.2.3.5.3): its name and its short name.
+        for (const name of memberNamesOf(s)) {
+            const nameList = byName.get(name) ?? [];
+            nameList.push(s);
+            byName.set(name, nameList);
+        }
 
         if (s.qualifiedName !== undefined && !conflictedQualifiedNames.has(s.qualifiedName)) {
             byQualifiedName.set(s.qualifiedName, s);
@@ -345,15 +357,19 @@ export function buildSymbolIndexes(allSymbols: SysMLSymbol[]): SymbolIndexes {
         }
 
         if (isDefinition(s.kind)) {
-            const defs = definitionsByName.get(s.name) ?? [];
-            defs.push(s);
-            definitionsByName.set(s.name, defs);
+            for (const name of memberNamesOf(s)) {
+                const defs = definitionsByName.get(name) ?? [];
+                defs.push(s);
+                definitionsByName.set(name, defs);
+            }
         }
 
         if (s.kind === SysMLElementKind.PortUsage || s.kind === SysMLElementKind.PortDef) {
-            const ports = portsByName.get(s.name) ?? [];
-            ports.push(s);
-            portsByName.set(s.name, ports);
+            for (const name of memberNamesOf(s)) {
+                const ports = portsByName.get(name) ?? [];
+                ports.push(s);
+                portsByName.set(name, ports);
+            }
         }
     }
 
@@ -546,10 +562,16 @@ export class NamespaceResolver {
         return this.referenceTo(resolved, indexes);
     }
 
+    /**
+     * The element a resolved member refers to, by its symbol ID (one for all
+     * declarations of a package), never another element sharing its
+     * qualified name; none when that qualified name is conflicted
+     * (`byQualifiedName`).
+     */
     private referenceTo(resolved: SysMLSymbol | undefined, indexes: SymbolIndexes): NameResolution {
         if (!resolved) return { ambiguous: false };
-        const symbol = resolved.qualifiedName !== undefined ? indexes.byQualifiedName.get(resolved.qualifiedName) : resolved;
-        return { symbol, ambiguous: symbol === undefined };
+        if (resolved.qualifiedName !== undefined && !indexes.byQualifiedName.has(resolved.qualifiedName)) return { ambiguous: true };
+        return { symbol: indexes.byId.get(resolved.symbolId) ?? resolved, ambiguous: false };
     }
 
     /**
@@ -810,8 +832,9 @@ export class NamespaceResolver {
     /**
      * The types `type` specializes, each once: those it is typed by,
      * subclassifies or subsets, resolved from the namespace owning it (KerML
-     * 8.2.3.5.2), and the features it redefines (`resolveRedefinedFeature`).
-     * Never `type` itself.
+     * 8.2.3.5.2), the feature a shorthand's reference subsetting (`perform a`)
+     * refers to (KerML 8.3.3.3.9, `resolveNamingFeature`), and the features it
+     * redefines (`resolveRedefinedFeature`). Never `type` itself.
      */
     private generalsOf(type: SysMLSymbol, indexes: SymbolIndexes): SysMLSymbol[] {
         const redefinedNames = type.redefinedFeatureTargets ?? [];
@@ -820,9 +843,34 @@ export class NamespaceResolver {
             ...[...new Set([...type.typeNames, ...type.specializationNames])]
                 .filter(name => !redefinedNames.includes(name))
                 .map(name => this.resolveQualifiedNameFrom(ownerKeyOf(type, indexes.byId), name, indexes)),
+            ...(type.namingReference !== undefined && !type.namedByRedefinition ? [this.resolveNamingFeature(type, indexes)] : []),
             ...redefinedNames.map(name => owner ? this.resolveRedefinedFeature(owner, name, indexes).symbol : undefined),
         ];
         return [...new Set(generals.filter((general): general is SysMLSymbol => general !== undefined && general !== type))];
+    }
+
+    /**
+     * The feature `symbol`'s `namingReference` refers to: resolved from the
+     * namespace owning `symbol` (KerML 8.2.3.5.2), never to `symbol` itself, or
+     * for a redefinition from the types its owner specializes (8.2.3.5.1);
+     * through a feature chain, each feature after the first is one of the one
+     * before it.
+     */
+    resolveNamingFeature(symbol: SysMLSymbol, indexes: SymbolIndexes): SysMLSymbol | undefined {
+        const owner = ownerOf(symbol, indexes);
+        const [path] = scanFeaturePaths(symbol.namingReference ?? '');
+        if (!path) return undefined;
+        const [first, ...chain] = path.qualifiedNames;
+        // The features of a redefined chain (`:>> x2.p`) are resolved as any reference, from the owner.
+        let feature = symbol.namedByRedefinition && chain.length === 0
+            ? owner && this.resolveRedefinedFeature(owner, first.name, indexes).symbol
+            : this.resolveReferenceIn(owner, first.name, indexes, symbol).symbol;
+        for (const qualified of chain) {
+            const [member, ...rest] = qualified.segments;
+            feature = feature && this.resolveFeatureReference(feature, member.name, indexes).symbol;
+            for (const segment of rest) feature = feature && this.resolveMemberReference(feature, segment.name, indexes).symbol;
+        }
+        return feature;
     }
 
     /**

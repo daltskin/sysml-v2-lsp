@@ -6,7 +6,7 @@ import {
     TextDocumentPositionParams,
 } from 'vscode-languageserver/node';
 import { DocumentManager } from '../documentManager.js';
-import { isDefinition, SysMLElementKind, SysMLSymbol } from '../symbols/sysmlElements.js';
+import { isDefinition, memberNamesOf, SysMLElementKind, SysMLSymbol } from '../symbols/sysmlElements.js';
 import { quoteName, scanQualifiedNames } from '../utils/identUtils.js';
 
 /**
@@ -117,17 +117,18 @@ export class CompletionProvider {
             const definitionSymbols = allSymbols.filter((s) => isDefinition(s.kind));
             const seen = new Set<string>();
             const defItems: CompletionItem[] = [];
-            for (const sym of definitionSymbols) {
-                if (!sym.name || seen.has(sym.name)) continue;
-                seen.add(sym.name);
+            for (const sym of definitionSymbols) for (const name of memberNamesOf(sym)) {
+                // One item for each name it is referenced by: its name and its short name (KerML 8.2.3.5.3).
+                if (seen.has(name)) continue;
+                seen.add(name);
                 defItems.push({
-                    label: sym.name,
-                    insertText: quoteName(sym.name),
+                    label: name,
+                    insertText: quoteName(name),
                     kind: this.mapSymbolKindToCompletionKind(sym.kind),
-                    detail: `${sym.kind}${sym.qualifiedName !== undefined && sym.qualifiedName !== sym.name ? ` (${sym.qualifiedName})` : ''}`,
+                    detail: `${sym.kind}${sym.qualifiedName !== undefined && sym.qualifiedName !== name ? ` (${sym.qualifiedName})` : ''}`,
                     documentation: sym.documentation,
                     data: sym.qualifiedName,
-                    sortText: `1_${sym.name}`,
+                    sortText: `1_${name}`,
                 });
             }
             this._defCache = { symbols: allSymbols, items: defItems };
@@ -140,16 +141,17 @@ export class CompletionProvider {
                 s.kind === SysMLElementKind.PortUsage || s.kind === SysMLElementKind.PortDef,
             );
             const seenPorts = new Set<string>();
-            for (const sym of portSymbols) {
-                if (!sym.name || seenPorts.has(sym.name)) continue;
-                seenPorts.add(sym.name);
+            for (const sym of portSymbols) for (const name of memberNamesOf(sym)) {
+                // One item for each name it is referenced by: its name and its short name (KerML 8.2.3.5.3).
+                if (seenPorts.has(name)) continue;
+                seenPorts.add(name);
                 items.push({
-                    label: sym.name,
-                    insertText: quoteName(sym.name),
+                    label: name,
+                    insertText: quoteName(name),
                     kind: CompletionItemKind.Interface,
                     detail: `${sym.kind}${sym.typeNames[0] ? ` : ${sym.typeNames[0]}` : ''}`,
                     data: sym.qualifiedName,
-                    sortText: `0_${sym.name}`,
+                    sortText: `0_${name}`,
                 });
             }
         }
