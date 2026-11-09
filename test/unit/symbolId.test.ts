@@ -328,6 +328,23 @@ describe('symbolId of named elements', () => {
         return new Map(st.getAllSymbols().map((s) => [s.qualifiedName, s.symbolId]));
     }
 
+    it("derives a member's symbol ID from its qualified name, each name as KerML escapedName() writes it (KerML 8.3.2.1.2)", async () => {
+        const { uuidV5 } = await import('../../server/src/utils/uuid.js');
+        const st = await build([{ uri, text: "package P { part def type; part def 'language'; part def 'part'; part def 'my car'; part def type2 { part 'var'; } }" }]);
+        const pkg = st.getAllSymbols().find(s => s.name === 'P')!;
+        const idOf = (qualifiedName: string) => st.getAllSymbols().find(s => s.qualifiedName === qualifiedName)!.symbolId;
+        // A keyword the grammar accepts as a name is a basic name; a reserved one is quoted (SysML v2 7.2.2).
+        expect(idOf('P::type')).toBe(uuidV5(pkg.symbolId, 'P::type'));
+        expect(idOf('P::language')).toBe(uuidV5(pkg.symbolId, 'P::language'));
+        expect(idOf('P::part')).toBe(uuidV5(pkg.symbolId, "P::'part'"));
+        expect(idOf('P::my car')).toBe(uuidV5(pkg.symbolId, "P::'my car'"));
+        expect(idOf('P::type2::var')).toBe(uuidV5(pkg.symbolId, 'P::type2::var'));
+        // The same name written quoted or not is the same element.
+        const quoted = await build([{ uri, text: "package P { part def 'type'; part def language; }" }]);
+        expect(idsByQualifiedName(quoted).get('P::type')).toBe(idOf('P::type'));
+        expect(idsByQualifiedName(quoted).get('P::language')).toBe(idOf('P::language'));
+    });
+
     it('keeps named elements on their symbol IDs when namespace fragments are swapped', async () => {
         const original = 'package A { part p; part def P; } package A { part q; part def Q; }';
         const swapped = 'package A { part q; part def Q; } package A { part p; part def P; }';
