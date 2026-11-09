@@ -220,3 +220,34 @@ describe('the structure of each declaration, not of its qualified name', () => {
         expect([...new Set(duplicates)].sort((x, y) => x - y)).toEqual([1, 4, 8, 9]);
     });
 });
+
+describe('the symbol table over the element registry', () => {
+    it('gives a package declared twice in one document one symbol, with the imports and first documentation of both', () => {
+        const st = new SymbolTable();
+        st.build('file:///w/a.sysml', parseDocument(`package L {
+    package A { doc /* first */ private import X::x; }
+    package A { doc /* second */ private import Y::y; }
+}
+package X { part def x; }
+package Y { part def y; }
+`));
+        const a = st.getSymbol('L::A')!;
+        expect(a.importTargets!.map(i => i.target)).toEqual(['X::x', 'Y::y']);
+        expect(a.documentation).toBe('first');
+        expect(st.getSymbolById(a.symbolId)).toBe(a);
+        expect(st.getAllSymbols().filter(s => s.qualifiedName === 'L::A')).toEqual([a]);
+        // Each declaration is still a symbol of its document, with the package's ID.
+        expect(st.getSymbolsForUri('file:///w/a.sysml').filter(s => s.name === 'A').map(s => s.symbolId)).toEqual([a.symbolId, a.symbolId]);
+    });
+
+    it('lists one symbol per element, and finds every one by its ID', () => {
+        const st = new SymbolTable();
+        st.buildAll([
+            ['file:///w/a.sysml', parseDocument('package P { part def A; part def A; connect x to y; }\n')],
+            ['file:///w/b.sysml', parseDocument('package P { part def B; }\n')],
+        ]);
+        const all = st.getAllSymbols();
+        expect(all.map(s => s.name || s.declaration)).toEqual(['P', 'A', 'A', 'B', 'connect x to y']);
+        for (const s of all) expect(st.getSymbolById(s.symbolId)).toBe(s);
+    });
+});

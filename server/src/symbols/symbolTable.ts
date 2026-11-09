@@ -6,7 +6,7 @@ import { ParseResult } from '../parser/parseDocument.js';
 import { contextToRange, tokenToRange } from '../parser/positionUtils.js';
 import { SYSML_KEYWORDS } from '../utils/sysmlKeywords.js';
 import { joinQualifiedName, joinReference, scanQualifiedNames, splitQualifiedName, unquoteName as decodeName } from '../utils/identUtils.js';
-import { ElementRegistry } from './elementRegistry.js';
+import { ElementRegistry, type RegistryElement } from './elementRegistry.js';
 import { buildSymbolIndexes, NamespaceResolver, type SymbolIndexes } from './namespaceResolver.js';
 import { FilterExpr, ImportTarget, OwnedSpecialization, ReferenceChain, SysMLElementKind, SysMLSymbol, displayName, isAnonymous, isDefinition, isFlowUsage, isUsage as isUsageKind, memberNamesOf } from './sysmlElements.js';
 
@@ -475,10 +475,6 @@ const RE_IDENT_START = /^([A-Za-z_]\w*(?:::\w+)*)/;
  * registry of the workspace (`ElementRegistry`) from them.
  */
 export class SymbolTable {
-    /** All symbols indexed by qualified name */
-    private symbols = new Map<string, SysMLSymbol>();
-    /** Symbols without a qualified name (anonymous elements and their members) -- never in `symbols` */
-    private unqualifiedSymbols = new Set<SysMLSymbol>();
     /** Each symbol's owner, as declared in the parse tree; `parentId` is derived from it */
     private owners = new WeakMap<SysMLSymbol, SysMLSymbol>();
     /** The model of the workspace by ID, built from the same declarations, and where their symbol IDs come from */
@@ -495,12 +491,13 @@ export class SymbolTable {
     private symbolsByPosition = new Map<string, SysMLSymbol[]>();
     /** Reverse index: type name → symbols that reference it in typeNames */
     private typeNameRefs = new Map<string, SysMLSymbol[]>();
-    /** Packages indexed by qualified name */
-    private packageFragmentsByQualifiedName = new Map<string, Map<string, SysMLSymbol>>();
-    /** Symbols sharing a qualifiedName with a non-package sibling of a different kind (e.g. `package A` vs. `part def A`) -- tracked so `getAllSymbols()` doesn't lose one to `symbols`' one-entry-per-qualifiedName limit, regardless of whether the collision is a real naming conflict (see `findConflictedQualifiedNames` in namespaceResolver.ts for that narrower, spec-driven question). */
-    private conflictedSymbolsByQualifiedName = new Map<string, Set<SysMLSymbol>>();
-    /** Cached array from getAllSymbols(), invalidated on any mutation */
-    private allSymbolsCache: SysMLSymbol[] | undefined;
+    /**
+     * One symbol per element of the registry, and by qualified name, built from
+     * the registry when read after a change (`getAllSymbols`, `getSymbol`)
+     */
+    private allSymbolsCache: { all: SysMLSymbol[]; byQualifiedName: Map<string, SysMLSymbol> } | undefined;
+    /** Each package declared more than once's view of all its declarations, while they don't change (`viewOf`) */
+    private mergedPackages = new WeakMap<RegistryElement, { declarations: readonly SysMLSymbol[]; merged: SysMLSymbol }>();
     /** Each document's parse tree, to build it again with other effective names (`refreshNamingFeatures`) */
     private trees = new Map<string, ParserRuleContext>();
     /** Each document's effective names it was last built with (`resolveNamingFeatures`) */
@@ -560,7 +557,8 @@ export class SymbolTable {
         const declarations = this.symbolsByUri.get(uri) ?? [];
         // SysML 7.5.5: a document's body is its root namespace's, its imports among them.
         this.registry.setDocument(uri, declarations, this.extractImportsFromBody(tree, SysMLv2Parser.RULE_packageBodyElement));
-        this.refreshMergedPackages(declarations);
+        // The symbols by element follow the registry, which only now has this document.
+        this.allSymbolsCache = undefined;
     }
 
     /**
@@ -663,7 +661,7 @@ export class SymbolTable {
      * Get a symbol by its qualified name.
      */
     getSymbol(qualifiedName: string): SysMLSymbol | undefined {
-        return this.symbols.get(qualifiedName);
+        return this.views().byQualifiedName.get(qualifiedName);
     }
 
     /** Get a symbol by its `symbolId`; for a package, its merged view across documents. */
@@ -699,10 +697,7 @@ export class SymbolTable {
 
     getSymbolById(id: string): SysMLSymbol | undefined {
         const element = this.registry.getElement(id);
-        const symbol = element && this.registry.symbolsOf(element)[0];
-        if (symbol?.kind !== SysMLElementKind.Package || symbol.qualifiedName === undefined) return symbol;
-        const merged = this.symbols.get(symbol.qualifiedName);
-        return merged?.kind === SysMLElementKind.Package ? merged : symbol;
+        return element && this.viewOf(element);
     }
 
     /** Get `symbol`'s owner, by its `parentId`. */
@@ -734,42 +729,63 @@ export class SymbolTable {
      * Returns a cached array — invalidated on symbol add/remove.
      */
     getAllSymbols(): SysMLSymbol[] {
+        return this.views().all;
+    }
+
+    /**
+     * One symbol per element of the registry (`viewOf`), in the order the
+     * documents were built, then by position, those with a qualified name
+     * first; and by qualified name, the last of several elements sharing one.
+     */
+    private views(): { all: SysMLSymbol[]; byQualifiedName: Map<string, SysMLSymbol> } {
         if (!this.allSymbolsCache) {
-            const all = [...this.symbols.values(), ...this.unqualifiedSymbols];
-            // `symbols` holds only one entry per qualifiedName; a genuine
-            // naming conflict (see `conflictedSymbolsByQualifiedName`'s doc
-            // comment) needs every conflicting declaration surfaced here, not
-            // just whichever currently occupies that one entry.
-            if (this.conflictedSymbolsByQualifiedName.size > 0) {
-                const included = new Set(all);
-                for (const conflictSet of this.conflictedSymbolsByQualifiedName.values()) {
-                    for (const sym of conflictSet) {
-                        if (!included.has(sym)) {
-                            all.push(sym);
-                            included.add(sym);
-                        }
+            const seen = new Set<RegistryElement>();
+            const qualified: SysMLSymbol[] = [];
+            const unqualified: SysMLSymbol[] = [];
+            const byQualifiedName = new Map<string, SysMLSymbol>();
+            for (const declarations of this.symbolsByUri.values()) {
+                for (const declaration of declarations) {
+                    const element = this.registry.elementOf(declaration);
+                    if (!element || seen.has(element)) continue;
+                    seen.add(element);
+                    const view = this.viewOf(element);
+                    if (view.qualifiedName === undefined) unqualified.push(view);
+                    else {
+                        qualified.push(view);
+                        byQualifiedName.set(view.qualifiedName, view);
                     }
                 }
             }
-            this.allSymbolsCache = all;
+            this.allSymbolsCache = { all: [...qualified, ...unqualified], byQualifiedName };
         }
         return this.allSymbolsCache;
     }
 
     /**
-     * Give each package's merged view (`mergePackageFragments`), built before
-     * its declarations got their symbol IDs, the symbol IDs of its
-     * declarations in `declarations`.
+     * The symbol standing for `element`: its declaration, or, for a package
+     * declared more than once, one view of all its declarations, its imports,
+     * filters, metadata and view filters theirs together and its documentation
+     * the first one's, the same object while its declarations don't change.
      */
-    private refreshMergedPackages(declarations: readonly SysMLSymbol[]): void {
-        for (const declaration of declarations) {
-            if (declaration.kind !== SysMLElementKind.Package || declaration.qualifiedName === undefined) continue;
-            const merged = this.symbols.get(declaration.qualifiedName);
-            if (merged && merged !== declaration && merged.kind === SysMLElementKind.Package) {
-                merged.symbolId = declaration.symbolId;
-                merged.parentId = declaration.parentId;
-            }
-        }
+    private viewOf(element: RegistryElement): SysMLSymbol {
+        const declarations = this.registry.symbolsOf(element);
+        if (declarations.length === 1 || element.kind !== SysMLElementKind.Package) return declarations[0];
+        const cached = this.mergedPackages.get(element);
+        if (cached && cached.declarations === declarations && cached.merged.symbolId === element.symbolId) return cached.merged;
+        const collect = <T>(field: (d: SysMLSymbol) => readonly T[] | undefined): T[] | undefined => {
+            const all = declarations.flatMap(d => field(d) ?? []);
+            return all.length > 0 ? all : undefined;
+        };
+        const merged: SysMLSymbol = {
+            ...declarations[declarations.length - 1],
+            importTargets: collect(d => d.importTargets),
+            filterConditions: collect(d => d.filterConditions),
+            metadataAnnotations: collect(d => d.metadataAnnotations),
+            viewFilters: collect(d => d.viewFilters),
+            documentation: declarations.find(d => d.documentation)?.documentation,
+        };
+        this.mergedPackages.set(element, { declarations, merged });
+        return merged;
     }
 
     /**
@@ -890,27 +906,13 @@ export class SymbolTable {
 
     private clearUri(uri: string): void {
         this.registry.removeDocument(uri);
+        this.allSymbolsCache = undefined;
         const existing = this.symbolsByUri.get(uri);
         if (existing && existing.length > 0) {
             // Collect names and type names that need index updates
             const affectedNames = new Set<string>();
             const affectedTypeNames = new Set<string>();
             for (const sym of existing) {
-                // Order matters: re-point `symbols`' entry (which may fall
-                // back to a remaining conflicting symbol) *before* pruning
-                // `sym` out of conflict tracking, so that fallback still sees
-                // the full picture, `sym` included -- see
-                // `unregisterPlainSymbol`'s own doc comment.
-                if (sym.qualifiedName === undefined) {
-                    this.unqualifiedSymbols.delete(sym);
-                } else {
-                    if (sym.kind === SysMLElementKind.Package) {
-                        this.unregisterPackageFragment(sym.qualifiedName, uri);
-                    } else {
-                        this.unregisterPlainSymbol(sym, sym.qualifiedName);
-                    }
-                    this.removeFromConflictTracking(sym, sym.qualifiedName);
-                }
                 for (const name of memberNamesOf(sym)) affectedNames.add(name);
                 for (const tn of sym.typeNames) {
                     affectedTypeNames.add(tn);
@@ -1041,214 +1043,8 @@ export class SymbolTable {
         }
     }
 
-    /**
-     * Recompute the `symbols` entry for `qualifiedName` from every known fragment's
-     * importTargets/filterConditions/metadataAnnotations/viewFilters/documentation,
-     * so anything declared in any one file of a multi-file package is visible
-     * regardless of which fragment happens to be canonical -- a reopened package is
-     * one semantic namespace, so a `doc`, `#annotation`, or view `filter` on one
-     * fragment's own `package P { ... }` declaration belongs to the same element as
-     * another fragment's, not to a competing one that only the "canonical" fragment
-     * gets credit for. Builds a fresh merged *copy* rather than writing the merge
-     * back into one fragment's own symbol object -- mutating a fragment in place
-     * would corrupt its own (otherwise pristine) data, so a later re-merge after
-     * another fragment is edited or removed would keep including data that no
-     * longer exists anywhere (it'd have leaked into whichever fragment got mutated
-     * last, and stayed there even after the fragment that actually declared it was
-     * gone).
-     */
-    private mergePackageFragments(qualifiedName: string): void {
-        const fragments = this.packageFragmentsByQualifiedName.get(qualifiedName);
-        if (!fragments || fragments.size === 0) return;
-
-        const importTargets: ImportTarget[] = [];
-        const filterConditions: FilterExpr[] = [];
-        const metadataAnnotations: string[] = [];
-        const viewFilters: string[] = [];
-        let documentation: string | undefined;
-        for (const fragment of fragments.values()) {
-            if (fragment.importTargets) importTargets.push(...fragment.importTargets);
-            if (fragment.filterConditions) filterConditions.push(...fragment.filterConditions);
-            if (fragment.metadataAnnotations) metadataAnnotations.push(...fragment.metadataAnnotations);
-            if (fragment.viewFilters) viewFilters.push(...fragment.viewFilters);
-            // A package's own `documentation` is a single string field (matching
-            // `extractDocumentation`'s existing "first doc block found" semantics
-            // within one file); across fragments, keep the first one found rather
-            // than concatenating, for the same reason -- just don't let a fragment
-            // with no doc of its own silently blank out one an earlier fragment did have.
-            if (!documentation && fragment.documentation) documentation = fragment.documentation;
-        }
-
-        // Identity/location fields (range, uri, ...) come from whichever fragment is
-        // last in the map's insertion order -- matches the previous "most recently
-        // registered fragment is canonical" behavior; re-registering an already-known
-        // uri does not change its position, so an edit doesn't shuffle this.
-        const template = [...fragments.values()].at(-1)!;
-        const merged: SysMLSymbol = {
-            ...template,
-            importTargets: importTargets.length > 0 ? importTargets : undefined,
-            filterConditions: filterConditions.length > 0 ? filterConditions : undefined,
-            metadataAnnotations: metadataAnnotations.length > 0 ? metadataAnnotations : undefined,
-            viewFilters: viewFilters.length > 0 ? viewFilters : undefined,
-            documentation,
-        };
-        this.symbols.set(qualifiedName, merged);
-        this.allSymbolsCache = undefined;
-
-        // If this qualifiedName is also in conflict with an incompatible-kind
-        // sibling, any package-kind entry already in that conflict set is a
-        // stale pre-merge snapshot (registerSymbol records `existing`/`symbol`
-        // as they were *before* this merge runs) -- replace it with `merged`,
-        // or getAllSymbols() would surface both as if they were two separate
-        // declarations of the same package.
-        const conflictSet = this.conflictedSymbolsByQualifiedName.get(qualifiedName);
-        if (conflictSet) {
-            for (const sym of [...conflictSet]) {
-                if (sym.kind === SysMLElementKind.Package) conflictSet.delete(sym);
-            }
-            conflictSet.add(merged);
-        }
-    }
-
-    /**
-     * Drop `uri`'s own fragment of package `qualifiedName` (on document edit/close)
-     * and recompute the merged `symbols` entry from whatever fragments remain;
-     * if none remain, drop the package entirely -- unless a conflicting
-     * non-package symbol (see `conflictedSymbolsByQualifiedName`) is still
-     * registered under the same qualifiedName, in which case that symbol is
-     * the correct entry to leave behind, the mirror image of
-     * `unregisterPlainSymbol`'s own fallback to a remaining package.
-     * Call this *before* `removeFromConflictTracking` -- the fallback below
-     * reads `conflictedSymbolsByQualifiedName` and needs to see the full
-     * remaining set (the package fragment just removed here is excluded
-     * explicitly, since conflict-tracking hasn't pruned it out yet).
-     */
-    private unregisterPackageFragment(qualifiedName: string, uri: string): void {
-        const fragments = this.packageFragmentsByQualifiedName.get(qualifiedName);
-        const removedFragment = fragments?.get(uri);
-        fragments?.delete(uri);
-        if (fragments && fragments.size > 0) {
-            this.mergePackageFragments(qualifiedName);
-        } else {
-            this.packageFragmentsByQualifiedName.delete(qualifiedName);
-            if (this.symbols.get(qualifiedName)?.kind === SysMLElementKind.Package) {
-                const remainingConflicts = [...(this.conflictedSymbolsByQualifiedName.get(qualifiedName) ?? [])]
-                    .filter(s => s !== removedFragment);
-                if (remainingConflicts.length > 0) {
-                    this.symbols.set(qualifiedName, remainingConflicts.at(-1)!);
-                } else {
-                    this.symbols.delete(qualifiedName);
-                }
-            }
-        }
-    }
-
-    /**
-     * Remove `sym` from `conflictedSymbolsByQualifiedName` (on document
-     * edit/close), and drop the whole conflict entry once fewer than two
-     * same-kind symbols remain under that qualifiedName -- an edit that
-     * resolves a naming conflict (e.g. renaming one of the clashing
-     * declarations) must stop being reported as one. Call this *after*
-     * `unregisterPlainSymbol`/`unregisterPackageFragment`, whose own
-     * `symbols`-re-pointing fallback needs `sym` still present in the set
-     * to correctly exclude just itself, not the whole bookkeeping entry.
-     */
-    private removeFromConflictTracking(sym: SysMLSymbol, qualifiedName: string): void {
-        const conflictSet = this.conflictedSymbolsByQualifiedName.get(qualifiedName);
-        if (!conflictSet) return;
-        if (sym.kind === SysMLElementKind.Package) {
-            // The conflict set tracks the package side by its *merged*
-            // representative object (see `mergePackageFragments`), never the
-            // same object identity as any raw per-uri fragment (`sym` here)
-            // -- `conflictSet.delete(sym)` would silently no-op, leaving a
-            // permanently stale merged object behind once the package's
-            // last fragment is gone. Only clean it up once no fragments
-            // remain at all: if some still do, `mergePackageFragments`
-            // (called by `unregisterPackageFragment` just before this) has
-            // already refreshed the conflict set with the current merged
-            // view, which removing by kind here would wrongly undo.
-            if (!this.packageFragmentsByQualifiedName.has(qualifiedName)) {
-                for (const s of [...conflictSet]) {
-                    if (s.kind === SysMLElementKind.Package) conflictSet.delete(s);
-                }
-            }
-        } else {
-            conflictSet.delete(sym);
-        }
-        const remaining = [...conflictSet];
-        if (remaining.length <= 1 || remaining.every(s => s.kind === SysMLElementKind.Package)) {
-            this.conflictedSymbolsByQualifiedName.delete(qualifiedName);
-        }
-    }
-
-    /**
-     * Remove a non-package symbol (on document edit/close). Only touches
-     * `symbols`' entry for its qualifiedName if `sym` is actually the symbol
-     * currently stored there -- during a naming conflict (see
-     * `conflictedSymbolsByQualifiedName`), `sym` may be the one that lost an
-     * earlier last-write-wins race, in which case `symbols` already holds a
-     * different, still-valid symbol that removing `sym` must not disturb.
-     *
-     * When `sym` *is* the current entry, don't just delete it: the conflict
-     * can resolve back down to "just a legitimately-reopened package" (this
-     * removal was the non-package side of it) or to one remaining same-kind
-     * symbol, either of which is the correct entry to leave behind, the same
-     * way it would be if the conflict had never existed. Call this *before*
-     * `removeFromConflictTracking(sym)` -- the fallback below reads
-     * `conflictedSymbolsByQualifiedName` and excludes `sym` itself
-     * explicitly, since conflict-tracking hasn't pruned it out yet.
-     */
-    private unregisterPlainSymbol(sym: SysMLSymbol, qualifiedName: string): void {
-        if (this.symbols.get(qualifiedName) !== sym) return;
-
-        const packageFragments = this.packageFragmentsByQualifiedName.get(qualifiedName);
-        if (packageFragments && packageFragments.size > 0) {
-            this.mergePackageFragments(qualifiedName);
-            return;
-        }
-        const remainingConflicts = [...(this.conflictedSymbolsByQualifiedName.get(qualifiedName) ?? [])]
-            .filter(s => s !== sym);
-        if (remainingConflicts.length > 0) {
-            this.symbols.set(qualifiedName, remainingConflicts.at(-1)!);
-            return;
-        }
-        this.symbols.delete(qualifiedName);
-    }
-
     private registerSymbol(symbol: SysMLSymbol, uri: string): void {
-        // A symbol without a qualified name is found by its symbol ID only, so a
-        // declared name, however it is quoted, never collides with it.
-        if (symbol.qualifiedName === undefined) {
-            this.unqualifiedSymbols.add(symbol);
-        } else {
-            this.registerNamedSymbol(symbol, symbol.qualifiedName, uri);
-        }
         this.indexSymbol(symbol, uri);
-    }
-
-    /** Register a declared symbol in `symbols`, tracking conflicts and package fragments. */
-    private registerNamedSymbol(symbol: SysMLSymbol, qualifiedName: string, uri: string): void {
-        const existing = this.symbols.get(qualifiedName);
-        const bothPackages = symbol.kind === SysMLElementKind.Package && existing?.kind === SysMLElementKind.Package;
-        if (existing && existing !== symbol && !bothPackages) {
-            let conflictSet = this.conflictedSymbolsByQualifiedName.get(qualifiedName);
-            if (!conflictSet) {
-                conflictSet = new Set();
-                this.conflictedSymbolsByQualifiedName.set(qualifiedName, conflictSet);
-            }
-            conflictSet.add(existing);
-            conflictSet.add(symbol);
-        }
-        this.symbols.set(qualifiedName, symbol);
-        if (symbol.kind === SysMLElementKind.Package) {
-            let fragments = this.packageFragmentsByQualifiedName.get(qualifiedName);
-            if (!fragments) {
-                fragments = new Map();
-                this.packageFragmentsByQualifiedName.set(qualifiedName, fragments);
-            }
-            fragments.set(uri, symbol);
-            this.mergePackageFragments(qualifiedName);
-        }
     }
 
     /** Add a symbol to the per-URI, name, position and type-name indexes. */
