@@ -1232,7 +1232,7 @@ export class SysMLModelProvider {
         // Inspector) explain *why* a reference is unresolved the same way the
         // editor's own diagnostics do, not just leave it unexplained.
         // By symbol ID, as this document's symbols are the workspace's.
-        const conflicts = new Map([...findConflicts(symbolTable.getAllSymbols())]
+        const conflicts = new Map([...findConflicts(workspaceIndexes)]
             .map(([declaration, conflict]) => [declaration.symbolId, conflict]));
 
         for (const symbol of symbols) {

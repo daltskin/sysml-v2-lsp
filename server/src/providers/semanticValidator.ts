@@ -140,7 +140,7 @@ export class SemanticValidator {
         }
 
         diagnostics.push(...this.checkDuplicateDefinitions(symbols));
-        diagnostics.push(...this.checkAmbiguousNamespaceName(symbols, allSymbols));
+        diagnostics.push(...this.checkAmbiguousNamespaceName(symbols, indexes));
         diagnostics.push(...this.checkUnusedDefinitions(allSymbols, uri));
         diagnostics.push(...this.checkRedefinitionMultiplicity(symbols, indexes, text));
         diagnostics.push(...this.checkPortCompatibility(text, uri, symbols, indexes));
@@ -1569,9 +1569,9 @@ export class SemanticValidator {
      * that name -- including from inside one of the conflicting
      * declarations to its own child -- are unexpectedly unresolved.
      */
-    private checkAmbiguousNamespaceName(symbols: SysMLSymbol[], allSymbols: SysMLSymbol[]): Diagnostic[] {
+    private checkAmbiguousNamespaceName(symbols: SysMLSymbol[], indexes: SymbolIndexes): Diagnostic[] {
         const diagnostics: Diagnostic[] = [];
-        const conflicts = findConflicts(allSymbols);
+        const conflicts = findConflicts(indexes);
         if (conflicts.size === 0) return diagnostics;
 
         for (const symbol of symbols) {

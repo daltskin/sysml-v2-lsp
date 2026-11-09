@@ -117,7 +117,7 @@ export class NameReferences {
                         ambiguous = result.ambiguous;
                     } else {
                         const result = this.resolver.resolveReferenceIn(
-                            namespace?.symbol, joinQualifiedName([segment.name]), this.indexes, namedAfter, uri);
+                            namespace?.symbol, joinQualifiedName([segment.name]), this.indexes, namedAfter);
                         resolved = result.symbol;
                         ambiguous = result.ambiguous;
                     }

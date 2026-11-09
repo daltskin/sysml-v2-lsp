@@ -247,7 +247,7 @@ export interface OwnedSpecialization {
     /** The range of the target as written. */
     range?: Range;
     /**
-     * The target as parsed: its feature chain of qualified names (KerML 7.3.4.6),
+     * The target as parsed: its feature chain of qualified names (SysML 7.6.6),
      * each its names, unquoted, and whether it starts with the global `$::`.
      */
     chain?: ReferenceChain;

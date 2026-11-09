@@ -25,28 +25,27 @@ function resolver(documents: Array<{ uri: string; text: string }>) {
 }
 
 describe('name resolution over the element registry', () => {
-    describe('a root namespace per document (KerML 7.2.5.3, 8.2.3.5.4)', () => {
+    describe('one root namespace for the workspace (SysML 7.5.5, 8.2.3.5.4)', () => {
         const a = { uri: 'file:///w/a.sysml', text: 'part def T { part x; }\npart t : T;\npackage U { part u : T; }\n' };
         const b = { uri: 'file:///w/b.sysml', text: 'part def T { part x; }\npart t : T;\n' };
         const c = { uri: 'file:///w/c.sysml', text: 'part v : T;\n' };
 
-        it('resolves a document\'s own top-level element from it, at the top level and nested', () => {
+        it('leaves a name two same-kind top-level elements of two documents share unresolved, from either and from a third', () => {
             const { from } = resolver([a, b, c]);
-            expect(from(a.uri, 1, 'T')).toBe(`${a.uri}:0`);
+            expect(from(a.uri, 1, 'T')).toBeUndefined();
+            expect(from(a.uri, 2, 'T')).toBeUndefined();
+            expect(from(b.uri, 1, 'T')).toBeUndefined();
+            expect(from(c.uri, 0, 'T')).toBeUndefined();
+        });
+
+        it('resolves a top-level element of one document from every other', () => {
+            const { from } = resolver([a, c]);
+            expect(from(c.uri, 0, 'T')).toBe(`${a.uri}:0`);
             expect(from(a.uri, 2, 'T')).toBe(`${a.uri}:0`);
-            expect(from(b.uri, 1, 'T')).toBe(`${b.uri}:0`);
-        });
-
-        it('leaves a name unresolved from another document that has more than one element of it to choose from', () => {
-            expect(resolver([a, b, c]).from(c.uri, 0, 'T')).toBeUndefined();
-        });
-
-        it('resolves a name from another document that has only one element of it', () => {
-            expect(resolver([a, c]).from(c.uri, 0, 'T')).toBe(`${a.uri}:0`);
         });
     });
 
-    describe('imports at the top level of a document (KerML 7.2.5.3, SysML 7.5.5)', () => {
+    describe('imports at the top level of a document, memberships of the root namespace (SysML 7.5.5, SysML 7.5.5)', () => {
         const lib = { uri: 'file:///w/lib.sysml', text: 'package L { package A { part def m; package Deep { part def d; } } part def n; }\n' };
 
         it('makes the imported names visible in the document\'s top-level elements and those nested in them', () => {
@@ -70,13 +69,13 @@ part b : d;
             expect(from(doc.uri, 3, 'd')).toBe(`${lib.uri}:0`);
         });
 
-        it('does not make them visible in another document, nor in its declaration of a package both declare', () => {
+        it('makes them visible in every document, the workspace being one root namespace', () => {
             const a = { uri: 'file:///w/a.sysml', text: 'private import L::A::*;\npackage P { part x : m; }\n' };
             const b = { uri: 'file:///w/b.sysml', text: 'part u : m;\npackage P { part y : m; }\n' };
             const { from } = resolver([lib, a, b]);
             expect(from(a.uri, 1, 'm')).toBe(`${lib.uri}:0`);
-            expect(from(b.uri, 0, 'm')).toBeUndefined();
-            expect(from(b.uri, 1, 'm')).toBeUndefined();
+            expect(from(b.uri, 0, 'm')).toBe(`${lib.uri}:0`);
+            expect(from(b.uri, 1, 'm')).toBe(`${lib.uri}:0`);
         });
 
         it('lets a top-level element of the document hide an imported one of the same name', () => {
@@ -137,5 +136,49 @@ package X { part def x; }
             expect(from(doc.uri, 3, 'A::B')).toBe(`${doc.uri}:1`);
             expect(from(doc.uri, 4, 'A::B2')).toBe(`${doc.uri}:2`);
         });
+    });
+});
+
+describe('name clashes per namespace (KerML 8.3.2.4.3)', () => {
+    /** The declarations that clash, as `document:line` and the names they clash on. */
+    async function clashes(documents: Array<{ uri: string; text: string }>): Promise<string[]> {
+        const { findConflicts } = await import('../../server/src/symbols/namespaceResolver.js');
+        const st = new SymbolTable();
+        st.buildAll(documents.map(({ uri, text }) => [uri, parseDocument(text)]));
+        return [...findConflicts(st.getIndexes())]
+            .map(([symbol, { names }]) => `${symbol.uri.split('/').pop()}:${symbol.range.start.line} ${names.join(',')}`).sort();
+    }
+
+    it('flags same-kind top-level elements of two documents, members of the one root namespace', async () => {
+        expect(await clashes([
+            { uri: 'file:///w/a.sysml', text: 'part def A;\n' },
+            { uri: 'file:///w/b.sysml', text: 'part def A;\n' },
+        ])).toEqual(['a.sysml:0 A', 'b.sysml:0 A']);
+    });
+
+    it('flags same-kind top-level elements of one document', async () => {
+        expect(await clashes([{ uri: 'file:///w/a.sysml', text: 'part def A;\npart def A;\n' }])).toEqual(['a.sysml:0 A', 'a.sysml:1 A']);
+    });
+
+    it('flags same-kind members of a package two documents declare, one namespace', async () => {
+        expect(await clashes([
+            { uri: 'file:///w/a.sysml', text: 'package P { part def A; }\n' },
+            { uri: 'file:///w/b.sysml', text: 'package P { part def A; }\n' },
+        ])).toEqual(['a.sysml:0 A', 'b.sysml:0 A']);
+    });
+
+    it('flags same-kind members of an anonymous element, and a name clashing with a short name', async () => {
+        expect(await clashes([{ uri: 'file:///w/a.sysml', text: `package P {
+    part a { port p; }
+    part b { port p; }
+    interface a.p to b.p { part x; part x; }
+    part def <S> First;
+    part def S;
+}
+` }])).toEqual(['a.sysml:3 x', 'a.sysml:3 x', 'a.sysml:4 S', 'a.sysml:5 S']);
+    });
+
+    it('does not flag a package and a definition of one name, nor two declarations of one package', async () => {
+        expect(await clashes([{ uri: 'file:///w/a.sysml', text: 'package P { package A; part def A; package A; }\n' }])).toEqual([]);
     });
 });

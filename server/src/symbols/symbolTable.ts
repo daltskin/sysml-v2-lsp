@@ -569,7 +569,7 @@ export class SymbolTable {
         this.resolveViewInheritance(uri);
         const declarations = this.symbolsByUri.get(uri) ?? [];
         this.ids.add(declarations);
-        // KerML 7.2.5.3: a document's body is its root namespace's, its imports among them.
+        // SysML 7.5.5: a document's body is its root namespace's, its imports among them.
         this.registry.setDocument(uri, declarations, this.extractImportsFromBody(tree, SysMLv2Parser.RULE_packageBodyElement));
         this.refreshMergedPackages(declarations);
     }

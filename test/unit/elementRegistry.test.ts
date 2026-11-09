@@ -165,6 +165,20 @@ describe('ElementRegistry: same-named elements', () => {
         expectWellFormed(registry);
     });
 
+    it('stays well formed when same-named top-level elements trade their position-based IDs, relationships and all', () => {
+        const text = 'part def Base;\npart def T :> Base { part x; }\n';
+        const st = build([{ uri: 'file:///w/b.sysml', text }, { uri: 'file:///w/c.sysml', text }]);
+        expectWellFormed(st.getElementRegistry());
+        // A document sorting before both: each `T` moves one position down.
+        st.build('file:///w/a.sysml', parseDocument(text));
+        expectWellFormed(st.getElementRegistry());
+        expect(snapshot(st.getElementRegistry())).toEqual(snapshot(build([
+            { uri: 'file:///w/a.sysml', text }, { uri: 'file:///w/b.sysml', text }, { uri: 'file:///w/c.sysml', text },
+        ]).getElementRegistry()));
+        st.removeUri('file:///w/a.sysml');
+        expectWellFormed(st.getElementRegistry());
+    });
+
     it('keeps the package\'s ID for a package next to a same-named element of another kind declared before it', () => {
         const withDefinition = build([{ uri: 'file:///w/a.sysml', text: 'package Q { part def B; package B { part def c; } }\n' }]);
         const alone = build([{ uri: 'file:///w/a.sysml', text: 'package Q { package B { part def c; } }\n' }]);
@@ -196,7 +210,7 @@ describe('ElementRegistry: relationships', () => {
         expect(sub[0].declarations[0].range.start).toEqual({ line: 2, character: 20 });
         expect(relationshipsOf(one(registry, 's')).map(r => [r.kind, r.target])).toEqual([['typing', 'Base']]);
         expect(relationshipsOf(one(registry, 'u')).map(r => [r.kind, r.target])).toEqual([['subsetting', 'w']]);
-        // An unnamed redefining usage takes the name of the feature it redefines (KerML 8.3.3.3.4).
+        // An unnamed redefining usage takes the name of the feature it redefines (SysML 7.6.5).
         const redefining = registry.getElements().find(e => e.declarations[0].range.start.line === 6)!;
         expect(relationshipsOf(redefining).map(r => [r.kind, r.target])).toEqual([['redefinition', 'w']]);
         for (const r of registry.getRelationships()) expect(r.sourceId).toBe(r.ownerId);

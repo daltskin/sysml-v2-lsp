@@ -1670,8 +1670,8 @@ describe('anonymous elements indexed by symbol ID', () => {
         const indexes = buildSymbolIndexes(st.getAllSymbols());
         expect(ownerOf(member, indexes)).toBe(iface);
         // The member still sees the enclosing package, through its anonymous owner,
-        // then its document's root namespace and the global namespace (KerML 8.2.3.5.4).
-        expect(new NamespaceResolver().namespaceAncestors(member, indexes).map(scopeName)).toEqual([undefined, 'Demo', 'root', 'global']);
+        // then the root namespace of the workspace, the global one (SysML 7.5.1, 7.5.5).
+        expect(new NamespaceResolver().namespaceAncestors(member, indexes).map(scopeName)).toEqual([undefined, 'Demo', 'global']);
     });
 
     it('links each member to its own owner when a declared name is quoted like an anonymous element\'s declaration', async () => {
@@ -1695,8 +1695,8 @@ describe('anonymous elements indexed by symbol ID', () => {
         const [wOwner] = resolver.namespaceAncestors(w, indexes);
         const [innerOwner] = resolver.namespaceAncestors(inner, indexes);
         expect(wOwner).not.toBe(innerOwner);
-        expect(resolver.namespaceAncestors(w, indexes).map(scopeName)).toEqual([undefined, 'Demo', 'root', 'global']);
-        expect(resolver.namespaceAncestors(inner, indexes).map(scopeName)).toEqual([declared.name, 'Demo', 'root', 'global']);
+        expect(resolver.namespaceAncestors(w, indexes).map(scopeName)).toEqual([undefined, 'Demo', 'global']);
+        expect(resolver.namespaceAncestors(inner, indexes).map(scopeName)).toEqual([declared.name, 'Demo', 'global']);
     });
 
     it('links every member to its own owner by symbol ID, inside an anonymous element too', async () => {

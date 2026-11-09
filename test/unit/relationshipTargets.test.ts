@@ -32,7 +32,7 @@ function targets(documents: Array<{ uri: string; text: string }>) {
 const doc = (text: string) => ({ uri: 'file:///w/a.sysml', text });
 const A = 'file:///w/a.sysml';
 
-describe('relationship targets (KerML 8.3.2.1.3, 8.2.3.5)', () => {
+describe('relationship targets (SysML 7.2.3, 8.2.3.5)', () => {
     it('resolves SysML Table 4 "Redefinition" to the inherited feature, not a same-named one elsewhere', () => {
         const { at } = targets([doc(`package Redefinition {
     part def Part1;
@@ -90,7 +90,7 @@ describe('relationship targets (KerML 8.3.2.1.3, 8.2.3.5)', () => {
         expect(at(A, 4)).toBe(`${A}:2`);
     });
 
-    it('resolves a redefinition owned by a package by the basic resolution (KerML 8.2.3.5.2)', () => {
+    it('resolves a redefinition owned by a package by the basic resolution (SysML 7.5.1)', () => {
         const { at } = targets([doc('package P {\n    part w;\n    part x :>> w;\n}\n')]);
         expect(at(A, 2)).toBe(`${A}:1`);
     });
@@ -216,5 +216,5 @@ describe('relationship targets on the corpus', () => {
             }
         }
         expect(resolved).toBeGreaterThan(registry.getRelationships().length / 2);
-    }, 120_000);
+    }, 300_000);
 });

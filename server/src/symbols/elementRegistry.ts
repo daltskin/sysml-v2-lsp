@@ -15,13 +15,13 @@ export interface RegistryElement {
     kind: SysMLElementKind;
     name?: string;
     shortName?: string;
-    /** For a package: whether it is a library package (KerML 8.3.4.13.3). */
+    /** For a package: whether it is a library package (SysML 8.2.2.5). */
     isLibraryPackage?: boolean;
-    /** Its `owner` (KerML 8.3.2.1.2); none for a top-level element. */
+    /** Its `owner` (SysML 7.2.1); none for a top-level element. */
     ownerId?: string;
-    /** Its `ownedElement`s (KerML 8.3.2.1.2), whichever document declares them, in order. */
+    /** Its `ownedElement`s (SysML 7.2.1), whichever document declares them, in order. */
     ownedElementIds: string[];
-    /** Its `ownedRelationship`s (KerML 8.3.2.1.2) the registry records, in order. */
+    /** Its `ownedRelationship`s (SysML 7.2.1) the registry records, in order. */
     ownedRelationshipIds: string[];
     /** Its declarations, by document URI, then position: more than one only for a package. */
     declarations: Declaration[];
@@ -30,7 +30,7 @@ export interface RegistryElement {
 /** The kinds of relationship the registry records. */
 export type RegistryRelationshipKind = OwnedSpecialization['kind'] | 'import';
 
-/** A relationship of the registry, an element of its own (KerML 8.3.2.1.3). */
+/** A relationship of the registry, an element of its own (SysML 7.2.3). */
 export interface RegistryRelationship {
     symbolId: string;
     kind: RegistryRelationshipKind;
@@ -67,7 +67,7 @@ interface Node {
 /**
  * The model of the whole workspace by ID, not by document: every element once,
  * its owner and owned elements by ID, its declarations, and the relationships
- * it declares (KerML 8.3.2.1). Same-named packages of one namespace, in one
+ * it declares (SysML 7.2). Same-named packages of one namespace, in one
  * document or several, are one element. Kept up to date document by document:
  * a change re-derives only that document's elements and the namespaces it
  * shares with others.
@@ -77,11 +77,15 @@ export class ElementRegistry {
     private readonly nodes = new Map<string, Node>();
     private readonly nodeOf = new Map<SysMLSymbol, Node>();
     private readonly relationships = new Map<string, RegistryRelationship>();
+    /**
+     * The element each relationship was recorded for: when elements trade
+     * position-based IDs, one may take relationship IDs another still lists,
+     * and each removes only those it recorded.
+     */
+    private readonly relationshipNodes = new Map<string, Node>();
     private readonly roots: Node[] = [];
     private readonly rootPackages = new Map<string, Node>();
-    /** Each top-level declaration's position among its document's, for a position-based path. */
-    private readonly rootPositions = new Map<SysMLSymbol, number>();
-    /** Each document's top-level imports, the imports of its root namespace, by `canonicalUri`. */
+    /** Each document's top-level imports, imports of the root namespace, by `canonicalUri`. */
     private readonly rootImports = new Map<string, readonly ImportTarget[]>();
     private rootIds: string[] = [];
 
@@ -103,7 +107,7 @@ export class ElementRegistry {
 
     /**
      * Set the declarations of document `uri`, in place of any it had, and the
-     * imports written at its top level, which its root namespace owns (KerML 7.2.5.3).
+     * imports written at its top level, which the root namespace owns (SysML 7.5.5).
      */
     setDocument(uri: string, declarations: readonly SysMLSymbol[], rootImports: readonly ImportTarget[] = []): void {
         this.update([uri], [[uri, declarations]]);
@@ -117,9 +121,9 @@ export class ElementRegistry {
         if (this.documents.has(uri)) this.update([uri], []);
     }
 
-    /** The imports of document `uri`'s root namespace, written at its top level. */
-    getRootImports(uri: string): readonly ImportTarget[] {
-        return this.rootImports.get(canonicalUri(uri)) ?? [];
+    /** The imports written at the top level of every document, by document URI: those of the root namespace. */
+    getAllRootImports(): readonly ImportTarget[] {
+        return [...this.rootImports].sort(([a], [b]) => compare(a, b)).flatMap(([, imports]) => imports);
     }
 
     /** The element with `symbolId`, if any. */
@@ -177,7 +181,6 @@ export class ElementRegistry {
             for (const symbol of [...declarations].reverse()) {
                 const node = this.nodeOf.get(symbol);
                 this.nodeOf.delete(symbol);
-                this.rootPositions.delete(symbol);
                 if (!node) continue;
                 node.symbols = node.symbols.filter(s => s !== symbol);
                 touch(node.owner);
@@ -195,7 +198,6 @@ export class ElementRegistry {
 
         for (const [uri, declarations] of added) {
             this.documents.set(uri, [...declarations]);
-            declarations.filter(s => !this.ownerOf(s)).sort(compareSites).forEach((s, index) => this.rootPositions.set(s, index + 1));
         }
         for (const symbol of this.ownersFirst(added.flatMap(([, declarations]) => declarations))) {
             const ownerSymbol = this.ownerOf(symbol);
@@ -261,30 +263,28 @@ export class ElementRegistry {
     }
 
     /**
-     * Give the top-level elements their IDs: a package by its name, one
-     * element for all documents; any other element by its document and its
-     * segment, or its position when an earlier one of its document has that
-     * segment (KerML 7.2.5.3, 9.1).
+     * Give the top-level elements their IDs (SysML 9.1): their URLs are their
+     * names, as members of the one root namespace of the workspace; one whose
+     * segment an earlier one has (a package keeping its own) has its position
+     * there instead (KerML 8.3.2.1.2 `path()`).
      */
     private layoutRoots(): void {
         this.roots.sort(byFirstDeclaration);
-        const claimants = claimantsOf(this.roots, node => node.element.kind === SysMLElementKind.Package ? '' : canonicalUri(node.symbols[0].uri));
-        for (const root of this.roots) {
+        const claimants = claimantsOf(this.roots, () => '');
+        this.roots.forEach((root, index) => {
             const symbol = root.symbols[0];
             const claims = claimants.has(root);
-            const path = claims ? segmentOf(symbol) : `/${this.rootPositions.get(symbol)}/1`;
-            const id = claims && packageKey(symbol) !== undefined
-                ? RegistryIds.topLevelPackage(symbol.uri, path)
-                : RegistryIds.topLevelElement(symbol.uri, path);
+            const path = claims ? segmentOf(symbol) : `/${index + 1}/1`;
+            const id = RegistryIds.topLevel(symbol.uri, path);
             this.place(root, id, path, claims && escapedName(symbol) !== undefined, id);
-        }
+        });
         this.rootIds = this.roots.map(root => root.element.symbolId);
     }
 
     /**
      * Give `owner`'s members their IDs: each its qualified name as its path, or,
      * when an earlier member has its segment (a package keeping its own), its
-     * position (KerML 8.3.2.1.2).
+     * position (KerML 8.3.2.1.2 `path()`).
      */
     private layoutMembers(owner: Node): void {
         owner.members.sort(byFirstDeclaration);
@@ -323,15 +323,24 @@ export class ElementRegistry {
     /** Re-derive `node`'s declarations and the relationships they declare, by its current ID. */
     private refreshDeclarations(node: Node): void {
         node.element.declarations = node.symbols.map(({ uri, range }) => ({ uri, range }));
-        for (const id of node.element.ownedRelationshipIds) this.relationships.delete(id);
+        this.forgetRelationships(node);
         node.element.ownedRelationshipIds = this.relationshipsOf(node);
     }
 
     /** Take `node` and what it declares out of the registry. */
     private forget(node: Node): void {
         if (this.nodes.get(node.element.symbolId) === node) this.nodes.delete(node.element.symbolId);
-        for (const id of node.element.ownedRelationshipIds) this.relationships.delete(id);
+        this.forgetRelationships(node);
         node.element.symbolId = '';
+    }
+
+    /** Take out the relationships recorded for `node`, not ones another element has since taken the IDs of. */
+    private forgetRelationships(node: Node): void {
+        for (const id of node.element.ownedRelationshipIds) {
+            if (this.relationshipNodes.get(id) !== node) continue;
+            this.relationships.delete(id);
+            this.relationshipNodes.delete(id);
+        }
     }
 
     /** Record the specializations and imports `node`'s declarations declare, and give their IDs in order. */
@@ -344,6 +353,7 @@ export class ElementRegistry {
             seen.set(key, count);
             const symbolId = RegistryIds.relationship(ownerId, count === 1 ? key : `${key}#${count}`);
             this.relationships.set(symbolId, { symbolId, ownerId, sourceId: ownerId, ...relationship });
+            this.relationshipNodes.set(symbolId, node);
             ids.push(symbolId);
         };
         for (const symbol of node.symbols) {

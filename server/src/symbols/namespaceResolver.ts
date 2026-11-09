@@ -34,11 +34,6 @@ export interface SymbolIndexes {
     byId: Map<string, SysMLSymbol>;
     definitionsByName: Map<string, SysMLSymbol[]>;
     portsByName: Map<string, SysMLSymbol[]>;
-    /**
-     * By name, the declarations known by that name that clash with another one
-     * on it in their namespace through a short name (`findConflictingShortNames`).
-     */
-    clashingShortNames: Map<string, Set<SysMLSymbol>>;
     /** The registry name resolution works on (`NamespaceResolver`). */
     registry: ElementRegistry;
 }
@@ -48,8 +43,6 @@ export interface ResolvedMember {
     symbol: SysMLSymbol;
     /** Effective visibility of this membership *within its resolving namespace*. */
     visibility: 'public' | 'private' | 'protected';
-    /** Whether it is an owned membership of the resolving namespace, not an inherited or imported one. */
-    owned?: boolean;
 }
 
 /** A reference may be missing or ambiguous; only missing names allow library fallback. */
@@ -119,82 +112,71 @@ export function findConflictedQualifiedNames(allSymbols: SysMLSymbol[]): Map<str
 
 export { memberNamesOf };
 
+/** A declaration's clash: the declarations it clashes with, itself included, and the names it clashes on. */
+export interface Conflict {
+    declarations: SysMLSymbol[];
+    names: string[];
+}
+
+/** The conflicts of each `SymbolIndexes`, found once (`findConflicts`). */
+const conflictsByIndexes = new WeakMap<SymbolIndexes, Map<SysMLSymbol, Conflict>>();
+
 /**
  * Every declaration whose name is not distinguishable from another one's in
- * the same namespace (see `findConflictedQualifiedNames`), mapped to all the
- * declarations it clashes with, itself included. Besides clashing qualified
- * names, this covers members of an anonymous element, which have no
- * qualified name: two of them clash when they share their owner (by
- * `parentId`) and name. The two cases are grouped separately, so no
- * qualified name, however it is quoted, can be confused with an owner's symbol ID.
- *
- * A short name counts as well (KerML 7.2.5.2): two declarations in one
- * namespace clash when either one's name or short name is the other's name
- * or short name, e.g. `part def <A> Alpha;` and `part def A;`.
+ * the same namespace (see `findConflicts`), mapped to all the declarations it
+ * clashes with, itself included.
  */
-export function findConflictingDeclarations(allSymbols: SysMLSymbol[]): Map<SysMLSymbol, SysMLSymbol[]> {
-    return new Map([...findConflicts(allSymbols)].map(([symbol, { declarations }]) => [symbol, declarations]));
+export function findConflictingDeclarations(indexes: SymbolIndexes): Map<SysMLSymbol, SysMLSymbol[]> {
+    return new Map([...findConflicts(indexes)].map(([symbol, { declarations }]) => [symbol, declarations]));
 }
 
 /**
- * As `findConflictingDeclarations`, with the names each declaration clashes
- * on: a name or short name it shares with another (KerML 8.3.2.4.3), which
- * need not be the one its qualified name is built from.
+ * The declarations of the registry's elements that clash with another element
+ * of the same namespace (KerML 8.3.2.4.3 `validateNamespaceDistinguishibility`),
+ * with the names they clash on: two elements of one kind (kinds conforming
+ * only to themselves here) sharing a name or short name (SysML 7.2.2), among
+ * the members of one element, or the top-level elements of every document,
+ * the root namespace of the workspace (SysML 7.5.5). A package is never in
+ * conflict, since the same-named packages of a namespace are one element.
  */
-export function findConflicts(allSymbols: SysMLSymbol[]): Map<SysMLSymbol, { declarations: SysMLSymbol[]; names: string[] }> {
-    const conflicting = new Map<SysMLSymbol, { declarations: SysMLSymbol[]; names: string[] }>();
-    const add = (name: string, group: SysMLSymbol[]) => {
-        for (const s of group) {
+export function findConflicts(indexes: SymbolIndexes): Map<SysMLSymbol, Conflict> {
+    const cached = conflictsByIndexes.get(indexes);
+    if (cached) return cached;
+    const { registry } = indexes;
+    const conflicting = new Map<SysMLSymbol, Conflict>();
+    const add = (name: string, group: readonly RegistryElement[]) => {
+        const declarations = group.flatMap(element => [...registry.symbolsOf(element)]);
+        for (const s of declarations) {
             const found = conflicting.get(s);
             conflicting.set(s, {
-                declarations: [...new Set([...(found?.declarations ?? []), ...group])],
+                declarations: [...new Set([...(found?.declarations ?? []), ...declarations])],
                 names: [...new Set([...(found?.names ?? []), name])],
             });
         }
     };
-    // Declarations sharing a qualified name clash on its last segment.
-    for (const [qualifiedName, group] of findConflictedQualifiedNames(allSymbols)) add(splitQualifiedName(qualifiedName).at(-1)!, group);
-    const membersOfAnonymous = allSymbols.filter(s => s.qualifiedName === undefined && !isAnonymous(s) && s.parentId !== undefined);
-    const byOwner = new Map<string, SysMLSymbol[]>();
-    for (const s of membersOfAnonymous) {
-        const list = byOwner.get(s.parentId!) ?? [];
-        list.push(s);
-        byOwner.set(s.parentId!, list);
-    }
-    for (const members of byOwner.values()) {
-        // By name; clashes involving a short name are found below.
-        for (const [name, group] of groupConflicts(members.filter(s => s.name), s => s.name)) add(name, group);
-    }
-    for (const { name, symbols } of findConflictingShortNames(allSymbols).values()) add(name, symbols);
-    return conflicting;
-}
-
-/**
- * Declarations of one namespace sharing a name with a short name (or two short
- * names), grouped as `findConflictingDeclarations` groups clashing names, each
- * group with the name they clash on. The
- * namespace is the owner's qualified name, so the fragments of a package
- * declared in several documents are one namespace, else the owner's symbol ID
- * for a member of an anonymous element; the two are keyed apart.
- */
-function findConflictingShortNames(allSymbols: SysMLSymbol[]): Map<string, { name: string; symbols: SysMLSymbol[] }> {
-    const byId = new Map(allSymbols.map(s => [s.symbolId, s]));
-    const entries: Array<{ symbol: SysMLSymbol; key: string }> = [];
-    const keysWithShortName = new Set<string>();
-    for (const s of allSymbols) {
-        if (isAnonymous(s)) continue;
-        const owner = s.parentId ? byId.get(s.parentId) : undefined;
-        const namespace = owner === undefined ? 'q:'
-            : owner.qualifiedName !== undefined ? `q:${owner.qualifiedName}` : `id:${owner.symbolId}`;
-        for (const name of memberNamesOf(s)) {
-            const key = `${namespace}\0${name}`;
-            entries.push({ symbol: s, key });
-            if (name === s.shortName) keysWithShortName.add(key);
+    const inspect = (members: readonly RegistryElement[]) => {
+        const byNameAndKind = new Map<string, Map<SysMLElementKind, Set<RegistryElement>>>();
+        for (const member of members) {
+            if (member.kind === SysMLElementKind.Package) continue;
+            for (const name of new Set([member.name, member.shortName])) {
+                if (name === undefined) continue;
+                let byKind = byNameAndKind.get(name);
+                if (!byKind) byNameAndKind.set(name, byKind = new Map());
+                let group = byKind.get(member.kind);
+                if (!group) byKind.set(member.kind, group = new Set());
+                group.add(member);
+            }
         }
+        for (const [name, byKind] of byNameAndKind) {
+            for (const group of byKind.values()) if (group.size > 1) add(name, [...group]);
+        }
+    };
+    inspect(registry.getRootIds().map(id => registry.getElement(id)!));
+    for (const element of registry.getElements()) {
+        inspect(element.ownedElementIds.map(id => registry.getElement(id)!));
     }
-    // Only a clash involving a short name; clashing names are found by name above.
-    const groups = groupKeyedConflicts(entries.filter(e => keysWithShortName.has(e.key)));
-    return new Map([...groups].map(([key, symbols]) => [key, { name: key.slice(key.indexOf('\0') + 1), symbols }]));
+    conflictsByIndexes.set(indexes, conflicting);
+    return conflicting;
 }
 
 /** Group `symbols` by `keyOf`, keeping groups of two or more non-package declarations of one kind. */
@@ -332,16 +314,8 @@ export function buildSymbolIndexes(allSymbols: SysMLSymbol[], registry?: Element
     for (const s of allSymbols) {
         byId.set(s.symbolId, s);
     }
-    // A name two declarations of a namespace clash on through a short name is
-    // left unresolved there, as a conflicted qualifiedName is (see `isAmbiguous`).
-    const clashingShortNames = new Map<string, Set<SysMLSymbol>>();
-    for (const { name, symbols } of findConflictingShortNames(allSymbols).values()) {
-        const clashing = clashingShortNames.get(name) ?? new Set<SysMLSymbol>();
-        for (const s of symbols) clashing.add(s);
-        clashingShortNames.set(name, clashing);
-    }
     const indexes: SymbolIndexes = {
-        byName, byParent, byQualifiedName, byId, definitionsByName, portsByName, clashingShortNames,
+        byName, byParent, byQualifiedName, byId, definitionsByName, portsByName,
         registry: registry ?? ElementRegistry.fromSymbols(allSymbols),
     };
 
@@ -443,22 +417,16 @@ export function evaluateFilter(expr: FilterExpr, symbol: SysMLSymbol): boolean {
 }
 
 /**
- * A document's root namespace (KerML 7.2.5.3): its top-level elements, as
- * members of a namespace of its own. Interned per `SymbolIndexes`, one per document.
+ * The root namespace of the workspace (SysML 7.5.5): every document's
+ * top-level elements and top-level imports, one namespace for all documents,
+ * as the textual notation leaves the extent of a root namespace to the tool.
+ * It is the global namespace too (SysML 7.5.1, 7.5.5), the standard library's
+ * top-level elements among its members.
  */
-export interface RootNamespace {
-    readonly kind: 'root';
-    readonly uri: string;
-}
-
-/** The global namespace (KerML 8.2.3.5.4): the top-level elements of every root namespace. */
 export const GLOBAL_NAMESPACE = { kind: 'global' } as const;
 
-/**
- * A namespace names are resolved in: an element of the registry, a
- * document's root namespace, or the global namespace.
- */
-export type NamespaceScope = RegistryElement | RootNamespace | typeof GLOBAL_NAMESPACE;
+/** A namespace names are resolved in: an element of the registry, or the root namespace of the workspace. */
+export type NamespaceScope = RegistryElement | typeof GLOBAL_NAMESPACE;
 
 /** A namespace's resolved members by name, as `getResolvedMembers` gives them. */
 type MemberTable = Map<string, ResolvedMember[]>;
@@ -472,12 +440,11 @@ export interface TargetResolution {
 /** What the resolver caches for one `SymbolIndexes`. */
 interface ResolverCache {
     tables: Map<NamespaceScope, MemberTable>;
-    roots: Map<string, RootNamespace>;
     targets: Map<string, TargetResolution>;
 }
 
 /**
- * Resolves names from a reference site (KerML 8.2.3.5), over the element
+ * Resolves names from a reference site (SysML 7.5.1), over the element
  * registry: a namespace is an element, its members are the elements it owns,
  * and outward from it come its owners, the root namespace of the document the
  * reference is written in, and the global namespace. Each namespace's member
@@ -499,12 +466,12 @@ export class NamespaceResolver {
 
     /** Resolve a (possibly qualified) name from the namespace owning `symbol`. */
     resolveNameFrom(symbol: SysMLSymbol, name: string, indexes: SymbolIndexes): SysMLSymbol | undefined {
-        return this.resolveFrom(this.owningScope(symbol, indexes), symbol.uri, name, indexes).symbol;
+        return this.resolveFrom(this.owningScope(symbol, indexes), name, indexes).symbol;
     }
 
-    /** Resolve a reference in `namespace`, or, without one, at the top level of document `uri`. */
-    resolveNameIn(namespace: SysMLSymbol | undefined, name: string, indexes: SymbolIndexes, uri?: string): SysMLSymbol | undefined {
-        return this.resolveReferenceIn(namespace, name, indexes, undefined, uri).symbol;
+    /** Resolve a reference in `namespace`, or, without one, at the top level of a document. */
+    resolveNameIn(namespace: SysMLSymbol | undefined, name: string, indexes: SymbolIndexes): SysMLSymbol | undefined {
+        return this.resolveReferenceIn(namespace, name, indexes).symbol;
     }
 
     /**
@@ -514,20 +481,20 @@ export class NamespaceResolver {
      * reference (`SysMLSymbol.namingReference`), which is a member of the
      * namespace the reference is resolved in, but never the feature it references.
      */
-    resolveReferenceIn(namespace: SysMLSymbol | undefined, name: string, indexes: SymbolIndexes, excluding?: SysMLSymbol, uri?: string): NameResolution {
+    resolveReferenceIn(namespace: SysMLSymbol | undefined, name: string, indexes: SymbolIndexes, excluding?: SysMLSymbol): NameResolution {
         const scope = namespace ? this.scopeOf(namespace, indexes) : undefined;
-        return this.resolveFrom(scope, uri ?? namespace?.uri, name, indexes, excluding);
+        return this.resolveFrom(scope, name, indexes, excluding);
     }
 
     /** Resolve a public qualified or feature-path member, without enclosing-scope fallback. */
     resolveMemberReference(owner: SysMLSymbol, name: string, indexes: SymbolIndexes): NameResolution {
         const scope = this.scopeOf(owner, indexes);
         const members = scope && this.tableOf(scope, indexes).get(name);
-        if (members && this.isAmbiguous(name, members, indexes)) return { ambiguous: true };
+        if (members && this.isAmbiguous(members, indexes)) return { ambiguous: true };
         return { symbol: members?.find(member => member.visibility === 'public')?.symbol, ambiguous: false };
     }
 
-    /** Resolve a feature of `receiver` in a feature chain: its own member, else one of its generals' (KerML 8.3.3.1.8). */
+    /** Resolve a feature of `receiver` in a feature chain: its own member, else one of its generals' (SysML 7.6.1). */
     resolveFeatureReference(receiver: SysMLSymbol, name: string, indexes: SymbolIndexes): NameResolution {
         const queue = [receiver];
         const visited = new Set<SysMLSymbol>();
@@ -545,7 +512,7 @@ export class NamespaceResolver {
     }
 
     /**
-     * The element a relationship of the registry targets (KerML 8.3.2.1.3
+     * The element a relationship of the registry targets (SysML 7.2.3
      * `target`), cached per `indexes`; none when its target is unresolved or
      * ambiguous, or a conjugated port typing (`~P`), whose conjugated port
      * definition the server records no element for.
@@ -570,8 +537,8 @@ export class NamespaceResolver {
     /** The target of `relationship`, which `owner` declares in `declaring`, by the rule of its kind. */
     private targetOf(relationship: RegistryRelationship, owner: RegistryElement, declaring: SysMLSymbol, indexes: SymbolIndexes): NameResolution {
         if (relationship.kind === 'import') {
-            // An import's target is resolved from the importing namespace outward (KerML 8.3.2.4.5).
-            const { symbols, ambiguous } = this.resolveAll(owner, declaring.uri, relationship.target, indexes, undefined, true);
+            // An import's target is resolved from the importing namespace outward (SysML 7.5.3).
+            const { symbols, ambiguous } = this.resolveAll(owner, relationship.target, indexes, undefined, true);
             return ambiguous || symbols.length > 1 ? { ambiguous: true } : { symbol: symbols[0], ambiguous: false };
         }
         const chain = relationship.chain;
@@ -581,7 +548,7 @@ export class NamespaceResolver {
         if ((relationship.kind === 'typing' || relationship.kind === 'specializes') && single) {
             // A general is a type, never a package (KerML 8.3.3.1.8 `general : Type`).
             const start = first.global ? GLOBAL_NAMESPACE : this.owningScope(declaring, indexes);
-            const { symbols, ambiguous } = this.resolveAll(start, first.global ? undefined : declaring.uri, joinQualifiedName(first.names), indexes, declaring, true);
+            const { symbols, ambiguous } = this.resolveAll(start, joinQualifiedName(first.names), indexes, declaring, true);
             if (ambiguous) return { ambiguous: true };
             return { symbol: symbols.find(s => s.kind !== SysMLElementKind.Package), ambiguous: false };
         }
@@ -597,7 +564,7 @@ export class NamespaceResolver {
     }
 
     /**
-     * Resolve a feature chain written in `from`'s declaration (KerML 7.3.4.6,
+     * Resolve a feature chain written in `from`'s declaration (SysML 7.6.6,
      * 8.2.3.5.2): its first qualified name from the namespace owning `from`
      * (or, global, from the global namespace), never to `from` itself, each
      * later one's first name among the previous feature's features, the rest
@@ -607,8 +574,8 @@ export class NamespaceResolver {
         const [first, ...rest] = chain;
         const name = joinQualifiedName(first.names);
         let result = first.global
-            ? this.resolveFrom(GLOBAL_NAMESPACE, undefined, name, indexes, from)
-            : this.resolveFrom(this.owningScope(from, indexes), from.uri, name, indexes, from);
+            ? this.resolveFrom(GLOBAL_NAMESPACE, name, indexes, from)
+            : this.resolveFrom(this.owningScope(from, indexes), name, indexes, from);
         for (const link of rest) {
             const [feature, ...members] = link.names;
             if (!result.symbol || feature === undefined) return result.symbol ? { ambiguous: false } : result;
@@ -623,17 +590,17 @@ export class NamespaceResolver {
 
     /**
      * The namespaces a name is resolved in from `symbol`, innermost first
-     * (KerML 8.2.3.5.4): its owner and the owner's owners, the root namespace
+     * (SysML 7.5.1, 7.5.5): its owner and the owner's owners, the root namespace
      * of its document, and the global namespace.
      */
     namespaceAncestors(symbol: SysMLSymbol, indexes: SymbolIndexes): NamespaceScope[] {
-        return this.ancestorsOf(this.owningScope(symbol, indexes), symbol.uri, indexes);
+        return this.ancestorsOf(this.owningScope(symbol, indexes), indexes);
     }
 
     /**
      * The resolved member table of a namespace: its owned members, for a
-     * definition or usage the members it inherits (KerML 8.2.3.5.3), then its
-     * imported members, transitively (KerML 8.3.2.4.5). A namespace given by
+     * definition or usage the members it inherits (SysML 7.5.1), then its
+     * imported members, transitively (SysML 7.5.3). A namespace given by
      * its qualified name (`''` for the global namespace) or by its symbol.
      */
     getResolvedMembers(namespace: NamespaceKey | NamespaceScope, indexes: SymbolIndexes): MemberTable {
@@ -643,7 +610,7 @@ export class NamespaceResolver {
             const symbol = indexes.byQualifiedName.get(namespace);
             scope = symbol && this.scopeOf(symbol, indexes);
         } else if ('symbolId' in namespace && 'ownedElementIds' in namespace) scope = namespace as RegistryElement;
-        else if ('kind' in namespace && (namespace.kind === 'root' || namespace.kind === 'global')) scope = namespace as NamespaceScope;
+        else if (namespace === GLOBAL_NAMESPACE) scope = GLOBAL_NAMESPACE;
         else scope = this.scopeOf(namespace as SysMLSymbol, indexes);
         return scope ? this.tableOf(scope, indexes) : new Map();
     }
@@ -678,30 +645,18 @@ export class NamespaceResolver {
     private cacheOf(indexes: SymbolIndexes): ResolverCache {
         let cache = this.cacheByIndexes.get(indexes);
         if (!cache) {
-            cache = { tables: new Map(), roots: new Map(), targets: new Map() };
+            cache = { tables: new Map(), targets: new Map() };
             this.cacheByIndexes.set(indexes, cache);
         }
         return cache;
     }
 
-    /** The root namespace of document `uri`, one per document. */
-    private rootOf(uri: string, indexes: SymbolIndexes): RootNamespace {
-        const { roots } = this.cacheOf(indexes);
-        const key = canonicalUri(uri);
-        let root = roots.get(key);
-        if (!root) {
-            root = { kind: 'root', uri: key };
-            roots.set(key, root);
-        }
-        return root;
-    }
-
     /**
      * The namespaces a name is resolved in, from `start` outward (KerML
-     * 8.2.3.5.4): `start` and its owners, the root namespace of document `uri`
-     * (when known), and the global namespace last.
+     * 8.2.3.5.4): `start` and its owners, then the root namespace of the
+     * workspace, the global namespace, last.
      */
-    private ancestorsOf(start: NamespaceScope | undefined, uri: string | undefined, indexes: SymbolIndexes): NamespaceScope[] {
+    private ancestorsOf(start: NamespaceScope | undefined, indexes: SymbolIndexes): NamespaceScope[] {
         const ancestors: NamespaceScope[] = [];
         let current: NamespaceScope | undefined = start;
         let guard = 0;
@@ -709,8 +664,6 @@ export class NamespaceResolver {
             ancestors.push(current);
             current = current.ownerId === undefined ? undefined : indexes.registry.getElement(current.ownerId);
         }
-        if (start && !isElementScope(start) && start.kind === 'root') ancestors.push(start);
-        else if (uri !== undefined) ancestors.push(this.rootOf(uri, indexes));
         ancestors.push(GLOBAL_NAMESPACE);
         return ancestors;
     }
@@ -720,8 +673,8 @@ export class NamespaceResolver {
      * namespace of `uri`) to one element (`resolveAll`): a name found for more
      * than one, through distinguishable qualifiers, is ambiguous.
      */
-    private resolveFrom(start: NamespaceScope | undefined, uri: string | undefined, name: string, indexes: SymbolIndexes, excluding?: SysMLSymbol): NameResolution {
-        const { symbols, ambiguous } = this.resolveAll(start, uri, name, indexes, excluding, false);
+    private resolveFrom(start: NamespaceScope | undefined, name: string, indexes: SymbolIndexes, excluding?: SysMLSymbol): NameResolution {
+        const { symbols, ambiguous } = this.resolveAll(start, name, indexes, excluding, false);
         if (ambiguous || symbols.length > 1) return { ambiguous: true };
         return { symbol: symbols[0], ambiguous: false };
     }
@@ -729,18 +682,18 @@ export class NamespaceResolver {
     /**
      * Resolve a (possibly qualified) name from namespace `start` (none: the root
      * namespace of `uri`): its first segment in the innermost namespace having a
-     * member of that name (KerML 8.2.3.5.4), each later one among the visible
+     * member of that name (SysML 7.5.1, 7.5.5), each later one among the visible
      * members of what the one before it resolves to. A qualifying segment naming
      * several distinguishable members (a package and a definition, KerML
      * 8.3.2.4.3) qualifies through each of them; the last segment gives each
      * qualifier's first member of its name, or with `all` every one of them.
      */
     private resolveAll(
-        start: NamespaceScope | undefined, uri: string | undefined, name: string, indexes: SymbolIndexes,
+        start: NamespaceScope | undefined, name: string, indexes: SymbolIndexes,
         excluding: SysMLSymbol | undefined, all: boolean,
     ): { symbols: SysMLSymbol[]; ambiguous: boolean } {
         const [first, ...rest] = splitQualifiedName(name);
-        const ancestors = this.ancestorsOf(start, uri, indexes);
+        const ancestors = this.ancestorsOf(start, indexes);
         const unresolved = { symbols: [], ambiguous: false };
 
         let current: SysMLSymbol[] = [];
@@ -750,7 +703,7 @@ export class NamespaceResolver {
             if (candidates && candidates.length > 0) {
                 // Ambiguous among all the namespace's members of that name, the excluded one
                 // included: two indistinguishable members leave the name unresolved there.
-                if (this.isAmbiguous(first, members!, indexes)) return { symbols: [], ambiguous: true };
+                if (this.isAmbiguous(members!, indexes)) return { symbols: [], ambiguous: true };
                 current = rest.length > 0 || all ? candidates.map(c => c.symbol) : [candidates[0].symbol];
                 break;
             }
@@ -767,7 +720,7 @@ export class NamespaceResolver {
                 const ownerScope = this.scopeOf(owner, indexes);
                 const members = ownerScope && this.tableOf(ownerScope, indexes).get(segment);
                 if (!members) continue;
-                if (this.isAmbiguous(segment, members, indexes)) return { symbols: [], ambiguous: true };
+                if (this.isAmbiguous(members, indexes)) return { symbols: [], ambiguous: true };
                 const visible = members.filter(m => m.visibility === 'public'
                     || ancestors.includes(ownerScope!)
                     || (m.visibility === 'protected' && this.isProtectedVisibleFrom(ancestors, owner, indexes)));
@@ -781,21 +734,25 @@ export class NamespaceResolver {
     }
 
     /**
-     * Whether `name` can't be resolved to one of `candidates`, the members of
-     * one namespace by that name: two of them are owned members of the same
-     * kind, so indistinguishable (KerML 8.3.2.4.3, kinds conforming only to
-     * themselves here), or two clash on it through a short name (KerML 7.2.5.2).
+     * Whether a name can't be resolved to one of `candidates`, the members of
+     * one namespace by that name: two of them are of the same kind and owned
+     * by the same element, so indistinguishable there (KerML 8.3.2.4.3, kinds
+     * conforming only to themselves here), whether the name is either one's
+     * name or short name (SysML 7.2.2), and whether this namespace owns them
+     * or inherits or imports them from that one.
      */
-    private isAmbiguous(name: string, candidates: ResolvedMember[], indexes: SymbolIndexes): boolean {
-        const ownedKinds = new Map<SysMLElementKind, SysMLSymbol>();
-        for (const candidate of candidates) {
-            if (!candidate.owned) continue;
-            const other = ownedKinds.get(candidate.symbol.kind);
-            if (other && other !== candidate.symbol) return true;
-            ownedKinds.set(candidate.symbol.kind, candidate.symbol);
+    private isAmbiguous(candidates: ResolvedMember[], indexes: SymbolIndexes): boolean {
+        const seen = new Map<string, SysMLSymbol>();
+        for (const { symbol } of candidates) {
+            const element = this.scopeOf(symbol, indexes);
+            if (!element || element.kind === SysMLElementKind.Package) continue;
+            // Top-level elements, of every document, are owned by the one root namespace.
+            const key = `${element.ownerId ?? ''}\0${element.kind}`;
+            const other = seen.get(key);
+            if (other && other !== symbol) return true;
+            seen.set(key, symbol);
         }
-        const clashing = indexes.clashingShortNames.get(name);
-        return clashing !== undefined && candidates.filter(c => clashing.has(c.symbol)).length > 1;
+        return false;
     }
 
     /**
@@ -867,27 +824,22 @@ export class NamespaceResolver {
             if (existingIndex === -1) {
                 list.push(entry);
             } else if (VISIBILITY_RANK[entry.visibility] > VISIBILITY_RANK[list[existingIndex].visibility]) {
-                list[existingIndex] = { ...entry, owned: list[existingIndex].owned || entry.owned };
+                list[existingIndex] = entry;
             }
             members.set(name, list);
         };
         const addOwned = (element: RegistryElement) => {
             const owned = this.symbolOf(element, indexes);
             if (!owned || isAnonymous(owned)) return;
-            for (const name of memberNamesOf(owned)) addMember(name, { symbol: owned, visibility: owned.visibility ?? 'public', owned: true });
+            for (const name of memberNamesOf(owned)) addMember(name, { symbol: owned, visibility: owned.visibility ?? 'public' });
         };
 
         if (!isElementScope(scope)) {
-            for (const id of indexes.registry.getRootIds()) {
-                const root = indexes.registry.getElement(id)!;
-                if (scope.kind === 'global' || root.declarations.some(d => canonicalUri(d.uri) === scope.uri)) addOwned(root);
-            }
+            for (const id of indexes.registry.getRootIds()) addOwned(indexes.registry.getElement(id)!);
             tables.set(scope, members);
-            // A document's top-level imports are memberships of its root namespace alone: visible
-            // within its top-level elements, never from another document (SysML 7.5.5).
-            if (scope.kind === 'root') {
-                for (const imp of indexes.registry.getRootImports(scope.uri)) this.applyImport(imp, scope, scope.uri, indexes, addMember);
-            }
+            // Every document's top-level imports are memberships of the one root namespace,
+            // visible within all its top-level elements (SysML 7.5.5).
+            for (const imp of indexes.registry.getAllRootImports()) this.applyImport(imp, scope, indexes, addMember);
             return members;
         }
 
@@ -911,7 +863,7 @@ export class NamespaceResolver {
                         if (evaluateFilter(effectiveFilter, entry.symbol)) addMember(name, entry);
                     }
                     : addMember;
-                this.applyImport(imp, scope, declaration.uri, indexes, filteredAddMember);
+                this.applyImport(imp, scope, indexes, filteredAddMember);
             }
         }
         return members;
@@ -951,11 +903,11 @@ export class NamespaceResolver {
     }
 
     /**
-     * The types `type` specializes, each once (KerML 8.3.3.1.8): the targets
+     * The types `type` specializes, each once (SysML 7.6.1): the targets
      * of the specializations its own declarations parse to (typing,
      * subclassification, subsetting, redefinition, `resolveTarget`), and the
      * feature a shorthand's reference subsetting (`perform a`) refers to
-     * (KerML 8.3.3.3.9). Never `type` itself.
+     * (SysML 7.17.6, 7.9.5). Never `type` itself.
      */
     private generalsOf(type: SysMLSymbol, indexes: SymbolIndexes): SysMLSymbol[] {
         const element = this.scopeOf(type, indexes);
@@ -986,7 +938,7 @@ export class NamespaceResolver {
         // The features of a redefined chain (`:>> x2.p`) are resolved as any reference, from the owner.
         let feature = symbol.namedByRedefinition && chain.length === 0
             ? owner && this.resolveRedefinedFeature(owner, first.name, indexes).symbol
-            : this.resolveReferenceIn(owner, first.name, indexes, symbol, symbol.uri).symbol;
+            : this.resolveReferenceIn(owner, first.name, indexes, symbol).symbol;
         for (const qualified of chain) {
             const [member, ...rest] = qualified.segments;
             feature = feature && this.resolveFeatureReference(feature, member.name, indexes).symbol;
@@ -1004,7 +956,7 @@ export class NamespaceResolver {
      */
     resolveRedefinedFeature(owningType: SysMLSymbol, name: string, indexes: SymbolIndexes): NameResolution {
         for (const general of this.generalsOf(owningType, indexes)) {
-            const resolution = this.resolveFrom(this.scopeOf(general, indexes), general.uri, name, indexes);
+            const resolution = this.resolveFrom(this.scopeOf(general, indexes), name, indexes);
             if (resolution.symbol || resolution.ambiguous) return resolution;
         }
         return { ambiguous: false };
@@ -1033,12 +985,11 @@ export class NamespaceResolver {
     private applyImport(
         imp: ImportTarget,
         importing: NamespaceScope,
-        uri: string,
         indexes: SymbolIndexes,
         addMember: (name: string, entry: ResolvedMember) => void,
     ): void {
         // A target naming distinguishable members (a package and a definition) imports through each.
-        const { symbols: targets, ambiguous } = this.resolveAll(importing, uri, imp.target, indexes, undefined, true);
+        const { symbols: targets, ambiguous } = this.resolveAll(importing, imp.target, indexes, undefined, true);
         if (ambiguous) return;
         for (const target of targets) {
             const targetScope = this.scopeOf(target, indexes);

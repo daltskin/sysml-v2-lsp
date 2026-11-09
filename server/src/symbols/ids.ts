@@ -207,7 +207,7 @@ function compareDeclarationSites(a: SysMLSymbol, b: SysMLSymbol): number {
 
 /**
  * The symbol IDs of the element registry (`ElementRegistry`), version 5 UUIDs
- * (KerML 9.1) derived from an element's URL or path only, never from the
+ * (SysML 9.1) derived from an element's URL or path only, never from the
  * order documents are indexed in, so the same declarations give the same IDs
  * on every machine and in every session.
  */
@@ -228,17 +228,12 @@ function registryUuid(namespace: string, name: string): string {
 }
 
 export const RegistryIds = {
-    /** A top-level package, one element however many documents declare it: its URL is the project's URL prefix and its name. */
-    topLevelPackage(uri: string, name: string): string {
-        return registryUuid(NAMESPACE_URL, getUrlPrefix(uri) + encodeURIComponent(name));
-    },
     /**
-     * Any other top-level element: its URL is the project's URL prefix, its
-     * document's URI and its segment, as each document is a root namespace of
-     * its own (KerML 7.2.5.3).
+     * A top-level element, a member of the one root namespace of the workspace:
+     * its URL is the project's URL prefix of its document and its path there.
      */
-    topLevelElement(uri: string, segment: string): string {
-        return registryUuid(NAMESPACE_URL, `${getUrlPrefix(uri)}${encodeURIComponent(canonicalUri(uri))}/${encodeURIComponent(segment)}`);
+    topLevel(uri: string, path: string): string {
+        return registryUuid(NAMESPACE_URL, getUrlPrefix(uri) + encodeURIComponent(path));
     },
     /** A nested element: its path (KerML 8.3.2.1.2 `path()`) in the namespace of its top-level element's ID. */
     member(topLevelId: string, path: string): string {
