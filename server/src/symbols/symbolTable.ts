@@ -5,11 +5,11 @@ import { ConjugatedPortTypingContext, FeatureSpecializationContext, FeatureTypin
 import { ParseResult } from '../parser/parseDocument.js';
 import { contextToRange, tokenToRange } from '../parser/positionUtils.js';
 import { SYSML_KEYWORDS } from '../utils/sysmlKeywords.js';
-import { joinQualifiedName, joinReference, scanQualifiedNames, splitQualifiedName, unquoteName as decodeName } from '../utils/identUtils.js';
+import { escapedName, joinQualifiedName, joinReference, scanQualifiedNames, splitQualifiedName, unquoteName as decodeName } from '../utils/identUtils.js';
 import { IdRegistry } from './ids.js';
 import { buildSymbolIndexes, NamespaceResolver } from './namespaceResolver.js';
 import { Scope } from './scope.js';
-import { FilterExpr, ImportTarget, OwnedSpecialization, SysMLElementKind, SysMLSymbol, displayName, isAnonymous, isDefinition, isFlowUsage, isUsage as isUsageKind, escapedName, memberNamesOf } from './sysmlElements.js';
+import { FilterExpr, ImportTarget, OwnedSpecialization, SysMLElementKind, SysMLSymbol, displayName, isAnonymous, isDefinition, isFlowUsage, isUsage as isUsageKind, memberNamesOf, nameText } from './sysmlElements.js';
 
 // ── ruleIndex-based lookup tables ───────────────────────────────────
 // These replace the toLowerCase() + string-comparison chains with O(1)
@@ -1015,7 +1015,7 @@ export class SymbolTable {
             }
             this.registerSymbol(symbol, uri, currentScope);
             // Create a child scope for definitions and packages
-            childScope = new Scope(symbol.qualifiedName ?? escapedName(symbol) ?? '', currentScope);
+            childScope = new Scope(symbol.qualifiedName ?? (isAnonymous(symbol) ? '' : escapedName(nameText(symbol))), currentScope);
         }
 
         // Walk children
@@ -2149,8 +2149,8 @@ export class SymbolTable {
     /**
      * The general type or feature a specialization's target rule names: its
      * qualified name, or its feature chain (`v.engine`), with a global `$::`
-     * (KerML 7.2.2) and a conjugated port typing's `~` (`~P`, SysML 8.3.12.3).
-     * Its names are quoted as everywhere in the server (`joinReference`).
+     * (KerML 7.2.5.1) and a conjugated port typing's `~` (`~P`, SysML 8.3.12.3).
+     * Its names are written as in the textual notation (`joinReference`).
      * Undefined for a target missing after a syntax error.
      */
     private specializationTarget(ctx: ParserRuleContext): string | undefined {

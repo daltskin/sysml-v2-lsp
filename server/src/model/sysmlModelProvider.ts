@@ -8,7 +8,7 @@
  */
 
 import { Range } from 'vscode-languageserver/node';
-import { analyseComplexity } from '../analysis/complexityAnalyzer.js';
+import { analyseComplexity, type ComplexityReport } from '../analysis/complexityAnalyzer.js';
 import { DocumentManager } from '../documentManager.js';
 import { getLibraryPackageNames } from '../library/libraryIndex.js';
 import { NamespaceKey, NamespaceResolver, buildSymbolIndexes, describeConflictingDeclarations, findConflicts, namespaceKeyOf, otherDeclarations, ownerKeyOf } from '../symbols/namespaceResolver.js';
@@ -45,7 +45,7 @@ import type {
     SysMLModelScope,
 } from './sysmlModelTypes.js';
 
-import { isIdentPart as isWordChar, stripComments } from '../utils/identUtils.js';
+import { escapedQualifiedName, isIdentPart as isWordChar, stripComments } from '../utils/identUtils.js';
 
 /**
  * Maps SysML v2 control-node element kinds to their activity-diagram node type.
@@ -267,10 +267,21 @@ export class SysMLModelProvider {
             lexTimeMs: timingBreakdown.lexMs,
             parseOnlyTimeMs: timingBreakdown.parseMs,
             modelBuildTimeMs,
-            complexity: analyseComplexity(allSymbols),
+            complexity: this.withEscapedHotspotNames(analyseComplexity(allSymbols)),
         };
 
         return result;
+    }
+
+    /** `report` with each hotspot's qualified name as KerML `qualifiedName` represents it (8.3.2.1.2). */
+    private withEscapedHotspotNames(report: ComplexityReport): ComplexityReport {
+        return {
+            ...report,
+            hotspots: report.hotspots.map(hotspot => ({
+                ...hotspot,
+                qualifiedName: hotspot.qualifiedName === null ? null : escapedQualifiedName(hotspot.qualifiedName),
+            })),
+        };
     }
 
     // -----------------------------------------------------------------------
@@ -1184,8 +1195,9 @@ export class SysMLModelProvider {
                     };
                 });
 
-            result[qualifiedName] = {
-                qualifiedName,
+            const reportedName = escapedQualifiedName(qualifiedName);
+            result[reportedName] = {
+                qualifiedName: reportedName,
                 simpleName: symbol.name,
                 ...(symbol.shortName !== undefined && { shortName: symbol.shortName }),
                 kind: symbol.kind,

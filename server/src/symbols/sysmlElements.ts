@@ -1,5 +1,4 @@
 import { Range } from 'vscode-languageserver/node';
-import { quoteName } from '../utils/identUtils.js';
 
 /**
  * Kinds of SysML elements tracked in the symbol table.
@@ -266,16 +265,6 @@ export type FilterExpr =
  */
 export function isAnonymous(symbol: SysMLSymbol): boolean {
     return !symbol.name && !symbol.shortName;
-}
-
-/**
- * KerML 8.3.2.1.2 `escapedName()`: the name, else the short name, as written
- * in the notation (quoted and escaped unless a basic name); undefined for an
- * anonymous element. For identifiers only, never instead of either name.
- */
-export function escapedName(symbol: SysMLSymbol): string | undefined {
-    const name = symbol.name || symbol.shortName;
-    return name ? quoteName(name) : undefined;
 }
 
 /**
