@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.43.0]
+
 ### Added
 
 - `sysml/model` marks a flow usage declared as a message with the attribute `isMessage: true` (SysML 8.2.2.16 `Message`), told apart by the production it was parsed from. Its `type` stays `flow`; a flow and a succession flow are unchanged.
