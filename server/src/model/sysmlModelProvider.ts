@@ -11,7 +11,7 @@ import { Range } from 'vscode-languageserver/node';
 import { analyseComplexity } from '../analysis/complexityAnalyzer.js';
 import { DocumentManager } from '../documentManager.js';
 import { getLibraryPackageNames } from '../library/libraryIndex.js';
-import { NamespaceKey, describeConflictingDeclarations, findConflicts, namespaceKeyOf, otherDeclarations, ownerKeyOf } from '../symbols/namespaceResolver.js';
+import { describeConflictingDeclarations, findConflicts, otherDeclarations } from '../symbols/namespaceResolver.js';
 import { describeNamingIssue, SymbolTable } from '../symbols/symbolTable.js';
 import {
     SysMLElementKind,
@@ -165,10 +165,6 @@ function readWordAfterKeyword(text: string, afterPos: number, allowDots = false)
     return readIdent(text, start, allowDots);
 }
 
-/** `symbols` by `symbolId`. */
-function symbolsById(symbols: SysMLSymbol[]): Map<string, SysMLSymbol> {
-    return new Map(symbols.map(s => [s.symbolId, s]));
-}
 
 /** An element's name and, when it has one, its short name, as DTO fields (KerML 8.3.2.1.2). */
 function nameFields(symbol: SysMLSymbol): { name: string; shortName?: string } {
@@ -290,22 +286,19 @@ export class SysMLModelProvider {
     ): SysMLElementDTO[] {
         const symbols = symbolTable.getSymbolsForUri(uri);
 
-        const byId = symbolsById(symbols);
-        const declaredQualifiedNames = new Set(symbols.flatMap(s => s.qualifiedName !== undefined ? [s.qualifiedName] : []));
-
-        // Build parent → children index, keyed by each symbol's owning namespace
-        const childrenOf = new Map<NamespaceKey, SysMLSymbol[]>();
+        // Each declaration's children are the declarations written in it, so two same-named
+        // declarations of one namespace each keep their own.
+        const childrenOf = new Map<SysMLSymbol, SysMLSymbol[]>();
         const roots: SysMLSymbol[] = [];
         for (const sym of symbols) {
-            const ownerKey = ownerKeyOf(sym, byId);
-            if (typeof ownerKey === 'string' && !declaredQualifiedNames.has(ownerKey)) {
-                // No parent, or a parent not in this URI
+            const owner = symbolTable.getDeclaringOwner(sym);
+            if (!owner) {
                 roots.push(sym);
                 continue;
             }
-            const list = childrenOf.get(ownerKey) ?? [];
+            const list = childrenOf.get(owner) ?? [];
             list.push(sym);
-            childrenOf.set(ownerKey, list);
+            childrenOf.set(owner, list);
         }
 
         return roots.map(s => this.symbolToElementDTO(s, childrenOf, lines));
@@ -317,11 +310,11 @@ export class SysMLModelProvider {
      */
     private symbolToElementDTO(
         symbol: SysMLSymbol,
-        childrenOf: Map<NamespaceKey, SysMLSymbol[]>,
+        childrenOf: Map<SysMLSymbol, SysMLSymbol[]>,
         lines: string[],
     ): SysMLElementDTO {
         // Build children recursively from the parent→children index
-        const childSymbols = (childrenOf.get(namespaceKeyOf(symbol)) ?? [])
+        const childSymbols = (childrenOf.get(symbol) ?? [])
             // B1: Filter phantom self-referencing package children
             .filter(c => c.symbolId !== symbol.symbolId);
         const children: SysMLElementDTO[] = childSymbols.map(c =>
@@ -1313,14 +1306,9 @@ export class SysMLModelProvider {
         };
     }
 
-    /** Get child symbols for a given parent symbol. */
+    /** The declarations written in declaration `parent`, in its document. */
     private getChildSymbols(parent: SysMLSymbol, symbolTable: SymbolTable): SysMLSymbol[] {
-        // The symbol table's children array may not be populated; use the
-        // symbolsByUri list and filter by owning namespace instead.
-        const allSymbols = symbolTable.getSymbolsForUri(parent.uri);
-        const byId = symbolsById(allSymbols);
-        const parentKey = namespaceKeyOf(parent);
-        return allSymbols.filter(s => ownerKeyOf(s, byId) === parentKey);
+        return symbolTable.getSymbolsForUri(parent.uri).filter(s => symbolTable.getDeclaringOwner(s) === parent);
     }
 
     /**

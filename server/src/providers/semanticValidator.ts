@@ -2,7 +2,7 @@ import { Diagnostic, DiagnosticSeverity, Position, Range } from 'vscode-language
 import { DocumentManager } from '../documentManager.js';
 import { getLibraryPackageNames, resolveLibraryType } from '../library/libraryIndex.js';
 import { SysMLModelProvider } from '../model/sysmlModelProvider.js';
-import { NamespaceResolver, SymbolIndexes, buildSymbolIndexes, describeConflictingDeclarations, findConflicts, NamespaceKey, namespaceKeyOf, otherDeclarations, ownerKeyOf, ownerOf } from '../symbols/namespaceResolver.js';
+import { NamespaceResolver, SymbolIndexes, buildSymbolIndexes, describeConflictingDeclarations, findConflicts, otherDeclarations, ownerOf } from '../symbols/namespaceResolver.js';
 import { SysMLElementKind, SysMLSymbol, displayName, escapedName, isAnonymous, isDefinition, memberNamesOf, nameText } from '../symbols/sysmlElements.js';
 import { describeNamingIssue, NamingIssue } from '../symbols/symbolTable.js';
 import { resolveTypeName } from '../symbols/typeResolution.js';
@@ -139,7 +139,7 @@ export class SemanticValidator {
             );
         }
 
-        diagnostics.push(...this.checkDuplicateDefinitions(symbols));
+        diagnostics.push(...this.checkDuplicateDefinitions(symbols, indexes));
         diagnostics.push(...this.checkAmbiguousNamespaceName(symbols, indexes));
         diagnostics.push(...this.checkUnusedDefinitions(allSymbols, uri));
         diagnostics.push(...this.checkRedefinitionMultiplicity(symbols, indexes, text));
@@ -415,7 +415,7 @@ export class SemanticValidator {
             }
         }
 
-        diagnostics.push(...instance.checkDuplicateDefinitions(symbolsInUri));
+        diagnostics.push(...instance.checkDuplicateDefinitions(symbolsInUri, indexes));
         diagnostics.push(...instance.checkUnusedDefinitions(allSymbols));
         diagnostics.push(...instance.checkRedefinitionMultiplicity(symbolsInUri, indexes, opts?.text));
         diagnostics.push(...instance.checkCircularSpecialization(symbolsInUri, indexes));
@@ -989,8 +989,8 @@ export class SemanticValidator {
             const lDef = lDefSyms.find(s => s.kind.includes('def'));
             const rDef = rDefSyms.find(s => s.kind.includes('def'));
             // Check if the definition has child symbols (features) by looking at byParent index
-            const lChildren = lDef ? (indexes.byParent.get(namespaceKeyOf(lDef)) ?? []) : [];
-            const rChildren = rDef ? (indexes.byParent.get(namespaceKeyOf(rDef)) ?? []) : [];
+            const lChildren = lDef ? this.namespaceResolver.ownedMembersOf(lDef, indexes) : [];
+            const rChildren = rDef ? this.namespaceResolver.ownedMembersOf(rDef, indexes) : [];
             if (lChildren.length === 0 && rChildren.length === 0) continue;
 
             // Skip when port types share a common feature name — this indicates
@@ -1065,7 +1065,7 @@ export class SemanticValidator {
 
     /** The feature `name` of `owner`: its own member, else a member of one of its types or their supertypes. */
     private findFeature(owner: SysMLSymbol, name: string, indexes: SymbolIndexes): SysMLSymbol | undefined {
-        const own = (indexes.byParent.get(namespaceKeyOf(owner)) ?? []).find(s => memberNamesOf(s).includes(name));
+        const own = this.namespaceResolver.ownedMembersOf(owner, indexes).find(s => memberNamesOf(s).includes(name));
         if (own) return own;
         for (const typeName of owner.typeNames) {
             // KerML 1.0 section 7.3.4.6 resolves a chain segment in the
@@ -1073,7 +1073,7 @@ export class SemanticValidator {
             const type = this.namespaceResolver.resolveNameFrom(owner, typeName, indexes);
             if (!type || !isDefinition(type.kind)) continue;
             for (const definition of this.getSpecializationHierarchy(type, indexes).flat()) {
-                const member = (indexes.byParent.get(namespaceKeyOf(definition)) ?? []).find(s => memberNamesOf(s).includes(name));
+                const member = this.namespaceResolver.ownedMembersOf(definition, indexes).find(s => memberNamesOf(s).includes(name));
                 if (member) return member;
             }
         }
@@ -1250,7 +1250,7 @@ export class SemanticValidator {
         }
 
         const membersByLevel = hierarchy.map(level =>
-            level.flatMap(namespace => indexes.byParent.get(namespaceKeyOf(namespace)) ?? []));
+            level.flatMap(namespace => this.namespaceResolver.ownedMembersOf(namespace, indexes)));
         const hiddenMembers = new Set<string>();
 
         // KerML v1.0 §7.3.4.5 removes redefined inherited features from the
@@ -1270,7 +1270,7 @@ export class SemanticValidator {
                     const owner = ownerOf(redefining, indexes);
                     if (!owner) continue;
                     for (const ancestor of this.getSpecializationHierarchy(owner, indexes).slice(1).flat()) {
-                        for (const candidate of indexes.byParent.get(namespaceKeyOf(ancestor)) ?? []) {
+                        for (const candidate of this.namespaceResolver.ownedMembersOf(ancestor, indexes)) {
                             if (candidate.kind === SysMLElementKind.SubjectUsage) hiddenMembers.add(candidate.symbolId);
                         }
                     }
@@ -1319,7 +1319,7 @@ export class SemanticValidator {
                 const candidates: SysMLSymbol[] = [];
                 while (frontier.length > 0 && candidates.length === 0) {
                     for (const type of frontier) {
-                        for (const member of indexes.byParent.get(namespaceKeyOf(type)) ?? []) {
+                        for (const member of this.namespaceResolver.ownedMembersOf(type, indexes)) {
                             if (memberNamesOf(member).includes(targetName) && member.visibility !== 'private'
                                 && !alreadyRedefined.has(member.symbolId)) {
                                 candidates.push(member);
@@ -1500,17 +1500,17 @@ export class SemanticValidator {
         return out;
     }
 
-    private checkDuplicateDefinitions(symbols: SysMLSymbol[]): Diagnostic[] {
+    private checkDuplicateDefinitions(symbols: SysMLSymbol[], indexes: SymbolIndexes): Diagnostic[] {
         const diagnostics: Diagnostic[] = [];
-        const definitionsByScope = new Map<NamespaceKey, Map<string, SysMLSymbol[]>>();
-        const byId = new Map(symbols.map(s => [s.symbolId, s]));
+        const definitionsByScope = new Map<string, Map<string, SysMLSymbol[]>>();
 
         for (const symbol of symbols) {
             // An anonymous definition declares no name, so it can't duplicate one.
             if (!isDefinition(symbol.kind) || isAnonymous(symbol)) continue;
 
-            // The namespace it is declared in: one scope however many documents declare it.
-            const scope = ownerKeyOf(symbol, byId);
+            // The namespace it is declared in, by its ID in the registry: one scope however
+            // many documents declare it, and one per declaration of two same-named ones.
+            const scope = this.namespaceResolver.ownerIdOf(symbol, indexes);
             let scopeMap = definitionsByScope.get(scope);
             if (!scopeMap) {
                 scopeMap = new Map();

@@ -182,3 +182,41 @@ describe('name clashes per namespace (KerML 8.3.2.4.3)', () => {
         expect(await clashes([{ uri: 'file:///w/a.sysml', text: 'package P { package A; part def A; package A; }\n' }])).toEqual([]);
     });
 });
+
+describe('the structure of each declaration, not of its qualified name', () => {
+    /** `sysml/model`'s element tree of `text`, each node as its name and children. */
+    async function tree(text: string): Promise<unknown> {
+        const { DocumentManager } = await import('../../server/src/documentManager.js');
+        const { SysMLModelProvider } = await import('../../server/src/model/sysmlModelProvider.js');
+        const { TextDocument } = await import('vscode-languageserver-textdocument');
+        const dm = new DocumentManager();
+        dm.parse(TextDocument.create('file:///w/a.sysml', 'sysml', 1, text));
+        const model = new SysMLModelProvider(dm).getModel('file:///w/a.sysml', 1, ['elements']);
+        type Node = { name: string; children: Node[] };
+        const shape = (node: Node): unknown => node.children.length ? { [node.name]: node.children.map(shape) } : node.name;
+        return (model.elements as Node[]).map(shape);
+    }
+
+    it('lists in `sysml/model` only the children each of two same-named declarations declares', async () => {
+        expect(await tree(`package P {
+    part def A { part x; }
+    part def A { part y; }
+    package Q { part def m; }
+    package Q { part def n; }
+}
+`)).toEqual([{ P: [{ A: ['x'] }, { A: ['y'] }, { Q: ['m'] }, { Q: ['n'] }] }]);
+    });
+
+    it('checks the definitions of each of two same-named declarations for duplicates apart', async () => {
+        const { DocumentManager } = await import('../../server/src/documentManager.js');
+        const { SemanticValidator } = await import('../../server/src/providers/semanticValidator.js');
+        const { TextDocument } = await import('vscode-languageserver-textdocument');
+        const dm = new DocumentManager();
+        const text = 'package P {\n    part def A {\n        part def X;\n    }\n    part def A {\n        part def X;\n    }\n    part def B {\n        part def Y;\n        part def Y;\n    }\n}\n';
+        dm.parse(TextDocument.create('file:///w/a.sysml', 'sysml', 1, text));
+        const duplicates = new SemanticValidator(dm).validate('file:///w/a.sysml')
+            .filter(d => d.code === 'duplicate-definition').map(d => d.range.start.line);
+        // The two `A`s are duplicates in `P`, the two `Y`s in `B`; each `X` is the only one in its `A`.
+        expect([...new Set(duplicates)].sort((x, y) => x - y)).toEqual([1, 4, 8, 9]);
+    });
+});

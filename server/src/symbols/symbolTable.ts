@@ -700,6 +700,14 @@ export class SymbolTable {
         return this.registry;
     }
 
+    /**
+     * The declaration `symbol` is written in, in its document: its owner in the
+     * parse tree, not a package's merged view; none for a top-level declaration.
+     */
+    getDeclaringOwner(symbol: SysMLSymbol): SysMLSymbol | undefined {
+        return this.owners.get(symbol);
+    }
+
     getSymbolById(id: string): SysMLSymbol | undefined {
         const symbol = this.ids.get(id);
         if (symbol?.kind !== SysMLElementKind.Package || symbol.qualifiedName === undefined) return symbol;

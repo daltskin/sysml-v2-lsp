@@ -615,6 +615,22 @@ export class NamespaceResolver {
         return scope ? this.tableOf(scope, indexes) : new Map();
     }
 
+    /**
+     * The named elements `namespace` owns (SysML 7.5.2), each once, whichever
+     * declaration of it declares them; not those it inherits or imports.
+     */
+    ownedMembersOf(namespace: SysMLSymbol, indexes: SymbolIndexes): SysMLSymbol[] {
+        const scope = this.scopeOf(namespace, indexes);
+        return (scope?.ownedElementIds ?? [])
+            .map(id => this.symbolOf(indexes.registry.getElement(id)!, indexes))
+            .filter((member): member is SysMLSymbol => member !== undefined && !isAnonymous(member));
+    }
+
+    /** The ID of the element owning `symbol` in the registry; `''` for a top-level element, owned by the root namespace. */
+    ownerIdOf(symbol: SysMLSymbol, indexes: SymbolIndexes): string {
+        return this.scopeOf(symbol, indexes)?.ownerId ?? '';
+    }
+
     /** The registry element a symbol is a declaration of; a package's merged view by its ID. */
     private scopeOf(symbol: SysMLSymbol, indexes: SymbolIndexes): RegistryElement | undefined {
         return indexes.registry.elementOf(symbol) ?? indexes.registry.getElement(symbol.symbolId);
