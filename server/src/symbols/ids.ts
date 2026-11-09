@@ -211,6 +211,13 @@ function compareDeclarationSites(a: SysMLSymbol, b: SysMLSymbol): number {
  * order documents are indexed in, so the same declarations give the same IDs
  * on every machine and in every session.
  */
+/**
+ * The derivation of the symbol IDs the server reports (`RegistryIds`), reported
+ * in its `initialize` result, so a client that stores symbol IDs knows when a
+ * new release derives them differently. Changed with every such change.
+ */
+export const SYMBOL_ID_SCHEME = 'element-registry/1';
+
 /** The UUIDs `RegistryIds` derived, by namespace and name, as the registry derives them again on every rebuild. */
 const registryUuids = new Map<string, string>();
 

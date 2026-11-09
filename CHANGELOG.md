@@ -2,6 +2,25 @@
 
 ## [Unreleased]
 
+### Added
+
+- `sysml/model` reports the element a specialization's target resolves to as `targetId` (its general), next to the target as written, in `elements` and `relationships`. It is absent when the target is unresolved or ambiguous, and for a conjugated port typing (`~P`).
+- `sysml/model` gives every node of a package declared more than once the same `symbolId`, and lists each of its declarations in the workspace as `declarations`.
+- The `initialize` result reports how symbol IDs are derived, as `capabilities.experimental.sysml.symbolIdScheme` (`element-registry/1`).
+
+### Changed
+
+- A later element of one namespace with the name of an earlier one has a symbol ID from its position (KerML 8.3.2.1.2 `path()`), instead of one numbered `#2`.
+
+### Fixed
+
+- An import written at the top level of a document applies to the top-level elements of every document (SysML 7.5.5); it was ignored.
+- Two package declarations with the same name in one namespace of one document keep the imports, documentation and metadata of both, not only of the second.
+- Each of two same-named declarations of another kind in one namespace is a namespace of its own: a reference from inside one resolves to its own member, `sysml/model`'s tree lists only each one's own children, and the definitions inside each are checked for duplicates apart. Their members were pooled.
+- A name through a package and a same-named definition declared after it (`A::B`) resolves; the package had lost its entry.
+- A specialization naming a package and a same-named definition specializes the definition (KerML 8.3.3.1.8), also when the package is declared first.
+- A feature chain through a feature that only redefines (`b.x.ib` with `x :>> w`) and a redefinition owned by a package resolve: a type's generals come from its parsed specializations, not from type names read from the text.
+
 ## [0.42.0]
 
 ### Security

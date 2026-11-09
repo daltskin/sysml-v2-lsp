@@ -238,8 +238,11 @@ package Test {
             const ids = [pkg, vehicle, engine].map(e => e.symbolId);
             expect(ids.every(id => /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(id))).toBe(true);
             expect(new Set(ids).size).toBe(3);
-            expect(engine.relationships).toEqual([{ type: 'typing', source: 'engine', sourceId: engine.symbolId, target: 'Engine' }]);
-            expect(model.relationships).toContainEqual({ type: 'typing', source: 'engine', sourceId: engine.symbolId, target: 'Engine' });
+            // The target as written, and the element it resolves to by its ID.
+            const engineDef = pkg.children.find(e => e.name === 'Engine')!;
+            const typing = { type: 'typing', source: 'engine', sourceId: engine.symbolId, target: 'Engine', targetId: engineDef.symbolId };
+            expect(engine.relationships).toEqual([typing]);
+            expect(model.relationships).toContainEqual(typing);
         });
 
         it('should report each element\'s displayName: its name, or for an anonymous one the text the outline shows', async () => {
@@ -2590,7 +2593,7 @@ package Demo {
                 const model = await getModelForText(text, ['elements', 'relationships']);
                 expect(specializationsOf(model, ['Demo', 'Sub'])).toEqual([['specializes', 'Base', ':>']]);
                 expect(model.relationships!.filter(r => r.source === 'Sub')).toEqual([
-                    { type: 'specializes', source: 'Sub', sourceId: find(model, ['Demo', 'Sub']).symbolId, target: 'Base', notation: ':>' },
+                    { type: 'specializes', source: 'Sub', sourceId: find(model, ['Demo', 'Sub']).symbolId, target: 'Base', targetId: find(model, ['Demo', 'Base']).symbolId, notation: ':>' },
                 ]);
             });
 

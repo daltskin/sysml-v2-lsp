@@ -1,5 +1,6 @@
 import { Range } from 'vscode-languageserver/node';
 import { canonicalUri } from '../utils/documentUri.js';
+import { getUrlPrefix } from '../utils/uuid.js';
 import { RegistryIds } from './ids.js';
 import { ImportTarget, OwnedSpecialization, ReferenceChain, SysMLElementKind, SysMLSymbol, escapedName } from './sysmlElements.js';
 
@@ -83,14 +84,24 @@ export class ElementRegistry {
      * and each removes only those it recorded.
      */
     private readonly relationshipNodes = new Map<string, Node>();
+    /** The relationship each parsed specialization and import is, by the object the parse gave it. */
+    private relationshipIds = new WeakMap<OwnedSpecialization | ImportTarget, string>();
     private readonly roots: Node[] = [];
     private readonly rootPackages = new Map<string, Node>();
     /** Each document's top-level imports, imports of the root namespace, by `canonicalUri`. */
     private readonly rootImports = new Map<string, readonly ImportTarget[]>();
     private rootIds: string[] = [];
 
-    /** @param ownerOf each declaration's owner, as declared in the parse tree */
-    constructor(private readonly ownerOf: (symbol: SysMLSymbol) => SysMLSymbol | undefined) {}
+    /**
+     * @param ownerOf each declaration's owner, as declared in the parse tree
+     * @param writeIds whether to give each declaration its element's ID as its
+     * `symbolId`, and its owner's as its `parentId`, so the registry is where
+     * symbol IDs come from
+     */
+    constructor(
+        private readonly ownerOf: (symbol: SysMLSymbol) => SysMLSymbol | undefined,
+        private readonly writeIds = false,
+    ) {}
 
     /**
      * A registry of `symbols` alone, each owned by the symbol its `parentId`
@@ -134,6 +145,12 @@ export class ElementRegistry {
     /** The relationship with `symbolId`, if any. */
     getRelationship(symbolId: string): RegistryRelationship | undefined {
         return this.relationships.get(symbolId);
+    }
+
+    /** The relationship a declaration's parsed specialization or import is. */
+    relationshipOf(parsed: OwnedSpecialization | ImportTarget): RegistryRelationship | undefined {
+        const id = this.relationshipIds.get(parsed);
+        return id === undefined ? undefined : this.relationships.get(id);
     }
 
     /** The element a declaration belongs to. */
@@ -203,7 +220,7 @@ export class ElementRegistry {
             const ownerSymbol = this.ownerOf(symbol);
             const owner = ownerSymbol ? this.nodeOf.get(ownerSymbol) : undefined;
             const packages = owner ? owner.packages : this.rootPackages;
-            const key = packageKey(symbol);
+            const key = packageKey(symbol, owner === undefined);
             const existing = key === undefined ? undefined : packages.get(key);
             touch(owner);
             if (existing) {
@@ -270,14 +287,21 @@ export class ElementRegistry {
      */
     private layoutRoots(): void {
         this.roots.sort(byFirstDeclaration);
-        const claimants = claimantsOf(this.roots, () => '');
-        this.roots.forEach((root, index) => {
-            const symbol = root.symbols[0];
-            const claims = claimants.has(root);
-            const path = claims ? segmentOf(symbol) : `/${index + 1}/1`;
-            const id = RegistryIds.topLevel(symbol.uri, path);
-            this.place(root, id, path, claims && escapedName(symbol) !== undefined, id);
-        });
+        // One root namespace per project: top-level elements compete for their paths only
+        // with those of their project, whose URL prefix their URLs start with.
+        const byProject = new Map<string, Node[]>();
+        for (const root of this.roots) {
+            const project = getUrlPrefix(root.symbols[0].uri);
+            byProject.set(project, [...byProject.get(project) ?? [], root]);
+        }
+        for (const roots of byProject.values()) {
+            const paths = pathsOf(roots, '', true);
+            for (const root of roots) {
+                const { path, qualified } = paths.get(root)!;
+                const id = RegistryIds.topLevel(root.symbols[0].uri, path);
+                this.place(root, id, path, qualified, id);
+            }
+        }
         this.rootIds = this.roots.map(root => root.element.symbolId);
     }
 
@@ -288,18 +312,11 @@ export class ElementRegistry {
      */
     private layoutMembers(owner: Node): void {
         owner.members.sort(byFirstDeclaration);
-        const claimants = claimantsOf(owner.members, () => '');
-        owner.members.forEach((member, index) => {
-            const symbol = member.symbols[0];
-            const named = escapedName(symbol) !== undefined;
-            const claims = claimants.has(member);
-            // KerML 8.3.2.1.2: a member sharing its name with an earlier one has no qualified
-            // name, and its path is its owning membership's position, then its own within it.
-            const path = !claims ? `${owner.path}/${index + 1}/1`
-                : named && owner.qualified ? `${owner.path}::${segmentOf(symbol)}`
-                : `${owner.path}/${segmentOf(symbol)}`;
-            this.place(member, RegistryIds.member(owner.topLevelId, path), path, claims && named && owner.qualified, owner.topLevelId);
-        });
+        const paths = pathsOf(owner.members, owner.path, owner.qualified);
+        for (const member of owner.members) {
+            const { path, qualified } = paths.get(member)!;
+            this.place(member, RegistryIds.member(owner.topLevelId, path), path, qualified, owner.topLevelId);
+        }
         owner.element.ownedElementIds = owner.members.map(member => member.element.symbolId);
     }
 
@@ -309,6 +326,12 @@ export class ElementRegistry {
      */
     private place(node: Node, id: string, path: string, qualified: boolean, topLevelId: string): void {
         node.element.ownerId = node.owner?.element.symbolId;
+        if (this.writeIds) {
+            for (const symbol of node.symbols) {
+                symbol.symbolId = id;
+                symbol.parentId = node.element.ownerId;
+            }
+        }
         if (node.element.symbolId === id && node.path === path && node.qualified === qualified && node.topLevelId === topLevelId) return;
         if (this.nodes.get(node.element.symbolId) === node) this.nodes.delete(node.element.symbolId);
         node.element.symbolId = id;
@@ -348,20 +371,22 @@ export class ElementRegistry {
         const ownerId = node.element.symbolId;
         const ids: string[] = [];
         const seen = new Map<string, number>();
-        const add = (relationship: Omit<RegistryRelationship, 'symbolId' | 'ownerId' | 'sourceId'>, key: string): void => {
+        const add = (parsed: OwnedSpecialization | ImportTarget, relationship: Omit<RegistryRelationship, 'symbolId' | 'ownerId' | 'sourceId'>, key: string): void => {
             const count = (seen.get(key) ?? 0) + 1;
             seen.set(key, count);
             const symbolId = RegistryIds.relationship(ownerId, count === 1 ? key : `${key}#${count}`);
             this.relationships.set(symbolId, { symbolId, ownerId, sourceId: ownerId, ...relationship });
             this.relationshipNodes.set(symbolId, node);
+            this.relationshipIds.set(parsed, symbolId);
             ids.push(symbolId);
         };
         for (const symbol of node.symbols) {
-            for (const { kind, target, range, chain, conjugated } of symbol.ownedSpecializations ?? []) {
-                add({ kind, target, chain, conjugated, declarations: [{ uri: symbol.uri, range: range ?? symbol.range }] }, `${kind} ${target}`);
+            for (const specialization of symbol.ownedSpecializations ?? []) {
+                const { kind, target, range, chain, conjugated } = specialization;
+                add(specialization, { kind, target, chain, conjugated, declarations: [{ uri: symbol.uri, range: range ?? symbol.range }] }, `${kind} ${target}`);
             }
-            for (const { kind, target, range } of symbol.importTargets ?? []) {
-                add({ kind: 'import', target, declarations: [{ uri: symbol.uri, range: range ?? symbol.range }] }, `import ${kind} ${target}`);
+            for (const imp of symbol.importTargets ?? []) {
+                add(imp, { kind: 'import', target: imp.target, declarations: [{ uri: symbol.uri, range: imp.range ?? symbol.range }] }, `import ${imp.kind} ${imp.target}`);
             }
         }
         return ids;
@@ -373,11 +398,45 @@ function byFirstDeclaration(a: Node, b: Node): number {
     return compareSites(a.symbols[0], b.symbols[0]);
 }
 
-/** The key under which same-named packages of one namespace are one element; undefined for any other declaration. */
-function packageKey(symbol: SysMLSymbol): string | undefined {
+/**
+ * The key under which same-named packages of one namespace are one element;
+ * undefined for any other declaration. At the top level, only those of one
+ * project (one URL prefix) are one package.
+ */
+function packageKey(symbol: SysMLSymbol, topLevel = false): string | undefined {
     const name = escapedName(symbol);
     if (symbol.kind !== SysMLElementKind.Package || name === undefined) return undefined;
-    return `${symbol.isLibraryPackage ? 'library ' : ''}${name}`;
+    return `${topLevel ? `${getUrlPrefix(symbol.uri)}\0` : ''}${symbol.isLibraryPackage ? 'library ' : ''}${name}`;
+}
+
+/**
+ * The paths of the members of one namespace whose own path is `ownerPath`
+ * (`''` for the root namespace), and whether each is a qualified name. A
+ * member keeps its segment unless an earlier one has it (a package keeping
+ * its own): then a named one takes its position, as one without a qualified
+ * name does (KerML 8.3.2.1.2 `path()`), and an unnamed one, identified by its
+ * declaration as written, its occurrence among the same declarations (`#2`).
+ */
+function pathsOf(members: readonly Node[], ownerPath: string, ownerQualified: boolean): Map<Node, { path: string; qualified: boolean }> {
+    const claimants = claimantsOf(members, () => '');
+    const occurrences = new Map<string, number>();
+    const paths = new Map<Node, { path: string; qualified: boolean }>();
+    const join = (segment: string, qualifying: boolean) => ownerPath === '' ? segment : `${ownerPath}${qualifying ? '::' : '/'}${segment}`;
+    members.forEach((member, index) => {
+        const symbol = member.symbols[0];
+        const segment = segmentOf(symbol);
+        const named = escapedName(symbol) !== undefined;
+        const occurrence = (occurrences.get(segment) ?? 0) + 1;
+        occurrences.set(segment, occurrence);
+        if (claimants.has(member)) {
+            paths.set(member, { path: join(segment, named && ownerQualified), qualified: named && ownerQualified });
+        } else if (named) {
+            paths.set(member, { path: `${ownerPath}/${index + 1}/1`, qualified: false });
+        } else {
+            paths.set(member, { path: join(`${segment}#${occurrence}`, false), qualified: false });
+        }
+    });
+    return paths;
 }
 
 /**

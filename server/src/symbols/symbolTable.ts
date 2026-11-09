@@ -7,7 +7,6 @@ import { contextToRange, tokenToRange } from '../parser/positionUtils.js';
 import { SYSML_KEYWORDS } from '../utils/sysmlKeywords.js';
 import { joinQualifiedName, joinReference, scanQualifiedNames, splitQualifiedName, unquoteName as decodeName } from '../utils/identUtils.js';
 import { ElementRegistry } from './elementRegistry.js';
-import { IdRegistry } from './ids.js';
 import { buildSymbolIndexes, NamespaceResolver, type SymbolIndexes } from './namespaceResolver.js';
 import { Scope } from './scope.js';
 import { FilterExpr, ImportTarget, OwnedSpecialization, ReferenceChain, SysMLElementKind, SysMLSymbol, displayName, isAnonymous, isDefinition, isFlowUsage, isUsage as isUsageKind, escapedName, memberNamesOf } from './sysmlElements.js';
@@ -483,12 +482,8 @@ export class SymbolTable {
     private unqualifiedSymbols = new Set<SysMLSymbol>();
     /** Each symbol's owner, as declared in the parse tree; `parentId` is derived from it */
     private owners = new WeakMap<SysMLSymbol, SysMLSymbol>();
-    /** Each symbol's own members, the reverse of `owners` */
-    private members = new WeakMap<SysMLSymbol, SysMLSymbol[]>();
-    /** Assigns and finds `symbolId`s, one document at a time */
-    private ids = new IdRegistry(this.owners, this.members);
-    /** The model of the workspace by ID, built from the same declarations */
-    private registry = new ElementRegistry(symbol => this.owners.get(symbol));
+    /** The model of the workspace by ID, built from the same declarations, and where their symbol IDs come from */
+    private registry = new ElementRegistry(symbol => this.owners.get(symbol), true);
     /** The indexes of `getAllSymbols()`'s current result, shared until the table changes (`getIndexes`) */
     private sharedIndexes: { symbols: SysMLSymbol[]; indexes: SymbolIndexes } | undefined;
     /** One resolver for every consumer, so they share its member tables for the same indexes */
@@ -568,7 +563,6 @@ export class SymbolTable {
         // filters, rendering, and expose targets from parent view defs
         this.resolveViewInheritance(uri);
         const declarations = this.symbolsByUri.get(uri) ?? [];
-        this.ids.add(declarations);
         // SysML 7.5.5: a document's body is its root namespace's, its imports among them.
         this.registry.setDocument(uri, declarations, this.extractImportsFromBody(tree, SysMLv2Parser.RULE_packageBodyElement));
         this.refreshMergedPackages(declarations);
@@ -709,7 +703,8 @@ export class SymbolTable {
     }
 
     getSymbolById(id: string): SysMLSymbol | undefined {
-        const symbol = this.ids.get(id);
+        const element = this.registry.getElement(id);
+        const symbol = element && this.registry.symbolsOf(element)[0];
         if (symbol?.kind !== SysMLElementKind.Package || symbol.qualifiedName === undefined) return symbol;
         const merged = this.symbols.get(symbol.qualifiedName);
         return merged?.kind === SysMLElementKind.Package ? merged : symbol;
@@ -909,7 +904,6 @@ export class SymbolTable {
         this.registry.removeDocument(uri);
         const existing = this.symbolsByUri.get(uri);
         if (existing && existing.length > 0) {
-            this.ids.remove(existing);
             // Collect names and type names that need index updates
             const affectedNames = new Set<string>();
             const affectedTypeNames = new Set<string>();
@@ -1049,9 +1043,6 @@ export class SymbolTable {
         if (symbol) {
             if (owner) {
                 this.owners.set(symbol, owner);
-                const ownMembers = this.members.get(owner) ?? [];
-                ownMembers.push(symbol);
-                this.members.set(owner, ownMembers);
             }
             this.registerSymbol(symbol, uri, currentScope);
             // Create a child scope for definitions and packages
@@ -1454,7 +1445,7 @@ export class SymbolTable {
             declaration,
             specialization: specializationPart && this.declarationText(specializationPart),
             ends: this.extractConnectorEnds(ctx, kind),
-            // A placeholder: the document's symbol IDs are assigned at the end of `build` (`IdRegistry`).
+            // A placeholder: the document's symbol IDs are assigned at the end of `build` (`ElementRegistry`).
             symbolId: '',
             shortName,
             kind,

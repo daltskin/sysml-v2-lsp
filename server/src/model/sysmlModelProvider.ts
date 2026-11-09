@@ -11,9 +11,11 @@ import { Range } from 'vscode-languageserver/node';
 import { analyseComplexity } from '../analysis/complexityAnalyzer.js';
 import { DocumentManager } from '../documentManager.js';
 import { getLibraryPackageNames } from '../library/libraryIndex.js';
+import type { Declaration } from '../symbols/elementRegistry.js';
 import { describeConflictingDeclarations, findConflicts, otherDeclarations } from '../symbols/namespaceResolver.js';
 import { describeNamingIssue, SymbolTable } from '../symbols/symbolTable.js';
 import {
+    OwnedSpecialization,
     SysMLElementKind,
     SysMLSymbol,
     isDefinition,
@@ -171,6 +173,14 @@ function nameFields(symbol: SysMLSymbol): { name: string; shortName?: string } {
     return symbol.shortName !== undefined ? { name: symbol.name, shortName: symbol.shortName } : { name: symbol.name };
 }
 
+/** What a document's model reads from the element registry (`SysMLModelProvider.modelContext`). */
+interface ModelContext {
+    /** The `symbolId` of the element a parsed specialization's target resolves to, if any. */
+    targetIdOf(specialization: OwnedSpecialization): string | undefined;
+    /** The declarations of the element `symbol` is a declaration of, when it has more than one. */
+    declarationsOf(symbol: SysMLSymbol): readonly Declaration[] | undefined;
+}
+
 /**
  * Provides the full semantic model for a document by converting the
  * server's internal ANTLR parse tree and symbol table into serializable DTOs.
@@ -217,12 +227,12 @@ export class SysMLModelProvider {
 
         // --- Elements ---
         if (scopeSet.has('elements')) {
-            result.elements = this.convertToElementDTOs(symbolTable, uri, lines);
+            result.elements = this.convertToElementDTOs(symbolTable, uri, lines, this.modelContext(symbolTable));
         }
 
         // --- Relationships ---
         if (scopeSet.has('relationships')) {
-            result.relationships = this.extractRelationships(symbolTable, uri, lines);
+            result.relationships = this.extractRelationships(symbolTable, uri, lines, this.modelContext(symbolTable));
         }
 
         // --- Sequence Diagrams ---
@@ -283,6 +293,7 @@ export class SysMLModelProvider {
         symbolTable: SymbolTable,
         uri: string,
         lines: string[],
+        context: ModelContext,
     ): SysMLElementDTO[] {
         const symbols = symbolTable.getSymbolsForUri(uri);
 
@@ -301,7 +312,7 @@ export class SysMLModelProvider {
             childrenOf.set(owner, list);
         }
 
-        return roots.map(s => this.symbolToElementDTO(s, childrenOf, lines));
+        return roots.map(s => this.symbolToElementDTO(s, childrenOf, lines, context));
     }
 
     /**
@@ -312,13 +323,14 @@ export class SysMLModelProvider {
         symbol: SysMLSymbol,
         childrenOf: Map<SysMLSymbol, SysMLSymbol[]>,
         lines: string[],
+        context: ModelContext,
     ): SysMLElementDTO {
         // Build children recursively from the parent→children index
         const childSymbols = (childrenOf.get(symbol) ?? [])
             // B1: Filter phantom self-referencing package children
             .filter(c => c.symbolId !== symbol.symbolId);
         const children: SysMLElementDTO[] = childSymbols.map(c =>
-            this.symbolToElementDTO(c, childrenOf, lines),
+            this.symbolToElementDTO(c, childrenOf, lines, context),
         );
 
         // Build attributes
@@ -412,7 +424,7 @@ export class SysMLModelProvider {
         // Inline relationships for this element
         const relationships: RelationshipDTO[] = [];
 
-        relationships.push(...this.specializationRelationships(symbol));
+        relationships.push(...this.specializationRelationships(symbol, context));
         const flowRelationship = this.flowRelationship(symbol);
         if (flowRelationship) relationships.push(flowRelationship);
 
@@ -423,6 +435,7 @@ export class SysMLModelProvider {
             displayName: displayName(symbol),
             symbolId: symbol.symbolId,
             range: this.rangeToDTO(symbol.range),
+            ...(context.declarationsOf(symbol) && { declarations: context.declarationsOf(symbol)!.map(({ uri, range }) => ({ uri, range: this.rangeToDTO(range) })) }),
             children,
             attributes,
             relationships,
@@ -434,14 +447,40 @@ export class SysMLModelProvider {
      * element's own declaration, one per target in written order (SysML v2
      * 8.2.2.6.1, 8.2.2.6.2).
      */
-    private specializationRelationships(symbol: SysMLSymbol): RelationshipDTO[] {
-        return (symbol.ownedSpecializations ?? []).map(({ kind, target, notation }) => ({
-            type: kind,
-            source: nameText(symbol),
-            sourceId: symbol.symbolId,
-            target,
-            ...(notation ? { notation } : {}),
-        }));
+    private specializationRelationships(symbol: SysMLSymbol, context: ModelContext): RelationshipDTO[] {
+        return (symbol.ownedSpecializations ?? []).map(specialization => {
+            const { kind, target, notation } = specialization;
+            const targetId = context.targetIdOf(specialization);
+            return {
+                type: kind,
+                source: nameText(symbol),
+                sourceId: symbol.symbolId,
+                target,
+                ...(targetId !== undefined ? { targetId } : {}),
+                ...(notation ? { notation } : {}),
+            };
+        });
+    }
+
+    /**
+     * What a document's model reads from the element registry: the element a
+     * parsed specialization's target resolves to (`NamespaceResolver.resolveTarget`),
+     * and the declarations of a package declared more than once.
+     */
+    private modelContext(symbolTable: SymbolTable): ModelContext {
+        const registry = symbolTable.getElementRegistry();
+        const indexes = symbolTable.getIndexes();
+        const resolver = symbolTable.getResolver();
+        return {
+            targetIdOf: specialization => {
+                const relationship = registry.relationshipOf(specialization);
+                return relationship && resolver.resolveTarget(relationship, indexes).targetId;
+            },
+            declarationsOf: symbol => {
+                const declarations = registry.elementOf(symbol)?.declarations;
+                return declarations && declarations.length > 1 ? declarations : undefined;
+            },
+        };
     }
 
     private flowRelationship(symbol: SysMLSymbol): RelationshipDTO | undefined {
@@ -476,6 +515,7 @@ export class SysMLModelProvider {
         symbolTable: SymbolTable,
         uri: string,
         lines: string[],
+        context: ModelContext,
     ): RelationshipDTO[] {
         const symbols = symbolTable.getSymbolsForUri(uri);
         const relationships: RelationshipDTO[] = [];
@@ -490,7 +530,7 @@ export class SysMLModelProvider {
                 continue;
             }
 
-            relationships.push(...this.specializationRelationships(symbol));
+            relationships.push(...this.specializationRelationships(symbol, context));
 
             // Connection usages create connection relationships
             if (symbol.kind === SysMLElementKind.ConnectionUsage) {

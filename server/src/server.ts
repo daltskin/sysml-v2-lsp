@@ -59,6 +59,7 @@ import type { ClearCacheResult, ServerStatsResult } from './serverStatsTypes.js'
 import { isInFolder, isSameDocumentUri } from './utils/documentUri.js';
 import { DEFAULT_SKIP_DIRS, findSysMLFilesAsync, readFilesBatch } from './utils/fileDiscovery.js';
 import { DEFAULT_URL_PREFIX, type FolderProjectId, getUrlPrefix, setFolderProjectIds, setProjectId } from './utils/uuid.js';
+import { SYMBOL_ID_SCHEME } from './symbols/ids.js';
 
 /** Convert a file:// URI to a filesystem path, returning undefined for non-file URIs. */
 function toFsPath(uri: string): string | undefined {
@@ -396,6 +397,8 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
             // Document formatting
             documentFormattingProvider: true,
             documentRangeFormattingProvider: true,
+            // The derivation of the symbol IDs every request reports (`SYMBOL_ID_SCHEME`).
+            experimental: { sysml: { symbolIdScheme: SYMBOL_ID_SCHEME } },
         },
     };
 

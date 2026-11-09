@@ -203,6 +203,13 @@ export interface SysMLElementDTO {
     /** Source location. */
     range: RangeDTO;
 
+    /**
+     * For a package declared more than once, one element: each of its
+     * declarations in the workspace, by document URI, then position. Every
+     * node of it carries the same `symbolId`.
+     */
+    declarations?: { uri: string; range: RangeDTO }[];
+
     /** Nested child elements (recursive tree). */
     children: SysMLElementDTO[];
 
@@ -274,6 +281,13 @@ export interface RelationshipDTO {
 
     /** Target element name. */
     target: string;
+
+    /**
+     * For a specialization: the `symbolId` of the element its target resolves
+     * to (its general); absent when unresolved or ambiguous. `target` stays the
+     * text as written.
+     */
+    targetId?: string;
 
     /**
      * Optional label for the relationship: a flow's payload type, else its

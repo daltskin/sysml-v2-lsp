@@ -218,3 +218,48 @@ describe('relationship targets on the corpus', () => {
         expect(resolved).toBeGreaterThan(registry.getRelationships().length / 2);
     }, 300_000);
 });
+
+describe('sysml/model from the element registry', () => {
+    /** `sysml/model`'s elements of `uri` in a workspace of `documents`. */
+    async function modelOf(documents: Array<{ uri: string; text: string }>, uri: string) {
+        const { DocumentManager } = await import('../../server/src/documentManager.js');
+        const { SysMLModelProvider } = await import('../../server/src/model/sysmlModelProvider.js');
+        const { TextDocument } = await import('vscode-languageserver-textdocument');
+        const dm = new DocumentManager();
+        for (const d of documents) dm.parse(TextDocument.create(d.uri, 'sysml', 1, d.text));
+        return new SysMLModelProvider(dm).getModel(uri, 1, ['elements', 'relationships']);
+    }
+
+    it('reports the element a specialization targets by its ID, the inherited feature of SysML Table 4 "Redefinition" among them', async () => {
+        const model = await modelOf([{ uri: A, text: `package R {
+    part def Part1;
+    part part1 : Part1 { part part2; }
+    part part1S :> part1 { part part2R :>> part2; }
+    part other { part part2; }
+}
+` }], A);
+        const r = model.elements![0];
+        const [part1, part1S] = [r.children[1], r.children[2]];
+        const redefinition = part1S.children[0].relationships.find(rel => rel.type === 'redefinition')!;
+        expect(redefinition.target).toBe('part2');
+        expect(redefinition.targetId).toBe(part1.children[0].symbolId);
+        expect(part1.relationships.find(rel => rel.type === 'typing')!.targetId).toBe(r.children[0].symbolId);
+        expect(model.relationships!.find(rel => rel.type === 'redefinition')!.targetId).toBe(part1.children[0].symbolId);
+    });
+
+    it('gives every node of a package declared in two documents its one symbol ID and its declarations', async () => {
+        const documents = [
+            { uri: 'file:///w/a.sysml', text: 'package P { part def E; }\n' },
+            { uri: 'file:///w/b.sysml', text: 'package P { part e : E; }\n' },
+        ];
+        const [a, b] = await Promise.all(documents.map(d => modelOf(documents, d.uri)));
+        const [pa, pb] = [a.elements![0], b.elements![0]];
+        expect(pa.symbolId).toBe(pb.symbolId);
+        expect(pa.declarations!.map(d => d.uri)).toEqual(['file:///w/a.sysml', 'file:///w/b.sysml']);
+        expect(pb.declarations).toEqual(pa.declarations);
+        // An element declared once has no declarations of its own to list.
+        expect(pa.children[0].declarations).toBeUndefined();
+        // Its members are owned by it, whichever document declares them.
+        expect(pb.children[0].relationships[0].targetId).toBe(pa.children[0].symbolId);
+    });
+});
