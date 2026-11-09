@@ -204,3 +204,32 @@ function compareDeclarationSites(a: SysMLSymbol, b: SysMLSymbol): number {
     if (uriA !== uriB) return uriA < uriB ? -1 : 1;
     return a.range.start.line - b.range.start.line || a.range.start.character - b.range.start.character;
 }
+
+/**
+ * The symbol IDs of the element registry (`ElementRegistry`), version 5 UUIDs
+ * (KerML 9.1) derived from an element's URL or path only, never from the
+ * order documents are indexed in, so the same declarations give the same IDs
+ * on every machine and in every session.
+ */
+export const RegistryIds = {
+    /** A top-level package, one element however many documents declare it: its URL is the project's URL prefix and its name. */
+    topLevelPackage(uri: string, name: string): string {
+        return uuidV5(NAMESPACE_URL, getUrlPrefix(uri) + encodeURIComponent(name));
+    },
+    /**
+     * Any other top-level element: its URL is the project's URL prefix, its
+     * document's URI and its segment, as each document is a root namespace of
+     * its own (KerML 7.2.5.3).
+     */
+    topLevelElement(uri: string, segment: string): string {
+        return uuidV5(NAMESPACE_URL, `${getUrlPrefix(uri)}${encodeURIComponent(canonicalUri(uri))}/${encodeURIComponent(segment)}`);
+    },
+    /** A nested element: its path (KerML 8.3.2.1.2 `path()`) in the namespace of its top-level element's ID. */
+    member(topLevelId: string, path: string): string {
+        return uuidV5(topLevelId, path);
+    },
+    /** A relationship its owner declares: its key (kind and target as written) in a namespace of the owner's own. */
+    relationship(ownerId: string, key: string): string {
+        return uuidV5(uuidV5(ownerId, 'relationships'), key);
+    },
+} as const;

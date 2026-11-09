@@ -108,6 +108,12 @@ export interface SysMLSymbol {
     /** The kind of SysML element */
     kind: SysMLElementKind;
     /**
+     * For a package: whether it is a library package (`library package`,
+     * `standard library package`), a `LibraryPackage` of its own (KerML
+     * 8.3.4.13.3), though reported with the kind `Package`.
+     */
+    isLibraryPackage?: boolean;
+    /**
      * The fully qualified name (e.g., "VehicleModel::Chassis::wheel"); undefined
      * for an element without one (KerML): an anonymous element, or any member of one.
      * A name, for resolving and comparing what a model writes -- an element is
@@ -220,6 +226,8 @@ export interface ImportTarget {
      * given filter conditions").
      */
     filter?: FilterExpr;
+    /** The range of the import itself (`importRule`), as written. */
+    range?: Range;
 }
 
 /**
@@ -236,6 +244,8 @@ export interface OwnedSpecialization {
     target: string;
     /** The operator or keyword as written (`:>`, `subsets`, ...); none for a typing. */
     notation?: string;
+    /** The range of the target as written. */
+    range?: Range;
 }
 
 /**

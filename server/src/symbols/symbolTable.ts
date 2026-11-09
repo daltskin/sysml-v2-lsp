@@ -6,6 +6,7 @@ import { ParseResult } from '../parser/parseDocument.js';
 import { contextToRange, tokenToRange } from '../parser/positionUtils.js';
 import { SYSML_KEYWORDS } from '../utils/sysmlKeywords.js';
 import { joinQualifiedName, joinReference, scanQualifiedNames, splitQualifiedName, unquoteName as decodeName } from '../utils/identUtils.js';
+import { ElementRegistry } from './elementRegistry.js';
 import { IdRegistry } from './ids.js';
 import { buildSymbolIndexes, NamespaceResolver } from './namespaceResolver.js';
 import { Scope } from './scope.js';
@@ -486,6 +487,8 @@ export class SymbolTable {
     private members = new WeakMap<SysMLSymbol, SysMLSymbol[]>();
     /** Assigns and finds `symbolId`s, one document at a time */
     private ids = new IdRegistry(this.owners, this.members);
+    /** The model of the workspace by ID, built from the same declarations */
+    private registry = new ElementRegistry(symbol => this.owners.get(symbol));
     /** All symbols indexed by URI for cross-file lookup */
     private symbolsByUri = new Map<string, SysMLSymbol[]>();
     /** All symbols indexed by simple name for O(1) lookup */
@@ -562,6 +565,7 @@ export class SymbolTable {
         this.resolveViewInheritance(uri);
         const declarations = this.symbolsByUri.get(uri) ?? [];
         this.ids.add(declarations);
+        this.registry.setDocument(uri, declarations);
         this.refreshMergedPackages(declarations);
     }
 
@@ -669,6 +673,11 @@ export class SymbolTable {
     }
 
     /** Get a symbol by its `symbolId`; for a package, its merged view across documents. */
+    /** The model of the workspace by ID (`ElementRegistry`), from the same declarations as this table. */
+    getElementRegistry(): ElementRegistry {
+        return this.registry;
+    }
+
     getSymbolById(id: string): SysMLSymbol | undefined {
         const symbol = this.ids.get(id);
         if (symbol?.kind !== SysMLElementKind.Package || symbol.qualifiedName === undefined) return symbol;
@@ -867,6 +876,7 @@ export class SymbolTable {
     }
 
     private clearUri(uri: string): void {
+        this.registry.removeDocument(uri);
         const existing = this.symbolsByUri.get(uri);
         if (existing && existing.length > 0) {
             this.ids.remove(existing);
@@ -1417,6 +1427,7 @@ export class SymbolTable {
             symbolId: '',
             shortName,
             kind,
+            isLibraryPackage: ctx.ruleIndex === SysMLv2Parser.RULE_libraryPackage || undefined,
             qualifiedName,
             range,
             selectionRange,
@@ -2103,7 +2114,9 @@ export class SymbolTable {
         const add = (kind: OwnedSpecialization['kind'], targets: (ParserRuleContext | null | undefined)[], notation?: TerminalNode | null): void => {
             for (const targetCtx of targets) {
                 const target = targetCtx && this.specializationTarget(targetCtx);
-                if (target) specializations.push(notation ? { kind, target, notation: notation.getText() } : { kind, target });
+                if (target) specializations.push(notation
+                    ? { kind, target, notation: notation.getText(), range: contextToRange(targetCtx) }
+                    : { kind, target, range: contextToRange(targetCtx) });
             }
         };
         const visit = (node: ParserRuleContext): void => {
@@ -2698,7 +2711,7 @@ export class SymbolTable {
                 const maybeImportRule = bodyItem.getChild(k);
                 if (maybeImportRule instanceof ParserRuleContext && maybeImportRule.ruleIndex === SysMLv2Parser.RULE_importRule) {
                     const parsed = this.parseImportRule(maybeImportRule);
-                    if (parsed) results.push(parsed);
+                    if (parsed) results.push({ ...parsed, range: contextToRange(maybeImportRule) });
                 }
             }
         }
