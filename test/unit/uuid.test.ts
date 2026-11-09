@@ -166,12 +166,11 @@ describe('symbolId (KerML 9.1)', () => {
         st.build('file:///w/b.sysml', parseDocument('part P { part x; part : X; }'));
         const [p, x, anonymous] = st.getSymbolsForUri('file:///w/b.sysml');
         const before = [p.symbolId, x.symbolId, anonymous.symbolId];
-        // A clash in a document sorted first makes this P the second top-level element named P: its
-        // path is its position in the root namespace (KerML 8.3.2.1.2 `path()`), its members' follow it.
+        // A clash in a document sorted first makes this P the second: P#2.
         st.build('file:///w/0.sysml', parseDocument('part P;'));
-        expect(p.symbolId).toBe(uuidV5(NAMESPACE_URL, `${DEFAULT_URL_PREFIX}${encodeURIComponent('/2/1')}`));
-        expect(x.symbolId).toBe(uuidV5(p.symbolId, '/2/1/x'));
-        expect(anonymous.symbolId).toBe(uuidV5(p.symbolId, '/2/1/part : X'));
+        expect(p.symbolId).toBe(uuidV5(NAMESPACE_URL, `${DEFAULT_URL_PREFIX}P#2`));
+        expect(x.symbolId).toBe(uuidV5(p.symbolId, 'P::x'));
+        expect(anonymous.symbolId).toBe(uuidV5(p.symbolId, 'P#2/part : X'));
         expect([p.symbolId, x.symbolId, anonymous.symbolId]).not.toContain(before[0]);
         expect(x.symbolId).not.toBe(before[1]);
         expect(anonymous.symbolId).not.toBe(before[2]);

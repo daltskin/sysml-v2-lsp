@@ -6,11 +6,7 @@
 
 - `sysml/model` reports the element a specialization's target resolves to as `targetId` (its general), next to the target as written, in `elements` and `relationships`. It is absent when the target is unresolved or ambiguous, and for a conjugated port typing (`~P`).
 - `sysml/model` gives every node of a package declared more than once the same `symbolId`, and lists each of its declarations in the workspace as `declarations`.
-- The `initialize` result reports how symbol IDs are derived, as `capabilities.experimental.sysml.symbolIdScheme` (`element-registry/1`).
-
-### Changed
-
-- A later element of one namespace with the name of an earlier one has a symbol ID from its position (KerML 8.3.2.1.2 `path()`), instead of one numbered `#2`.
+- The `initialize` result reports how symbol IDs are derived, as `sysml.symbolIdScheme` (`element-registry/1`, which gives the same symbol IDs as before), so a client that stores them knows when a release changes them.
 
 ### Fixed
 

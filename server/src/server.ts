@@ -397,9 +397,10 @@ connection.onInitialize((params: InitializeParams): InitializeResult => {
             // Document formatting
             documentFormattingProvider: true,
             documentRangeFormattingProvider: true,
-            // The derivation of the symbol IDs every request reports (`SYMBOL_ID_SCHEME`).
-            experimental: { sysml: { symbolIdScheme: SYMBOL_ID_SCHEME } },
         },
+        // The server's own information, beside the LSP capabilities: the derivation of the
+        // symbol IDs every request reports (`SYMBOL_ID_SCHEME`).
+        sysml: { symbolIdScheme: SYMBOL_ID_SCHEME },
     };
 
     if (hasWorkspaceFolderCapability) {

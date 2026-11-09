@@ -9,13 +9,18 @@ export const SYMBOL_ID_SCHEME = 'element-registry/1';
 
 export const RegistryIds = {
     /**
-     * A top-level element, a member of the one root namespace of the workspace:
-     * its URL is the project's URL prefix of its document and its path there.
+     * A top-level element, a member of the one root namespace of its project:
+     * its URL is its project's URL prefix and its name, and `suffix` (`#2`) for
+     * a later one of that name.
      */
-    topLevel(uri: string, path: string): string {
-        return uuidV5(NAMESPACE_URL, getUrlPrefix(uri) + encodeURIComponent(path));
+    topLevel(uri: string, name: string, suffix = ''): string {
+        return uuidV5(NAMESPACE_URL, getUrlPrefix(uri) + encodeURIComponent(name) + suffix);
     },
-    /** A nested element: its path (KerML 8.3.2.1.2 `path()`) in the namespace of its top-level element's ID. */
+    /**
+     * A nested element: its path in the namespace of its top-level element's
+     * ID, its qualified name as written, `#2` for a later one of the same path
+     * (`ElementRegistry`; not KerML 8.3.2.1.2 `path()`).
+     */
     member(topLevelId: string, path: string): string {
         return uuidV5(topLevelId, path);
     },

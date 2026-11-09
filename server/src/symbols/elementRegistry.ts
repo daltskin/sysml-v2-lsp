@@ -57,10 +57,10 @@ interface Node {
     members: Node[];
     /** Its members that are packages, by name, so another declaration of one joins it. */
     packages: Map<string, Node>;
-    /** Its path (KerML 8.3.2.1.2 `path()`), its ID derived from it. */
+    /** Its path, unique in its top-level element (`#2` for a later one of the same path); its ID derived from it. */
     path: string;
-    /** Whether its path is its qualified name, so its members' paths can be theirs. */
-    qualified: boolean;
+    /** Its qualified name as written, without any `#2`; none when it or an owner is unnamed. */
+    qualifiedPath?: string;
     /** The ID of its top-level element, the namespace of its own ID. */
     topLevelId: string;
 }
@@ -80,7 +80,7 @@ export class ElementRegistry {
     private readonly relationships = new Map<string, RegistryRelationship>();
     /**
      * The element each relationship was recorded for: when elements trade
-     * position-based IDs, one may take relationship IDs another still lists,
+     * numbered IDs (`#2`), one may take relationship IDs another still lists,
      * and each removes only those it recorded.
      */
     private readonly relationshipNodes = new Map<string, Node>();
@@ -245,7 +245,6 @@ export class ElementRegistry {
                 members: [],
                 packages: new Map(),
                 path: '',
-                qualified: false,
                 topLevelId: '',
             };
             if (key !== undefined) packages.set(key, node);
@@ -254,8 +253,16 @@ export class ElementRegistry {
             changedNodes.add(node);
         }
 
-        if (rootsChanged) this.layoutRoots();
-        for (const owner of changedOwners) if (this.isPlaced(owner)) this.layoutMembers(owner);
+        // A top-level element's members are numbered across its whole tree, so a change lays out the
+        // trees it touches: those owning a changed namespace, and those whose own ID changed.
+        const trees = new Set<Node>(rootsChanged ? this.layoutRoots() : []);
+        const roots = new Set(this.roots);
+        for (const owner of changedOwners) {
+            let top = owner;
+            while (top.owner) top = top.owner;
+            if (roots.has(top)) trees.add(top);
+        }
+        for (const tree of trees) this.layoutTree(tree);
         for (const node of changedNodes) if (this.isPlaced(node)) this.refreshDeclarations(node);
     }
 
@@ -281,50 +288,73 @@ export class ElementRegistry {
 
     /**
      * Give the top-level elements their IDs (SysML 9.1): their URLs are their
-     * names, as members of the one root namespace of the workspace; one whose
-     * segment an earlier one has (a package keeping its own) has its position
-     * there instead (KerML 8.3.2.1.2 `path()`).
+     * names, as members of the one root namespace of their project; a later one
+     * with an earlier one's name (a package first, then by document URI and
+     * position) is numbered, `#2`, as in earlier releases, so its ID stays the
+     * same: not compatible with KerML 8.3.2.1.2 `path()`, which gives it a path
+     * by its position. Gives the top-level elements whose IDs changed.
      */
-    private layoutRoots(): void {
+    private layoutRoots(): Node[] {
         this.roots.sort(byFirstDeclaration);
-        // One root namespace per project: top-level elements compete for their paths only
-        // with those of their project, whose URL prefix their URLs start with.
+        const changed: Node[] = [];
         const byProject = new Map<string, Node[]>();
         for (const root of this.roots) {
             const project = getUrlPrefix(root.symbols[0].uri);
             byProject.set(project, [...byProject.get(project) ?? [], root]);
         }
         for (const roots of byProject.values()) {
-            const paths = pathsOf(roots, '', true);
-            for (const root of roots) {
-                const { path, qualified } = paths.get(root)!;
-                const id = RegistryIds.topLevel(root.symbols[0].uri, path);
-                this.place(root, id, path, qualified, id);
+            for (const [segment, group] of groupByPath(roots.map(root => ({ node: root, path: segmentOf(root.symbols[0]) })))) {
+                group.forEach((root, index) => {
+                    const suffix = index === 0 ? '' : `#${index + 1}`;
+                    const symbol = root.symbols[0];
+                    const id = RegistryIds.topLevel(symbol.uri, segment, suffix);
+                    const qualifiedPath = escapedName(symbol) !== undefined ? segment : undefined;
+                    if (this.place(root, id, segment + suffix, qualifiedPath, id)) changed.push(root);
+                });
             }
         }
         this.rootIds = this.roots.map(root => root.element.symbolId);
+        return changed;
     }
 
     /**
-     * Give `owner`'s members their IDs: each its qualified name as its path, or,
-     * when an earlier member has its segment (a package keeping its own), its
-     * position (KerML 8.3.2.1.2 `path()`).
+     * Give the elements of top-level element `root`'s tree their IDs, owners
+     * before members: a named member's path is its qualified name as written,
+     * an unnamed one's its owner's path, `/` and its declaration as written; a
+     * later one with an earlier one's path in the tree (a package first, then
+     * by document URI and position) is numbered, `#2`, as in earlier releases,
+     * so its ID stays the same: not compatible with KerML 8.3.2.1.2 `path()`,
+     * which gives an element without a qualified name a path by its position.
      */
-    private layoutMembers(owner: Node): void {
-        owner.members.sort(byFirstDeclaration);
-        const paths = pathsOf(owner.members, owner.path, owner.qualified);
-        for (const member of owner.members) {
-            const { path, qualified } = paths.get(member)!;
-            this.place(member, RegistryIds.member(owner.topLevelId, path), path, qualified, owner.topLevelId);
+    private layoutTree(root: Node): void {
+        for (let level = [root]; level.length > 0;) {
+            const entries: { node: Node; path: string; qualifiedPath?: string }[] = [];
+            for (const owner of level) {
+                owner.members.sort(byFirstDeclaration);
+                for (const member of owner.members) {
+                    const segment = segmentOf(member.symbols[0]);
+                    const qualifiedPath = escapedName(member.symbols[0]) !== undefined && owner.qualifiedPath !== undefined
+                        ? `${owner.qualifiedPath}::${segment}` : undefined;
+                    entries.push({ node: member, path: qualifiedPath ?? `${owner.path}/${segment}`, qualifiedPath });
+                }
+            }
+            const qualifiedPaths = new Map(entries.map(entry => [entry.node, entry.qualifiedPath]));
+            for (const [path, group] of groupByPath(entries)) {
+                group.forEach((node, index) => {
+                    const unique = index === 0 ? path : `${path}#${index + 1}`;
+                    this.place(node, RegistryIds.member(root.element.symbolId, unique), unique, qualifiedPaths.get(node), root.element.symbolId);
+                });
+            }
+            for (const owner of level) owner.element.ownedElementIds = owner.members.map(member => member.element.symbolId);
+            level = level.flatMap(owner => owner.members);
         }
-        owner.element.ownedElementIds = owner.members.map(member => member.element.symbolId);
     }
 
     /**
-     * Set `node`'s ID and path; when either changed (or it is new), re-derive its
-     * relationships and its members, whose IDs depend on them.
+     * Set `node`'s ID and paths; when its ID changed (or it is new), re-derive
+     * its relationships, whose IDs depend on it. Gives whether its ID changed.
      */
-    private place(node: Node, id: string, path: string, qualified: boolean, topLevelId: string): void {
+    private place(node: Node, id: string, path: string, qualifiedPath: string | undefined, topLevelId: string): boolean {
         node.element.ownerId = node.owner?.element.symbolId;
         if (this.writeIds) {
             for (const symbol of node.symbols) {
@@ -332,15 +362,15 @@ export class ElementRegistry {
                 symbol.parentId = node.element.ownerId;
             }
         }
-        if (node.element.symbolId === id && node.path === path && node.qualified === qualified && node.topLevelId === topLevelId) return;
+        node.path = path;
+        node.qualifiedPath = qualifiedPath;
+        node.topLevelId = topLevelId;
+        if (node.element.symbolId === id && this.nodes.get(id) === node) return false;
         if (this.nodes.get(node.element.symbolId) === node) this.nodes.delete(node.element.symbolId);
         node.element.symbolId = id;
-        node.path = path;
-        node.qualified = qualified;
-        node.topLevelId = topLevelId;
         this.nodes.set(id, node);
         this.refreshDeclarations(node);
-        this.layoutMembers(node);
+        return true;
     }
 
     /** Re-derive `node`'s declarations and the relationships they declare, by its current ID. */
@@ -410,48 +440,16 @@ function packageKey(symbol: SysMLSymbol, topLevel = false): string | undefined {
 }
 
 /**
- * The paths of the members of one namespace whose own path is `ownerPath`
- * (`''` for the root namespace), and whether each is a qualified name. A
- * member keeps its segment unless an earlier one has it (a package keeping
- * its own): then a named one takes its position, as one without a qualified
- * name does (KerML 8.3.2.1.2 `path()`), and an unnamed one, identified by its
- * declaration as written, its occurrence among the same declarations (`#2`).
+ * `entries` grouped by path, each group in the order its elements are
+ * numbered in: packages first, then by first declaration, by document URI,
+ * then position.
  */
-function pathsOf(members: readonly Node[], ownerPath: string, ownerQualified: boolean): Map<Node, { path: string; qualified: boolean }> {
-    const claimants = claimantsOf(members, () => '');
-    const occurrences = new Map<string, number>();
-    const paths = new Map<Node, { path: string; qualified: boolean }>();
-    const join = (segment: string, qualifying: boolean) => ownerPath === '' ? segment : `${ownerPath}${qualifying ? '::' : '/'}${segment}`;
-    members.forEach((member, index) => {
-        const symbol = member.symbols[0];
-        const segment = segmentOf(symbol);
-        const named = escapedName(symbol) !== undefined;
-        const occurrence = (occurrences.get(segment) ?? 0) + 1;
-        occurrences.set(segment, occurrence);
-        if (claimants.has(member)) {
-            paths.set(member, { path: join(segment, named && ownerQualified), qualified: named && ownerQualified });
-        } else if (named) {
-            paths.set(member, { path: `${ownerPath}/${index + 1}/1`, qualified: false });
-        } else {
-            paths.set(member, { path: join(`${segment}#${occurrence}`, false), qualified: false });
-        }
-    });
-    return paths;
-}
-
-/**
- * The members that keep their segment as their path: per segment, a package
- * if there is one, else the first, within each group `groupOf` gives.
- */
-function claimantsOf(members: readonly Node[], groupOf: (node: Node) => string): Set<Node> {
-    const bySegment = new Map<string, Node>();
-    for (const member of members) {
-        const key = `${groupOf(member)}\0${segmentOf(member.symbols[0])}`;
-        const current = bySegment.get(key);
-        const isPackage = member.element.kind === SysMLElementKind.Package;
-        if (!current || (isPackage && current.element.kind !== SysMLElementKind.Package)) bySegment.set(key, member);
-    }
-    return new Set(bySegment.values());
+function groupByPath<T extends { node: Node; path: string }>(entries: readonly T[]): Map<string, Node[]> {
+    const groups = new Map<string, Node[]>();
+    for (const { node, path } of entries) groups.set(path, [...groups.get(path) ?? [], node]);
+    const isPackage = (node: Node) => node.element.kind === SysMLElementKind.Package ? 0 : 1;
+    for (const group of groups.values()) group.sort((a, b) => isPackage(a) - isPackage(b) || byFirstDeclaration(a, b));
+    return groups;
 }
 
 /** An element's own path segment: its name as written, or, anonymous, its declaration as written. */

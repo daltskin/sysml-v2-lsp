@@ -1593,7 +1593,7 @@ package Demo {
     });
 });
 
-/** A namespace scope as text: an element's name (or, anonymous, its declaration), `root` or `global`. */
+/** A namespace scope as text: an element's name or short name (none when anonymous), or `global`. */
 function scopeName(scope: import('../../server/src/symbols/namespaceResolver.js').NamespaceScope): string | undefined {
     if ('symbolId' in scope) return scope.name ?? scope.shortName;
     return scope.kind;
