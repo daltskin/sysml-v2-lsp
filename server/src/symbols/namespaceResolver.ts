@@ -19,17 +19,11 @@ import { ElementRegistry, RegistryElement, RegistryRelationship } from './elemen
 import { FilterExpr, ImportTarget, ReferenceChain, SysMLElementKind, SysMLSymbol, isAnonymous, isDefinition, isUsage, memberNamesOf } from './sysmlElements.js';
 
 /**
- * A namespace's identity for name resolution: a declared one by its
- * qualifiedName (`''` for the root), an anonymous one by its own symbol, so a
- * declared name quoted like an anonymous qualifiedName never shares its members.
+ * The symbols of the workspace, indexed for the requests that search them by
+ * name text, and the element registry name resolution works on.
  */
-export type NamespaceKey = string | SysMLSymbol;
-
 export interface SymbolIndexes {
     byName: Map<string, SysMLSymbol[]>;
-    /** Named members by owning namespace (`NamespaceKey`); `''` holds the root's. */
-    byParent: Map<NamespaceKey, SysMLSymbol[]>;
-    byQualifiedName: Map<string, SysMLSymbol>;
     /** Every symbol by `symbolId`; the only index an anonymous one (`isAnonymous`) is in. */
     byId: Map<string, SysMLSymbol>;
     definitionsByName: Map<string, SysMLSymbol[]>;
@@ -70,45 +64,6 @@ const MAX_SPECIALIZATION_CHAIN_DEPTH = 64;
  * real model nests namespaces anywhere near this deep.
  */
 const MAX_NAMESPACE_NESTING_DEPTH = 64;
-
-/**
- * QualifiedNames claimed by more than one symbol *of the same kind* --
- * excluding Package, since a package may legitimately be "reopened" under
- * the same qualifiedName (across files, or at multiple positions in one
- * file; merged by `SymbolTable.mergePackageFragments`), which is a
- * different thing from a naming conflict.
- *
- * This mirrors KerML's own well-formedness rule rather than an assumption:
- * `Membership.isDistinguishableFrom` (KerML v1.0 §8.3.2.4.4) states two
- * memberships ARE distinguishable -- i.e. NOT a conflict -- "if... neither
- * of the metaclasses of the memberElement of this Membership and the
- * memberElement of the other Membership conform to the other", regardless
- * of whether their names collide. So a `package A` and an unrelated
- * `part def A` sharing a bare name is valid SysML (their metaclasses don't
- * conform to each other) -- only two elements of the *same* (or a
- * conforming) kind sharing a name are genuinely not distinguishable, per
- * `Namespace.validateNamespaceDistinguishibility`'s "all memberships of a
- * Namespace must be distinguishable from each other."
- *
- * This codebase has no full SysML/KerML metaclass hierarchy to test general
- * conformance against, so "conforms" is approximated conservatively as
- * "identical `SysMLElementKind`" -- the one case where conformance is
- * unambiguous (a kind trivially conforms to itself) without guessing at
- * relationships (e.g. PartUsage vs. PartDefinition) this codebase doesn't
- * model. This may under-flag some real conflicts between genuinely related
- * but differently-named kinds, but never over-flags a legitimately
- * different-kind collision like the package/definition case above.
- *
- * Exported so `SemanticValidator` can flag each conflicting declaration
- * with its own diagnostic, using the same conflict definition
- * `buildSymbolIndexes` uses to keep such symbols' children from being
- * silently pooled together.
- */
-export function findConflictedQualifiedNames(allSymbols: SysMLSymbol[]): Map<string, SysMLSymbol[]> {
-    // An element without a qualified name (an anonymous element, or a member
-    // of one) can't clash by qualified name; see `findConflictingDeclarations`.
-    return groupConflicts(allSymbols.filter(s => s.qualifiedName !== undefined), s => s.qualifiedName!);
-}
 
 export { memberNamesOf };
 
@@ -177,36 +132,6 @@ export function findConflicts(indexes: SymbolIndexes): Map<SysMLSymbol, Conflict
     }
     conflictsByIndexes.set(indexes, conflicting);
     return conflicting;
-}
-
-/** Group `symbols` by `keyOf`, keeping groups of two or more non-package declarations of one kind. */
-function groupConflicts(symbols: SysMLSymbol[], keyOf: (s: SysMLSymbol) => string): Map<string, SysMLSymbol[]> {
-    return groupKeyedConflicts(symbols.map(symbol => ({ symbol, key: keyOf(symbol) })));
-}
-
-/** As `groupConflicts`, for symbols already paired with their keys (one symbol may have several). */
-function groupKeyedConflicts(entries: Array<{ symbol: SysMLSymbol; key: string }>): Map<string, SysMLSymbol[]> {
-    const byKeyAndKind = new Map<string, Map<SysMLElementKind, SysMLSymbol[]>>();
-    for (const { symbol: s, key } of entries) {
-        let byKind = byKeyAndKind.get(key);
-        if (!byKind) {
-            byKind = new Map();
-            byKeyAndKind.set(key, byKind);
-        }
-        const list = byKind.get(s.kind) ?? [];
-        list.push(s);
-        byKind.set(s.kind, list);
-    }
-
-    const conflicts = new Map<string, SysMLSymbol[]>();
-    for (const [key, byKind] of byKeyAndKind) {
-        for (const [kind, group] of byKind) {
-            if (kind === SysMLElementKind.Package || group.length <= 1) continue;
-            const existing = conflicts.get(key) ?? [];
-            conflicts.set(key, [...existing, ...group]);
-        }
-    }
-    return conflicts;
 }
 
 /** URI path segments joined and percent-decoded for display, or left encoded when malformed. */
@@ -285,29 +210,11 @@ export function describeConflictingDeclarations(others: SysMLSymbol[], fromUri: 
  */
 export function buildSymbolIndexes(allSymbols: SysMLSymbol[], registry?: ElementRegistry): SymbolIndexes {
     const byName = new Map<string, SysMLSymbol[]>();
-    const byParent = new Map<NamespaceKey, SysMLSymbol[]>();
-    const byQualifiedName = new Map<string, SysMLSymbol>();
     const byId = new Map<string, SysMLSymbol>();
     const definitionsByName = new Map<string, SysMLSymbol[]>();
     const portsByName = new Map<string, SysMLSymbol[]>();
 
-    // A conflicted qualifiedName (see `findConflictedQualifiedNames` -- two
-    // same-kind symbols sharing a name, not e.g. a package and an unrelated
-    // definition, which is valid) is excluded from `byQualifiedName` and
-    // from ever owning pooled children in `byParent`: resolving straight
-    // through a genuinely ambiguous name, or treating two indistinguishable
-    // declarations' children as siblings in one namespace, would silently
-    // paper over a real modeling error instead of surfacing it. This
-    // intentionally also makes a reference *from inside* one of the
-    // conflicting declarations to its own child unresolved, not just
-    // external references through the ambiguous name -- the whole name is
-    // invalid while the conflict exists, and `checkAmbiguousNamespaceName`
-    // (semanticValidator.ts) flags the root cause on each conflicting
-    // declaration.
-    const conflictedQualifiedNames = new Set(findConflictedQualifiedNames(allSymbols).keys());
-
-    // Every element by its symbol ID, indexed first so members below can be
-    // keyed by their owner. An anonymous element (`isAnonymous`) is
+    // Every element by its symbol ID. An anonymous element (`isAnonymous`) is
     // reachable only this way: its generated name is not a member name to
     // resolve, and a declared name quoted like its qualifiedName must not be
     // shadowed by it.
@@ -315,7 +222,7 @@ export function buildSymbolIndexes(allSymbols: SysMLSymbol[], registry?: Element
         byId.set(s.symbolId, s);
     }
     const indexes: SymbolIndexes = {
-        byName, byParent, byQualifiedName, byId, definitionsByName, portsByName,
+        byName, byId, definitionsByName, portsByName,
         registry: registry ?? ElementRegistry.fromSymbols(allSymbols),
     };
 
@@ -328,19 +235,6 @@ export function buildSymbolIndexes(allSymbols: SysMLSymbol[], registry?: Element
             byName.set(name, nameList);
         }
 
-        if (s.qualifiedName !== undefined && !conflictedQualifiedNames.has(s.qualifiedName)) {
-            byQualifiedName.set(s.qualifiedName, s);
-        }
-
-        // Root-level symbols (no owner) are keyed under '', the
-        // implicit root namespace -- mirrors the '' sentinel used for namespace
-        // ancestor chains, so byParent.get('') gives the root's own members.
-        const parentKey = ownerKeyOf(s, indexes.byId);
-        if (typeof parentKey !== 'string' || !conflictedQualifiedNames.has(parentKey)) {
-            const children = byParent.get(parentKey) ?? [];
-            children.push(s);
-            byParent.set(parentKey, children);
-        }
 
         if (isDefinition(s.kind)) {
             for (const name of memberNamesOf(s)) {
@@ -365,23 +259,6 @@ export function buildSymbolIndexes(allSymbols: SysMLSymbol[], registry?: Element
 /** `symbol`'s owner, by its `parentId`. */
 export function ownerOf(symbol: SysMLSymbol, indexes: SymbolIndexes): SysMLSymbol | undefined {
     return symbol.parentId ? indexes.byId.get(symbol.parentId) : undefined;
-}
-
-/**
- * The `NamespaceKey` of `symbol` as a namespace: its qualified name, or the
- * symbol itself when it has none (an anonymous element, or a member of one).
- */
-export function namespaceKeyOf(symbol: SysMLSymbol): NamespaceKey {
-    return symbol.qualifiedName ?? symbol;
-}
-
-/**
- * The `NamespaceKey` of the namespace owning `symbol`: its owner (looked up by
- * `parentId` in `byId`) as a namespace, else the root (`''`).
- */
-export function ownerKeyOf(symbol: SysMLSymbol, byId: ReadonlyMap<string, SysMLSymbol>): NamespaceKey {
-    const owner = symbol.parentId ? byId.get(symbol.parentId) : undefined;
-    return owner ? namespaceKeyOf(owner) : '';
 }
 
 /** AND together zero or more (possibly undefined) filter expressions; `undefined` means "no filter". */
@@ -599,19 +476,14 @@ export class NamespaceResolver {
 
     /**
      * The resolved member table of a namespace: its owned members, for a
-     * definition or usage the members it inherits (SysML 7.5.1), then its
-     * imported members, transitively (SysML 7.5.3). A namespace given by
-     * its qualified name (`''` for the global namespace) or by its symbol.
+     * definition or usage the members it inherits (SysML 7.6.1), then its
+     * imported members, transitively (SysML 7.5.3). A namespace given by its
+     * symbol or as a scope.
      */
-    getResolvedMembers(namespace: NamespaceKey | NamespaceScope, indexes: SymbolIndexes): MemberTable {
-        let scope: NamespaceScope | undefined;
-        if (namespace === '') scope = GLOBAL_NAMESPACE;
-        else if (typeof namespace === 'string') {
-            const symbol = indexes.byQualifiedName.get(namespace);
-            scope = symbol && this.scopeOf(symbol, indexes);
-        } else if ('symbolId' in namespace && 'ownedElementIds' in namespace) scope = namespace as RegistryElement;
-        else if (namespace === GLOBAL_NAMESPACE) scope = GLOBAL_NAMESPACE;
-        else scope = this.scopeOf(namespace as SysMLSymbol, indexes);
+    getResolvedMembers(namespace: SysMLSymbol | NamespaceScope, indexes: SymbolIndexes): MemberTable {
+        const scope = namespace === GLOBAL_NAMESPACE || 'ownedElementIds' in namespace
+            ? namespace as NamespaceScope
+            : this.scopeOf(namespace as SysMLSymbol, indexes);
         return scope ? this.tableOf(scope, indexes) : new Map();
     }
 

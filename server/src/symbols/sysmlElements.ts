@@ -97,7 +97,7 @@ export interface SysMLSymbol {
     ends?: string[];
     /**
      * The symbol's ID: a version 5 UUID derived from the project ID and the
-     * element's name, or, without one, its declaration (see `IdRegistry`). The
+     * element's name, or, without one, its declaration (see `RegistryIds`). The
      * same after a reload, but not the KerML `elementId`: a rename gives a new
      * one. Empty only while its document is being built; an empty symbolId
      * after `SymbolTable.build` is invalid.

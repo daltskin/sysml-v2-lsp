@@ -1231,7 +1231,7 @@ describe('getAllSymbols() completeness for colliding qualifiedNames (any kind, n
     // permanently erase the other(s) from `getAllSymbols()` -- data loss
     // that would happen regardless of whether the collision is a genuine
     // naming *conflict* per KerML's `isDistinguishableFrom` rule (see
-    // `findConflictedQualifiedNames`'s doc comment in namespaceResolver.ts)
+    // `findConflicts`'s doc comment in namespaceResolver.ts)
     // or a perfectly valid collision between different, non-conforming
     // kinds (e.g. `package A` and an unrelated `part def A`, used below
     // precisely because it's *not* flagged as a conflict -- both must still
@@ -1444,15 +1444,15 @@ package Demo {
             expect(st.getSymbol('Demo::connect a.p to b.p')).toBe(declared);
             expect(st.getSymbolById(anonymous.symbolId!)).toBe(anonymous);
             expect(st.findByName('connect a.p to b.p')).toEqual([declared]);
-            expect(st.getGlobalScope().resolve('Demo')).toBeDefined();
+            expect(st.getSymbol('Demo')).toBeDefined();
 
-            const { buildSymbolIndexes, findConflictedQualifiedNames } = await import('../../server/src/symbols/namespaceResolver.js');
+            const { buildSymbolIndexes, findConflicts, NamespaceResolver } = await import('../../server/src/symbols/namespaceResolver.js');
             const indexes = buildSymbolIndexes(st.getAllSymbols());
             expect(indexes.byName.get('connect a.p to b.p')).toEqual([declared]);
-            expect(indexes.byParent.get('Demo')).not.toContain(anonymous);
+            expect(new NamespaceResolver().ownedMembersOf(st.getSymbol('Demo')!, indexes)).not.toContain(anonymous);
             expect(indexes.byId.get(anonymous.symbolId)).toBe(anonymous);
             expect(anonymous.qualifiedName).toBeUndefined();
-            expect(findConflictedQualifiedNames(st.getAllSymbols()).size).toBe(0);
+            expect(findConflicts(st.getIndexes()).size).toBe(0);
         });
     }
 
@@ -1482,8 +1482,8 @@ package Demo {
         // The first end keeps its own name: only the part is found by it.
         expect(st.findByName('a').map((s) => s.kind)).toEqual(['part']);
 
-        const { findConflictedQualifiedNames } = await import('../../server/src/symbols/namespaceResolver.js');
-        expect(findConflictedQualifiedNames(st.getAllSymbols()).size).toBe(0);
+        const { findConflicts } = await import('../../server/src/symbols/namespaceResolver.js');
+        expect(findConflicts(st.getIndexes()).size).toBe(0);
     });
 });
 
@@ -1540,12 +1540,12 @@ package Demo {
         expect(st.getSymbol('Demo::S::transition first s1 then s2')).toBe(transitions[2]);
         expect(st.findByName('transition first s1 then s2')).toEqual([transitions[2]]);
 
-        const { findConflictedQualifiedNames } = await import('../../server/src/symbols/namespaceResolver.js');
-        expect(findConflictedQualifiedNames(st.getAllSymbols()).size).toBe(0);
+        const { findConflicts } = await import('../../server/src/symbols/namespaceResolver.js');
+        expect(findConflicts(st.getIndexes()).size).toBe(0);
     });
 });
 
-describe('findConflictedQualifiedNames and anonymous elements', () => {
+describe('name clashes and anonymous elements', () => {
     // The same package reopened in two files, each with an anonymous interface and connection between
     // the same ends, at the same position: each pair has the same declaration, but every one keeps its own
     // symbol ID. Both files also declare `link`, a real conflict.
@@ -1573,7 +1573,7 @@ package Demo {
 `;
 
     it('excludes anonymous elements sharing a name across documents, but still reports declared duplicates', async () => {
-        const { findConflictedQualifiedNames } = await import('../../server/src/symbols/namespaceResolver.js');
+        const { findConflicts } = await import('../../server/src/symbols/namespaceResolver.js');
         const st = await buildMultiFileST([
             { uri: 'test://a.sysml', text: fileA },
             { uri: 'test://b.sysml', text: fileB },
@@ -1587,9 +1587,9 @@ package Demo {
         expect(shared.every((s) => s.qualifiedName === undefined)).toBe(true);
         expect(new Set(shared.map((s) => s.symbolId)).size).toBe(4);
 
-        const conflicts = findConflictedQualifiedNames(all);
-        expect([...conflicts.keys()]).toEqual(['Demo::link']);
-        expect(conflicts.get('Demo::link')).toHaveLength(2);
+        const conflicts = [...findConflicts(st.getIndexes()).values()];
+        expect(conflicts.map(({ names }) => names)).toEqual([['link'], ['link']]);
+        expect(conflicts[0].declarations).toHaveLength(2);
     });
 });
 
@@ -1649,11 +1649,10 @@ describe('anonymous elements indexed by symbol ID', () => {
         expect(st.getSymbol(qualifiedName)).toBe(declared);
         expect(st.getSymbolById(iface.symbolId!)).toBe(iface);
 
-        const { buildSymbolIndexes, findConflictedQualifiedNames } = await import('../../server/src/symbols/namespaceResolver.js');
+        const { buildSymbolIndexes, findConflicts } = await import('../../server/src/symbols/namespaceResolver.js');
         const indexes = buildSymbolIndexes(st.getAllSymbols());
-        expect(indexes.byQualifiedName.get(qualifiedName)).toBe(declared);
         expect(indexes.byId.get(iface.symbolId!)).toBe(iface);
-        expect(findConflictedQualifiedNames(st.getAllSymbols()).size).toBe(0);
+        expect(findConflicts(st.getIndexes()).size).toBe(0);
     });
 
     it('follows a member\'s parent link to its anonymous owner', async () => {
@@ -1723,12 +1722,12 @@ describe('anonymous elements indexed by symbol ID', () => {
 
         const { buildSymbolIndexes, NamespaceResolver } = await import('../../server/src/symbols/namespaceResolver.js');
         const indexes = buildSymbolIndexes(st.getAllSymbols());
-        expect(indexes.byParent.get(iface)).toEqual([w]);
-        expect(indexes.byParent.get(qualifiedName)).toEqual([inner]);
-
         const resolver = new NamespaceResolver();
+        expect(resolver.ownedMembersOf(iface, indexes)).toEqual([w]);
+        expect(resolver.ownedMembersOf(st.getSymbol(qualifiedName)!, indexes)).toEqual([inner]);
+
         expect([...resolver.getResolvedMembers(iface, indexes).keys()]).toEqual(['w']);
-        expect([...resolver.getResolvedMembers(qualifiedName, indexes).keys()]).toEqual(['inner']);
+        expect([...resolver.getResolvedMembers(st.getSymbol(qualifiedName)!, indexes).keys()]).toEqual(['inner']);
         // Each member sees its own namespace's members, not the other's.
         expect(resolver.isLocallyVisible(w, 'w', indexes)).toBe(true);
         expect(resolver.isLocallyVisible(w, 'inner', indexes)).toBe(false);
@@ -1755,7 +1754,7 @@ describe('anonymous elements indexed by symbol ID', () => {
             expect(result.errors).toHaveLength(0);
             const { buildSymbolIndexes, NamespaceResolver } = await import('../../server/src/symbols/namespaceResolver.js');
             const indexes = buildSymbolIndexes(st.getAllSymbols());
-            const members = new NamespaceResolver().getResolvedMembers('Demo', indexes);
+            const members = new NamespaceResolver().getResolvedMembers(st.getSymbol('Demo')!, indexes);
             for (const [name, kind] of [['interface a.p to b.p', 'interface'], ['allocate a to b', 'allocation']] as const) {
                 const anonymous = st.getSymbolsForUri('test://test.sysml').find((s) => s.kind === kind)!;
                 expect([anonymous.declaration, isAnonymous(anonymous)]).toEqual([name, true]);

@@ -3765,9 +3765,8 @@ package External {
             // Unlike the exact-membership imports above, a wildcard import
             // doesn't name which declaration's member it wants -- it must
             // still pick up both B (owned by the package) and B2 (owned by
-            // the part def), since `getResolvedMembers("A")` pools every
-            // owned child under that qualifiedName regardless of which of
-            // the two (valid, distinguishable) "A" declarations it came from.
+            // the part def), since a wildcard import through `A` imports through each of
+            // the two (valid, distinguishable) "A" declarations.
             const pkgAText = `
 package A {
     part def B;

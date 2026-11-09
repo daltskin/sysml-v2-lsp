@@ -8,8 +8,7 @@ import { SYSML_KEYWORDS } from '../utils/sysmlKeywords.js';
 import { joinQualifiedName, joinReference, scanQualifiedNames, splitQualifiedName, unquoteName as decodeName } from '../utils/identUtils.js';
 import { ElementRegistry } from './elementRegistry.js';
 import { buildSymbolIndexes, NamespaceResolver, type SymbolIndexes } from './namespaceResolver.js';
-import { Scope } from './scope.js';
-import { FilterExpr, ImportTarget, OwnedSpecialization, ReferenceChain, SysMLElementKind, SysMLSymbol, displayName, isAnonymous, isDefinition, isFlowUsage, isUsage as isUsageKind, escapedName, memberNamesOf } from './sysmlElements.js';
+import { FilterExpr, ImportTarget, OwnedSpecialization, ReferenceChain, SysMLElementKind, SysMLSymbol, displayName, isAnonymous, isDefinition, isFlowUsage, isUsage as isUsageKind, memberNamesOf } from './sysmlElements.js';
 
 // ── ruleIndex-based lookup tables ───────────────────────────────────
 // These replace the toLowerCase() + string-comparison chains with O(1)
@@ -472,8 +471,8 @@ const RE_IDENT_START = /^([A-Za-z_]\w*(?:::\w+)*)/;
 /**
  * Builds a symbol table from a parsed SysML document.
  *
- * Walks the ANTLR parse tree to extract declarations, building
- * a hierarchical scope structure that mirrors the SysML namespace.
+ * Walks the ANTLR parse tree to extract declarations, and builds the element
+ * registry of the workspace (`ElementRegistry`) from them.
  */
 export class SymbolTable {
     /** All symbols indexed by qualified name */
@@ -502,8 +501,6 @@ export class SymbolTable {
     private conflictedSymbolsByQualifiedName = new Map<string, Set<SysMLSymbol>>();
     /** Cached array from getAllSymbols(), invalidated on any mutation */
     private allSymbolsCache: SysMLSymbol[] | undefined;
-    /** The global scope */
-    private globalScope: Scope;
     /** Each document's parse tree, to build it again with other effective names (`refreshNamingFeatures`) */
     private trees = new Map<string, ParserRuleContext>();
     /** Each document's effective names it was last built with (`resolveNamingFeatures`) */
@@ -517,9 +514,7 @@ export class SymbolTable {
      * @param namingRounds the budget of rounds of `refreshNamingFeatures`,
      * instead of the one it derives from the usages it names
      */
-    constructor(private readonly namingRounds?: number) {
-        this.globalScope = new Scope('__global__');
-    }
+    constructor(private readonly namingRounds?: number) {}
 
     /**
      * Build the symbol table from a parse result.
@@ -554,7 +549,7 @@ export class SymbolTable {
     private collect(uri: string, tree: ParserRuleContext): void {
         this.effectiveNames = this.effectiveNamesByUri.get(uri);
         try {
-            this.walkTree(tree, uri, this.globalScope, undefined);
+            this.walkTree(tree, uri, undefined);
         } finally {
             this.effectiveNames = undefined;
         }
@@ -785,13 +780,6 @@ export class SymbolTable {
      */
     getAllSymbolsIncludingDuplicates(): SysMLSymbol[] {
         return Array.from(this.symbolsByUri.values()).flat();
-    }
-
-    /**
-     * Get the global scope for resolution.
-     */
-    getGlobalScope(): Scope {
-        return this.globalScope;
     }
 
     /**
@@ -1030,7 +1018,6 @@ export class SymbolTable {
     private walkTree(
         ctx: ParserRuleContext,
         uri: string,
-        currentScope: Scope,
         owner: SysMLSymbol | undefined,
     ): void {
         const ruleName = this.getRuleName(ctx);
@@ -1038,27 +1025,18 @@ export class SymbolTable {
         // Try to extract a symbol from this context
         const symbol = this.tryExtractSymbol(ctx, uri, ruleName, owner);
 
-        let childScope = currentScope;
-
         if (symbol) {
             if (owner) {
                 this.owners.set(symbol, owner);
             }
-            this.registerSymbol(symbol, uri, currentScope);
-            // Create a child scope for definitions and packages
-            childScope = new Scope(symbol.qualifiedName ?? escapedName(symbol) ?? '', currentScope);
+            this.registerSymbol(symbol, uri);
         }
 
         // Walk children
         for (let i = 0; i < ctx.getChildCount(); i++) {
             const child = ctx.getChild(i);
             if (child instanceof ParserRuleContext) {
-                this.walkTree(
-                    child,
-                    uri,
-                    childScope,
-                    symbol ?? owner,
-                );
+                this.walkTree(child, uri, symbol ?? owner);
             }
         }
     }
@@ -1237,7 +1215,7 @@ export class SymbolTable {
         this.symbols.delete(qualifiedName);
     }
 
-    private registerSymbol(symbol: SysMLSymbol, uri: string, scope: Scope): void {
+    private registerSymbol(symbol: SysMLSymbol, uri: string): void {
         // A symbol without a qualified name is found by its symbol ID only, so a
         // declared name, however it is quoted, never collides with it.
         if (symbol.qualifiedName === undefined) {
@@ -1245,7 +1223,7 @@ export class SymbolTable {
         } else {
             this.registerNamedSymbol(symbol, symbol.qualifiedName, uri);
         }
-        this.indexSymbol(symbol, uri, scope);
+        this.indexSymbol(symbol, uri);
     }
 
     /** Register a declared symbol in `symbols`, tracking conflicts and package fragments. */
@@ -1273,8 +1251,8 @@ export class SymbolTable {
         }
     }
 
-    /** Add a symbol to the per-URI, name, position and type-name indexes and to `scope`. */
-    private indexSymbol(symbol: SysMLSymbol, uri: string, scope: Scope): void {
+    /** Add a symbol to the per-URI, name, position and type-name indexes. */
+    private indexSymbol(symbol: SysMLSymbol, uri: string): void {
         // Invalidate cached array
         this.allSymbolsCache = undefined;
         const uriSymbols = this.symbolsByUri.get(uri) ?? [];
@@ -1322,7 +1300,6 @@ export class SymbolTable {
             refList.push(symbol);
             this.typeNameRefs.set(tn, refList);
         }
-        if (!isAnonymous(symbol)) scope.define(symbol);
     }
 
 
