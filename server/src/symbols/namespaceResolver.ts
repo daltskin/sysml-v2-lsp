@@ -14,8 +14,9 @@
  */
 
 import { canonicalUri, isSameDocumentUri } from '../utils/documentUri.js';
-import { scanFeaturePaths, splitQualifiedName } from '../utils/identUtils.js';
-import { FilterExpr, ImportTarget, SysMLElementKind, SysMLSymbol, isAnonymous, isDefinition, isUsage, memberNamesOf } from './sysmlElements.js';
+import { joinQualifiedName, scanFeaturePaths, splitQualifiedName } from '../utils/identUtils.js';
+import { ElementRegistry, RegistryElement, RegistryRelationship } from './elementRegistry.js';
+import { FilterExpr, ImportTarget, ReferenceChain, SysMLElementKind, SysMLSymbol, isAnonymous, isDefinition, isUsage, memberNamesOf } from './sysmlElements.js';
 
 /**
  * A namespace's identity for name resolution: a declared one by its
@@ -38,6 +39,8 @@ export interface SymbolIndexes {
      * on it in their namespace through a short name (`findConflictingShortNames`).
      */
     clashingShortNames: Map<string, Set<SysMLSymbol>>;
+    /** The registry name resolution works on (`NamespaceResolver`). */
+    registry: ElementRegistry;
 }
 
 /** One entry in a namespace's resolved member table (see `NamespaceResolver.getResolvedMembers`). */
@@ -45,6 +48,8 @@ export interface ResolvedMember {
     symbol: SysMLSymbol;
     /** Effective visibility of this membership *within its resolving namespace*. */
     visibility: 'public' | 'private' | 'protected';
+    /** Whether it is an owned membership of the resolving namespace, not an inherited or imported one. */
+    owned?: boolean;
 }
 
 /** A reference may be missing or ambiguous; only missing names allow library fallback. */
@@ -292,7 +297,11 @@ export function describeConflictingDeclarations(others: SysMLSymbol[], fromUri: 
 }
 
 /** Build the byName/byParent/byQualifiedName/etc. indexes a `NamespaceResolver` (and other checks) need from a flat symbol array. */
-export function buildSymbolIndexes(allSymbols: SysMLSymbol[]): SymbolIndexes {
+/**
+ * The indexes of `allSymbols`, with `registry` for name resolution: the symbol
+ * table's when given, else one built from `allSymbols` alone.
+ */
+export function buildSymbolIndexes(allSymbols: SysMLSymbol[], registry?: ElementRegistry): SymbolIndexes {
     const byName = new Map<string, SysMLSymbol[]>();
     const byParent = new Map<NamespaceKey, SysMLSymbol[]>();
     const byQualifiedName = new Map<string, SysMLSymbol>();
@@ -331,7 +340,10 @@ export function buildSymbolIndexes(allSymbols: SysMLSymbol[]): SymbolIndexes {
         for (const s of symbols) clashing.add(s);
         clashingShortNames.set(name, clashing);
     }
-    const indexes: SymbolIndexes = { byName, byParent, byQualifiedName, byId, definitionsByName, portsByName, clashingShortNames };
+    const indexes: SymbolIndexes = {
+        byName, byParent, byQualifiedName, byId, definitionsByName, portsByName, clashingShortNames,
+        registry: registry ?? ElementRegistry.fromSymbols(allSymbols),
+    };
 
     for (const s of allSymbols) {
         if (isAnonymous(s)) continue;
@@ -431,62 +443,91 @@ export function evaluateFilter(expr: FilterExpr, symbol: SysMLSymbol): boolean {
 }
 
 /**
- * Resolves whether a name is visible from a given reference site, per
- * SysML v2 §7.5's namespace/import/visibility model. Owns a cache of each
- * namespace's resolved member table, keyed by `SymbolIndexes` identity, so
- * multiple resolutions against the same workspace snapshot are cheap.
+ * A document's root namespace (KerML 7.2.5.3): its top-level elements, as
+ * members of a namespace of its own. Interned per `SymbolIndexes`, one per document.
+ */
+export interface RootNamespace {
+    readonly kind: 'root';
+    readonly uri: string;
+}
+
+/** The global namespace (KerML 8.2.3.5.4): the top-level elements of every root namespace. */
+export const GLOBAL_NAMESPACE = { kind: 'global' } as const;
+
+/**
+ * A namespace names are resolved in: an element of the registry, a
+ * document's root namespace, or the global namespace.
+ */
+export type NamespaceScope = RegistryElement | RootNamespace | typeof GLOBAL_NAMESPACE;
+
+/** A namespace's resolved members by name, as `getResolvedMembers` gives them. */
+type MemberTable = Map<string, ResolvedMember[]>;
+
+/** What a relationship's target resolves to: the element's ID, none when unresolved or ambiguous. */
+export interface TargetResolution {
+    readonly targetId?: string;
+    readonly ambiguous: boolean;
+}
+
+/** What the resolver caches for one `SymbolIndexes`. */
+interface ResolverCache {
+    tables: Map<NamespaceScope, MemberTable>;
+    roots: Map<string, RootNamespace>;
+    targets: Map<string, TargetResolution>;
+}
+
+/**
+ * Resolves names from a reference site (KerML 8.2.3.5), over the element
+ * registry: a namespace is an element, its members are the elements it owns,
+ * and outward from it come its owners, the root namespace of the document the
+ * reference is written in, and the global namespace. Each namespace's member
+ * table is cached per `SymbolIndexes`.
  */
 export class NamespaceResolver {
-    private resolvedMembersByIndexes?: WeakMap<SymbolIndexes, Map<NamespaceKey, Map<string, ResolvedMember[]>>>;
-    /** `(candidate, owner)` pairs currently mid-check in `isSpecializationOf`, guarding against re-entrant recursion (see its own doc comment). */
+    private cacheByIndexes = new WeakMap<SymbolIndexes, ResolverCache>();
+    /** `(candidate, owner)` pairs currently mid-check in `isSpecializationOf`, guarding against re-entrant recursion. */
     private specializationChecksInProgress = new Map<SysMLSymbol, Set<SysMLSymbol>>();
 
     /**
-     * Whether `name` (simple or qualified, e.g. `"Owner::Nested::Target"`) is
-     * resolvable from `symbol`'s reference site, per §7.5.1: "A qualified name
-     * with more than one segment is resolved by recursively resolving the
-     * name of the qualifying namespace and then resolving the element name in
-     * that context." A qualified name is *not* just "is the first segment
-     * visible" (a package name being resolvable doesn't mean every name after
-     * `::` is one of its actual members) -- each segment after the first must
-     * be a genuine member (owned or imported) of the previously-resolved
-     * namespace.
+     * Whether `name` (simple or qualified) resolves from `symbol`'s reference
+     * site: each segment after the first a member of the namespace the one
+     * before it resolves to (KerML 8.2.3.5.1).
      */
     isLocallyVisible(symbol: SysMLSymbol, name: string, indexes: SymbolIndexes): boolean {
         return this.resolveNameFrom(symbol, name, indexes) !== undefined;
     }
 
-    /**
-     * Resolve a (possibly qualified) name from the namespace containing
-     * `symbol`, respecting namespace membership and visibility.
-     */
+    /** Resolve a (possibly qualified) name from the namespace owning `symbol`. */
     resolveNameFrom(symbol: SysMLSymbol, name: string, indexes: SymbolIndexes): SysMLSymbol | undefined {
-        return this.resolveQualifiedNameFrom(ownerKeyOf(symbol, indexes.byId), name, indexes);
+        return this.resolveFrom(this.owningScope(symbol, indexes), symbol.uri, name, indexes).symbol;
     }
 
-    /** Resolve an editor reference within its enclosing namespace, including the root. */
-    resolveNameIn(namespace: SysMLSymbol | undefined, name: string, indexes: SymbolIndexes): SysMLSymbol | undefined {
-        return this.resolveQualifiedNameFrom(namespace ? namespaceKeyOf(namespace) : '', name, indexes);
+    /** Resolve a reference in `namespace`, or, without one, at the top level of document `uri`. */
+    resolveNameIn(namespace: SysMLSymbol | undefined, name: string, indexes: SymbolIndexes, uri?: string): SysMLSymbol | undefined {
+        return this.resolveReferenceIn(namespace, name, indexes, undefined, uri).symbol;
     }
 
     /**
-     * Resolve an editor reference without losing the reason a name is unresolved.
-     * Its first segment is never resolved to `excluding`: a usage named after this
-     * reference (`SysMLSymbol.namingReference`), which is a member of the namespace
-     * the reference is resolved in, but never the feature it references.
+     * Resolve a reference in `namespace`, or, without one, at the top level of
+     * document `uri`, without losing the reason a name is unresolved. Its first
+     * segment is never resolved to `excluding`: a usage named after this
+     * reference (`SysMLSymbol.namingReference`), which is a member of the
+     * namespace the reference is resolved in, but never the feature it references.
      */
-    resolveReferenceIn(namespace: SysMLSymbol | undefined, name: string, indexes: SymbolIndexes, excluding?: SysMLSymbol): NameResolution {
-        return this.resolveQualifiedReferenceFrom(namespace ? namespaceKeyOf(namespace) : '', name, indexes, excluding);
+    resolveReferenceIn(namespace: SysMLSymbol | undefined, name: string, indexes: SymbolIndexes, excluding?: SysMLSymbol, uri?: string): NameResolution {
+        const scope = namespace ? this.scopeOf(namespace, indexes) : undefined;
+        return this.resolveFrom(scope, uri ?? namespace?.uri, name, indexes, excluding);
     }
 
     /** Resolve a public qualified or feature-path member, without enclosing-scope fallback. */
     resolveMemberReference(owner: SysMLSymbol, name: string, indexes: SymbolIndexes): NameResolution {
-        const members = this.getResolvedMembers(namespaceKeyOf(owner), indexes).get(name);
+        const scope = this.scopeOf(owner, indexes);
+        const members = scope && this.tableOf(scope, indexes).get(name);
         if (members && this.isAmbiguous(name, members, indexes)) return { ambiguous: true };
-        return this.referenceTo(members?.find(member => member.visibility === 'public')?.symbol, indexes);
+        return { symbol: members?.find(member => member.visibility === 'public')?.symbol, ambiguous: false };
     }
 
-    /** Resolve a feature of `receiver` in a feature chain: its own member, else one of its types'. */
+    /** Resolve a feature of `receiver` in a feature chain: its own member, else one of its generals' (KerML 8.3.3.1.8). */
     resolveFeatureReference(receiver: SysMLSymbol, name: string, indexes: SymbolIndexes): NameResolution {
         const queue = [receiver];
         const visited = new Set<SysMLSymbol>();
@@ -496,152 +537,292 @@ export class NamespaceResolver {
             visited.add(owner);
             const member = this.resolveMemberReference(owner, name, indexes);
             if (member.symbol || member.ambiguous) return member;
-            for (const typeName of owner.typeNames) {
-                const type = this.resolveNameFrom(owner, typeName, indexes);
-                if (type && !visited.has(type)) queue.push(type);
+            for (const general of this.generalsOf(owner, indexes)) {
+                if (!visited.has(general)) queue.push(general);
             }
         }
         return { ambiguous: false };
     }
 
     /**
-     * Resolve a (possibly qualified) name to its symbol per §7.5.1, searching
-     * outward from namespace `start` and its enclosing namespaces (its own resolved
-     * members first, then its parent's, ...). Shared by `isLocallyVisible` (an
-     * ordinary reference resolving relative to its own enclosing namespace),
-     * `resolveNameFrom`, and import-target resolution (an `import` declaration's target is itself a
-     * qualifiedName, resolved the same relative way -- not as an absolute/global
-     * name -- so a bare `import C;` inside a nested package can pick up a `C`
-     * its own enclosing package already imported, per §7.5.1/§7.5.3).
+     * The element a relationship of the registry targets (KerML 8.3.2.1.3
+     * `target`), cached per `indexes`; none when its target is unresolved or
+     * ambiguous, or a conjugated port typing (`~P`), whose conjugated port
+     * definition the server records no element for.
      */
-    private resolveQualifiedNameFrom(start: NamespaceKey, name: string, indexes: SymbolIndexes): SysMLSymbol | undefined {
-        return this.resolveQualifiedReferenceFrom(start, name, indexes).symbol;
+    resolveTarget(relationship: RegistryRelationship, indexes: SymbolIndexes): TargetResolution {
+        const { targets } = this.cacheOf(indexes);
+        let resolution = targets.get(relationship.symbolId);
+        if (!resolution) {
+            // KerML 8.2.3.5.1: a name pending resolution is not resolved again, so a target whose
+            // resolution comes back to itself (`part a :>> a.x;`) is unresolved there.
+            targets.set(relationship.symbolId, { ambiguous: false });
+            const owner = indexes.registry.getElement(relationship.ownerId);
+            const declaring = owner && indexes.registry.symbolsOf(owner)
+                .find(s => relationship.declarations.some(d => isSameDocumentUri(d.uri, s.uri)));
+            const target = declaring && owner ? this.targetOf(relationship, owner, declaring, indexes) : { ambiguous: false };
+            resolution = { targetId: target.symbol && this.scopeOf(target.symbol, indexes)?.symbolId, ambiguous: target.ambiguous };
+            targets.set(relationship.symbolId, resolution);
+        }
+        return resolution;
     }
 
-    private resolveQualifiedReferenceFrom(start: NamespaceKey, name: string, indexes: SymbolIndexes, excluding?: SysMLSymbol): NameResolution {
-        const [first, ...rest] = splitQualifiedName(name);
+    /** The target of `relationship`, which `owner` declares in `declaring`, by the rule of its kind. */
+    private targetOf(relationship: RegistryRelationship, owner: RegistryElement, declaring: SysMLSymbol, indexes: SymbolIndexes): NameResolution {
+        if (relationship.kind === 'import') {
+            // An import's target is resolved from the importing namespace outward (KerML 8.3.2.4.5).
+            const { symbols, ambiguous } = this.resolveAll(owner, declaring.uri, relationship.target, indexes, undefined, true);
+            return ambiguous || symbols.length > 1 ? { ambiguous: true } : { symbol: symbols[0], ambiguous: false };
+        }
+        const chain = relationship.chain;
+        if (!chain || chain.length === 0 || relationship.conjugated) return { ambiguous: false };
+        const [first] = chain;
+        const single = chain.length === 1;
+        if ((relationship.kind === 'typing' || relationship.kind === 'specializes') && single) {
+            // A general is a type, never a package (KerML 8.3.3.1.8 `general : Type`).
+            const start = first.global ? GLOBAL_NAMESPACE : this.owningScope(declaring, indexes);
+            const { symbols, ambiguous } = this.resolveAll(start, first.global ? undefined : declaring.uri, joinQualifiedName(first.names), indexes, declaring, true);
+            if (ambiguous) return { ambiguous: true };
+            return { symbol: symbols.find(s => s.kind !== SysMLElementKind.Package), ambiguous: false };
+        }
+        if (relationship.kind === 'redefinition' && single && !first.global) {
+            // KerML 8.2.3.5.1: a feature of a definition or usage redefines one of its owner's generals' features.
+            const owningType = owner.ownerId === undefined ? undefined : indexes.registry.getElement(owner.ownerId);
+            const owningSymbol = owningType && this.symbolOf(owningType, indexes);
+            if (owningSymbol && (isDefinition(owningSymbol.kind) || isUsage(owningSymbol.kind))) {
+                return this.resolveRedefinedFeature(owningSymbol, joinQualifiedName(first.names), indexes);
+            }
+        }
+        return this.resolveChain(declaring, chain, indexes);
+    }
 
-        let resolved: SysMLSymbol | undefined;
-        for (const ancestor of this.namespaceAncestorsOf(start, indexes)) {
-            const members = this.getResolvedMembers(ancestor, indexes).get(first);
+    /**
+     * Resolve a feature chain written in `from`'s declaration (KerML 7.3.4.6,
+     * 8.2.3.5.2): its first qualified name from the namespace owning `from`
+     * (or, global, from the global namespace), never to `from` itself, each
+     * later one's first name among the previous feature's features, the rest
+     * among that one's members.
+     */
+    private resolveChain(from: SysMLSymbol, chain: ReferenceChain, indexes: SymbolIndexes): NameResolution {
+        const [first, ...rest] = chain;
+        const name = joinQualifiedName(first.names);
+        let result = first.global
+            ? this.resolveFrom(GLOBAL_NAMESPACE, undefined, name, indexes, from)
+            : this.resolveFrom(this.owningScope(from, indexes), from.uri, name, indexes, from);
+        for (const link of rest) {
+            const [feature, ...members] = link.names;
+            if (!result.symbol || feature === undefined) return result.symbol ? { ambiguous: false } : result;
+            result = this.resolveFeatureReference(result.symbol, feature, indexes);
+            for (const member of members) {
+                if (!result.symbol) return result;
+                result = this.resolveMemberReference(result.symbol, member, indexes);
+            }
+        }
+        return result;
+    }
+
+    /**
+     * The namespaces a name is resolved in from `symbol`, innermost first
+     * (KerML 8.2.3.5.4): its owner and the owner's owners, the root namespace
+     * of its document, and the global namespace.
+     */
+    namespaceAncestors(symbol: SysMLSymbol, indexes: SymbolIndexes): NamespaceScope[] {
+        return this.ancestorsOf(this.owningScope(symbol, indexes), symbol.uri, indexes);
+    }
+
+    /**
+     * The resolved member table of a namespace: its owned members, for a
+     * definition or usage the members it inherits (KerML 8.2.3.5.3), then its
+     * imported members, transitively (KerML 8.3.2.4.5). A namespace given by
+     * its qualified name (`''` for the global namespace) or by its symbol.
+     */
+    getResolvedMembers(namespace: NamespaceKey | NamespaceScope, indexes: SymbolIndexes): MemberTable {
+        let scope: NamespaceScope | undefined;
+        if (namespace === '') scope = GLOBAL_NAMESPACE;
+        else if (typeof namespace === 'string') {
+            const symbol = indexes.byQualifiedName.get(namespace);
+            scope = symbol && this.scopeOf(symbol, indexes);
+        } else if ('symbolId' in namespace && 'ownedElementIds' in namespace) scope = namespace as RegistryElement;
+        else if ('kind' in namespace && (namespace.kind === 'root' || namespace.kind === 'global')) scope = namespace as NamespaceScope;
+        else scope = this.scopeOf(namespace as SysMLSymbol, indexes);
+        return scope ? this.tableOf(scope, indexes) : new Map();
+    }
+
+    /** The registry element a symbol is a declaration of; a package's merged view by its ID. */
+    private scopeOf(symbol: SysMLSymbol, indexes: SymbolIndexes): RegistryElement | undefined {
+        return indexes.registry.elementOf(symbol) ?? indexes.registry.getElement(symbol.symbolId);
+    }
+
+    /** The registry element owning `symbol`; none for a top-level element. */
+    private owningScope(symbol: SysMLSymbol, indexes: SymbolIndexes): RegistryElement | undefined {
+        const ownerId = this.scopeOf(symbol, indexes)?.ownerId;
+        if (ownerId !== undefined) return indexes.registry.getElement(ownerId);
+        const owner = ownerOf(symbol, indexes);
+        return owner && this.scopeOf(owner, indexes);
+    }
+
+    /**
+     * The symbol standing for `element` in results: for a package, the symbol
+     * table's view of all its declarations (by its ID), else its declaration.
+     */
+    private symbolOf(element: RegistryElement, indexes: SymbolIndexes): SysMLSymbol | undefined {
+        const declarations = indexes.registry.symbolsOf(element);
+        if (element.kind === SysMLElementKind.Package) {
+            const merged = indexes.byId.get(element.symbolId);
+            if (merged) return merged;
+        }
+        return declarations[0];
+    }
+
+    /** The cache of `indexes`, created on first use. */
+    private cacheOf(indexes: SymbolIndexes): ResolverCache {
+        let cache = this.cacheByIndexes.get(indexes);
+        if (!cache) {
+            cache = { tables: new Map(), roots: new Map(), targets: new Map() };
+            this.cacheByIndexes.set(indexes, cache);
+        }
+        return cache;
+    }
+
+    /** The root namespace of document `uri`, one per document. */
+    private rootOf(uri: string, indexes: SymbolIndexes): RootNamespace {
+        const { roots } = this.cacheOf(indexes);
+        const key = canonicalUri(uri);
+        let root = roots.get(key);
+        if (!root) {
+            root = { kind: 'root', uri: key };
+            roots.set(key, root);
+        }
+        return root;
+    }
+
+    /**
+     * The namespaces a name is resolved in, from `start` outward (KerML
+     * 8.2.3.5.4): `start` and its owners, the root namespace of document `uri`
+     * (when known), and the global namespace last.
+     */
+    private ancestorsOf(start: NamespaceScope | undefined, uri: string | undefined, indexes: SymbolIndexes): NamespaceScope[] {
+        const ancestors: NamespaceScope[] = [];
+        let current: NamespaceScope | undefined = start;
+        let guard = 0;
+        while (current && isElementScope(current) && guard++ < MAX_NAMESPACE_NESTING_DEPTH && !ancestors.includes(current)) {
+            ancestors.push(current);
+            current = current.ownerId === undefined ? undefined : indexes.registry.getElement(current.ownerId);
+        }
+        if (start && !isElementScope(start) && start.kind === 'root') ancestors.push(start);
+        else if (uri !== undefined) ancestors.push(this.rootOf(uri, indexes));
+        ancestors.push(GLOBAL_NAMESPACE);
+        return ancestors;
+    }
+
+    /**
+     * Resolve a (possibly qualified) name from namespace `start` (none: the root
+     * namespace of `uri`) to one element (`resolveAll`): a name found for more
+     * than one, through distinguishable qualifiers, is ambiguous.
+     */
+    private resolveFrom(start: NamespaceScope | undefined, uri: string | undefined, name: string, indexes: SymbolIndexes, excluding?: SysMLSymbol): NameResolution {
+        const { symbols, ambiguous } = this.resolveAll(start, uri, name, indexes, excluding, false);
+        if (ambiguous || symbols.length > 1) return { ambiguous: true };
+        return { symbol: symbols[0], ambiguous: false };
+    }
+
+    /**
+     * Resolve a (possibly qualified) name from namespace `start` (none: the root
+     * namespace of `uri`): its first segment in the innermost namespace having a
+     * member of that name (KerML 8.2.3.5.4), each later one among the visible
+     * members of what the one before it resolves to. A qualifying segment naming
+     * several distinguishable members (a package and a definition, KerML
+     * 8.3.2.4.3) qualifies through each of them; the last segment gives each
+     * qualifier's first member of its name, or with `all` every one of them.
+     */
+    private resolveAll(
+        start: NamespaceScope | undefined, uri: string | undefined, name: string, indexes: SymbolIndexes,
+        excluding: SysMLSymbol | undefined, all: boolean,
+    ): { symbols: SysMLSymbol[]; ambiguous: boolean } {
+        const [first, ...rest] = splitQualifiedName(name);
+        const ancestors = this.ancestorsOf(start, uri, indexes);
+        const unresolved = { symbols: [], ambiguous: false };
+
+        let current: SysMLSymbol[] = [];
+        for (const ancestor of ancestors) {
+            const members = this.tableOf(ancestor, indexes).get(first);
             const candidates = excluding ? members?.filter(member => member.symbol !== excluding) : members;
             if (candidates && candidates.length > 0) {
-                if (this.isAmbiguous(first, candidates, indexes)) return { ambiguous: true };
-                resolved = candidates[0].symbol;
+                // Ambiguous among all the namespace's members of that name, the excluded one
+                // included: two indistinguishable members leave the name unresolved there.
+                if (this.isAmbiguous(first, members!, indexes)) return { symbols: [], ambiguous: true };
+                current = rest.length > 0 || all ? candidates.map(c => c.symbol) : [candidates[0].symbol];
                 break;
             }
         }
-        if (resolved === undefined) return { ambiguous: false };
+        if (current.length === 0) return unresolved;
 
-        // A segment beyond the first isn't reached through the resolving
-        // context's own ancestor chain (unlike the first segment, found above
-        // by construction only in scopes enclosing `start`), so
-        // its membership visibility must actually be checked here: "private"
-        // means not visible outside the owning namespace (§7.5.2), and the
-        // owning namespace here is whatever the previous segment resolved to,
-        // not necessarily anything enclosing `start`. A private
-        // segment is still resolvable when `start` is itself
-        // that owning namespace or nested within it (querying your own, or an
-        // ancestor's, private members from inside is not "outside").
-        const isWithinStart = (namespace: NamespaceKey): boolean =>
-            this.namespaceAncestorsOf(start, indexes).has(namespace);
-        for (const segment of rest) {
-            const owner: SysMLSymbol = resolved;
-            const ownerKey = namespaceKeyOf(owner);
-            const members: ResolvedMember[] | undefined = this.getResolvedMembers(ownerKey, indexes).get(segment);
-            if (members && this.isAmbiguous(segment, members, indexes)) return { ambiguous: true };
-            const visibleMember: ResolvedMember | undefined = members?.find(
-                (m: ResolvedMember) => m.visibility === 'public'
-                    || isWithinStart(ownerKey)
-                    || (m.visibility === 'protected' && this.isProtectedVisibleFrom(start, owner, indexes)),
-            );
-            if (!visibleMember) return { ambiguous: false };
-            resolved = visibleMember.symbol;
+        // A later segment is a member of the namespace the one before it resolved to, visible
+        // from `start`: public, or private or protected to a reference from within that
+        // namespace, protected also from a specialization of it (SysML 7.5.3).
+        for (const [index, segment] of rest.entries()) {
+            const last = index === rest.length - 1;
+            const next: SysMLSymbol[] = [];
+            for (const owner of current) {
+                const ownerScope = this.scopeOf(owner, indexes);
+                const members = ownerScope && this.tableOf(ownerScope, indexes).get(segment);
+                if (!members) continue;
+                if (this.isAmbiguous(segment, members, indexes)) return { symbols: [], ambiguous: true };
+                const visible = members.filter(m => m.visibility === 'public'
+                    || ancestors.includes(ownerScope!)
+                    || (m.visibility === 'protected' && this.isProtectedVisibleFrom(ancestors, owner, indexes)));
+                if (visible.length === 0) continue;
+                next.push(...(last && !all ? [visible[0]] : visible).map(m => m.symbol));
+            }
+            current = [...new Set(next)];
+            if (current.length === 0) return unresolved;
         }
-        // A qualified name clashing with another declaration's is left unresolved (`byQualifiedName`).
-        return this.referenceTo(resolved, indexes);
+        return { symbols: current, ambiguous: false };
     }
 
     /**
-     * The element a resolved member refers to, by its symbol ID (one for all
-     * declarations of a package), never another element sharing its
-     * qualified name; none when that qualified name is conflicted
-     * (`byQualifiedName`).
-     */
-    private referenceTo(resolved: SysMLSymbol | undefined, indexes: SymbolIndexes): NameResolution {
-        if (!resolved) return { ambiguous: false };
-        if (resolved.qualifiedName !== undefined && !indexes.byQualifiedName.has(resolved.qualifiedName)) return { ambiguous: true };
-        return { symbol: indexes.byId.get(resolved.symbolId) ?? resolved, ambiguous: false };
-    }
-
-    /**
-     * Whether `name` names more than one of `candidates` that clash on it
-     * through a short name (`SymbolIndexes.clashingShortNames`), so it can't
-     * be resolved to either (KerML 7.2.5.2). Like a conflicted qualifiedName,
-     * it doesn't fall through to an enclosing namespace's member of that name.
+     * Whether `name` can't be resolved to one of `candidates`, the members of
+     * one namespace by that name: two of them are owned members of the same
+     * kind, so indistinguishable (KerML 8.3.2.4.3, kinds conforming only to
+     * themselves here), or two clash on it through a short name (KerML 7.2.5.2).
      */
     private isAmbiguous(name: string, candidates: ResolvedMember[], indexes: SymbolIndexes): boolean {
+        const ownedKinds = new Map<SysMLElementKind, SysMLSymbol>();
+        for (const candidate of candidates) {
+            if (!candidate.owned) continue;
+            const other = ownedKinds.get(candidate.symbol.kind);
+            if (other && other !== candidate.symbol) return true;
+            ownedKinds.set(candidate.symbol.kind, candidate.symbol);
+        }
         const clashing = indexes.clashingShortNames.get(name);
         return clashing !== undefined && candidates.filter(c => clashing.has(c.symbol)).length > 1;
     }
 
     /**
-     * §7.5.3's protected-import exception: "A visibility of protected is the
-     * same as private, unless the importing namespace is a definition or
-     * usage, in which case the imported memberships are also visible in all
-     * specializations of the definition or usage (see also 7.6 on
-     * inheritance)." `owner` is the namespace that owns the
-     * protected membership (where the `protected import` was declared);
-     * this is true when `owner` is itself a definition or
-     * usage, and namespace `start` (or one of its own enclosing
-     * namespaces) is a specialization of it.
-     *
-     * Only covers a *qualified* reference reaching into a specialization's
-     * own protected members this way (`resolveQualifiedNameFrom`'s
-     * multi-segment loop); an *unqualified* reference to a member a
-     * specialization inherits resolves through its inherited memberships
-     * (`addInheritedMembers`).
+     * SysML 7.5.3's protected visibility: a protected member of a definition or
+     * usage `owner` is visible from a namespace among `ancestors` that
+     * specializes it.
      */
-    private isProtectedVisibleFrom(start: NamespaceKey, owner: SysMLSymbol, indexes: SymbolIndexes): boolean {
+    private isProtectedVisibleFrom(ancestors: readonly NamespaceScope[], owner: SysMLSymbol, indexes: SymbolIndexes): boolean {
         if (!(isDefinition(owner.kind) || isUsage(owner.kind))) return false;
-
-        for (const ancestor of this.namespaceAncestorsOf(start, indexes)) {
-            const candidate = typeof ancestor === 'string' ? indexes.byQualifiedName.get(ancestor) : ancestor;
+        for (const ancestor of ancestors) {
+            const candidate = isElementScope(ancestor) ? this.symbolOf(ancestor, indexes) : undefined;
             if (candidate && this.isSpecializationOf(candidate, owner, indexes)) return true;
         }
         return false;
     }
 
     /**
-     * Whether `candidate`'s own definition/usage transitively
-     * specializes `owner` (`:>`/`specializes`/`subsets` for a
-     * definition, or the typing relationship for a usage) per §7.6. Used
-     * only by `isProtectedVisibleFrom`. Walks `typeNames`, resolving each
-     * name via `resolveQualifiedNameFrom` relative to the candidate's own
-     * enclosing scope -- the same namespace-aware resolution an ordinary
-     * `:>` reference itself goes through -- rather than a bare simple-name
-     * lookup across the whole workspace (`indexes.definitionsByName.get`):
-     * that would match *any* same-named definition anywhere, not just the
-     * one `candidate`'s own `:>` clause actually refers to, so
-     * an unrelated definition in a different package sharing a supertype's
-     * simple name could falsely satisfy this check.
-     *
-     * Guarded against re-entrancy: resolving a candidate's own `:>` target
-     * can recurse back into `isProtectedVisibleFrom` -> `isSpecializationOf`
-     * for the very same (candidate, owner) pair before this call has
-     * returned. Each such call gets a *fresh* `visited` set (it's local, not
-     * shared across calls), so the in-BFS cycle guard below doesn't catch
-     * this -- only a check that survives across separate top-level calls
-     * does. Fails closed (not proven a specialization) rather than
-     * recursing forever; the guard key is scoped to `indexes` implicitly by
-     * being cleared once the outermost call for it returns, so it can't
-     * leak a stale answer across different `SymbolIndexes` snapshots.
+     * Whether `candidate` transitively specializes `owner`, through its
+     * generals (SysML 7.6, `generalsOf`). Fails closed on a re-entrant check
+     * of the same pair.
      */
     private isSpecializationOf(candidate: SysMLSymbol, owner: SysMLSymbol, indexes: SymbolIndexes): boolean {
         const ownersInProgress = this.specializationChecksInProgress.get(candidate) ?? new Set<SysMLSymbol>();
         if (ownersInProgress.has(owner)) return false;
         ownersInProgress.add(owner);
         this.specializationChecksInProgress.set(candidate, ownersInProgress);
+        const ownerScope = this.scopeOf(owner, indexes);
         try {
             const visited = new Set<SysMLSymbol>([candidate]);
             let frontier = [candidate];
@@ -649,12 +830,8 @@ export class NamespaceResolver {
             while (frontier.length > 0 && guard++ < MAX_SPECIALIZATION_CHAIN_DEPTH) {
                 const next: SysMLSymbol[] = [];
                 for (const symbol of frontier) {
-                    for (const typeName of symbol.typeNames) {
-                        const supertype = this.resolveQualifiedNameFrom(ownerKeyOf(symbol, indexes.byId), typeName, indexes);
-                        if (!supertype) continue;
-                        // Resolved through its name, a supertype is found as `byQualifiedName`'s
-                        // entry, which for a package declared in several documents is its merged view.
-                        if (supertype === owner || (owner.qualifiedName !== undefined && supertype.qualifiedName === owner.qualifiedName)) return true;
+                    for (const supertype of this.generalsOf(symbol, indexes)) {
+                        if (supertype === owner || (ownerScope !== undefined && this.scopeOf(supertype, indexes) === ownerScope)) return true;
                         if (!visited.has(supertype)) {
                             visited.add(supertype);
                             next.push(supertype);
@@ -671,152 +848,96 @@ export class NamespaceResolver {
     }
 
     /**
-     * `symbol`'s enclosing namespaces (its parent, its parent's parent, ...),
-     * as `NamespaceKey`s, plus the implicit root namespace (`''`).
-     * Members of any of these are visible from `symbol` without an import.
+     * The member table of `scope`, computed once per `indexes`: owned members,
+     * then for a definition or usage its inherited ones, then imported ones; a
+     * root namespace has its document's top-level elements, the global
+     * namespace every document's.
      */
-    namespaceAncestors(symbol: SysMLSymbol, indexes: SymbolIndexes): Set<NamespaceKey> {
-        return this.namespaceAncestorsOf(ownerKeyOf(symbol, indexes.byId), indexes);
-    }
-
-    /**
-     * As `namespaceAncestors`, but starting from a namespace directly rather
-     * than a symbol's own parent. Iteration order matters here, not just
-     * membership: `resolveQualifiedNameFrom`'s first-segment lookup walks this
-     * set in order and stops at the first namespace that has a matching member,
-     * so a `Set`'s insertion order *is* the search order. Per §7.5.1, name
-     * resolution searches the innermost enclosing namespace outward, with the
-     * implicit root namespace as the last (least specific) fallback -- a local
-     * name must shadow a same-named root-level one, not the reverse. `''` (the
-     * root) is therefore added last, after the full innermost-to-outermost
-     * climb, not seeded first.
-     */
-    private namespaceAncestorsOf(start: NamespaceKey, indexes: SymbolIndexes): Set<NamespaceKey> {
-        const ancestors = new Set<NamespaceKey>();
-        let current: NamespaceKey | undefined = start;
-        let guard = 0;
-        while (current !== undefined && current !== '' && guard++ < MAX_NAMESPACE_NESTING_DEPTH) {
-            ancestors.add(current);
-            const namespaceSymbol: SysMLSymbol | undefined = typeof current === 'string' ? indexes.byQualifiedName.get(current) : current;
-            current = namespaceSymbol ? ownerKeyOf(namespaceSymbol, indexes.byId) : undefined;
-        }
-        ancestors.add('');
-        return ancestors;
-    }
-
-    /**
-     * The resolved member table of `namespace` (a `NamespaceKey`,
-     * `''` for the implicit root): its own owned members, plus everything brought in by
-     * its `import` statements — including, transitively, a further namespace's
-     * own already-imported (and non-privately-imported) members, matching
-     * §7.5.3's "imported memberships become members of the importing
-     * namespace" and its P2/Q re-import example. A definition or usage also has
-     * the members it inherits (`addInheritedMembers`), after its owned members and
-     * before its imported ones (KerML 8.2.3.5.3). Cached per `indexes`.
-     */
-    getResolvedMembers(namespace: NamespaceKey, indexes: SymbolIndexes): Map<string, ResolvedMember[]> {
-        if (!this.resolvedMembersByIndexes) this.resolvedMembersByIndexes = new WeakMap();
-        let perIndexesCache = this.resolvedMembersByIndexes.get(indexes);
-        if (!perIndexesCache) {
-            perIndexesCache = new Map();
-            this.resolvedMembersByIndexes.set(indexes, perIndexesCache);
-        }
-        const cached = perIndexesCache.get(namespace);
+    private tableOf(scope: NamespaceScope, indexes: SymbolIndexes): MemberTable {
+        const { tables } = this.cacheOf(indexes);
+        const cached = tables.get(scope);
         if (cached) return cached;
 
-        const members = new Map<string, ResolvedMember[]>();
-        // If the same element reaches this namespace through more than one membership
-        // (e.g. two `import` statements for the same target -- across package fragments
-        // in different files, or just two imports in one file), each is a distinct
-        // membership (§7.5: "an element may have... multiple... memberships with the same
-        // namespace"); nothing merges them into one, so the element's effective visibility
-        // is the most permissive of them -- a public membership makes it visible outside
-        // regardless of a redundant private/protected one also existing. Keeping only the
-        // *first*-seen membership (as opposed to the most permissive) would make the result
-        // depend on import-processing order, which isn't a real distinction the model makes.
+        const members: MemberTable = new Map();
+        // The same element reaching this namespace through more than one membership has
+        // the most permissive visibility of them, whatever order they're found in.
         const addMember = (name: string, entry: ResolvedMember) => {
             const list = members.get(name) ?? [];
             const existingIndex = list.findIndex(e => e.symbol === entry.symbol);
             if (existingIndex === -1) {
                 list.push(entry);
             } else if (VISIBILITY_RANK[entry.visibility] > VISIBILITY_RANK[list[existingIndex].visibility]) {
-                list[existingIndex] = entry;
+                list[existingIndex] = { ...entry, owned: list[existingIndex].owned || entry.owned };
             }
             members.set(name, list);
         };
+        const addOwned = (element: RegistryElement) => {
+            const owned = this.symbolOf(element, indexes);
+            if (!owned || isAnonymous(owned)) return;
+            for (const name of memberNamesOf(owned)) addMember(name, { symbol: owned, visibility: owned.visibility ?? 'public', owned: true });
+        };
 
-        for (const owned of indexes.byParent.get(namespace) ?? []) {
-            addMember(owned.name, { symbol: owned, visibility: owned.visibility ?? 'public' });
-            if (owned.shortName) {
-                addMember(owned.shortName, { symbol: owned, visibility: owned.visibility ?? 'public' });
+        if (!isElementScope(scope)) {
+            for (const id of indexes.registry.getRootIds()) {
+                const root = indexes.registry.getElement(id)!;
+                if (scope.kind === 'global' || root.declarations.some(d => canonicalUri(d.uri) === scope.uri)) addOwned(root);
+            }
+            tables.set(scope, members);
+            // A document's top-level imports are memberships of its root namespace alone: visible
+            // within its top-level elements, never from another document (SysML 7.5.5).
+            if (scope.kind === 'root') {
+                for (const imp of indexes.registry.getRootImports(scope.uri)) this.applyImport(imp, scope, scope.uri, indexes, addMember);
+            }
+            return members;
+        }
+
+        for (const id of scope.ownedElementIds) addOwned(indexes.registry.getElement(id)!);
+        // Seeded with the live table before imports, so an import resolved relative to this
+        // namespace sees its owned members and the earlier imports, and an import cycle ends.
+        tables.set(scope, members);
+
+        const owner = this.symbolOf(scope, indexes);
+        // Inherited before imported: an inherited membership hides an imported one of the same name (KerML 7.3.2.1).
+        if (owner && (isDefinition(owner.kind) || isUsage(owner.kind))) this.addInheritedMembers(owner, scope, indexes, addMember);
+        // Imports of every declaration, each resolved from the document declaring it; SysML
+        // 7.5.4: a package's `filter` applies to every import of that package.
+        const declarations = indexes.registry.symbolsOf(scope);
+        const packageFilter = combineFilters(declarations.flatMap(d => d.filterConditions ?? []));
+        for (const declaration of declarations) {
+            for (const imp of declaration.importTargets ?? []) {
+                const effectiveFilter = combineFilters([packageFilter, imp.filter].filter((f): f is FilterExpr => f !== undefined));
+                const filteredAddMember = effectiveFilter
+                    ? (name: string, entry: ResolvedMember) => {
+                        if (evaluateFilter(effectiveFilter, entry.symbol)) addMember(name, entry);
+                    }
+                    : addMember;
+                this.applyImport(imp, scope, declaration.uri, indexes, filteredAddMember);
             }
         }
-
-        // Cycle guard: seed the cache with `members` itself -- the *same live
-        // object*, not a snapshot copy -- before processing imports, rather
-        // than an empty table. An import target is itself resolved relative
-        // to *this* namespace (see `applyImport`'s `importingNamespace`),
-        // which means resolving it can recurse back into this same
-        // `getResolvedMembers` call: for a directly-owned sibling (e.g.
-        // `public import Inner::X;` where `Inner` is a package declared
-        // directly in this same namespace), that recursive call must see the
-        // already-known owned members, not nothing, or a same-namespace
-        // relative import would never resolve. Caching the live object
-        // (rather than a frozen `new Map(members)` copy) additionally covers
-        // one import depending on another *earlier* import already
-        // processed in this same namespace (e.g. `import Lib::A; import
-        // A::B;` -- resolving the second import's "A" must see what the
-        // first one already added to `members`, not a pre-import-loop
-        // snapshot) -- a reentrant call only ever happens synchronously,
-        // nested within this same call stack (an unrelated, non-cyclic
-        // caller elsewhere always runs after this call has already returned
-        // its complete result, single-threaded JS having no interleaving),
-        // so there's no risk of an unrelated caller observing a partial
-        // table. An empty seed was only ever needed to stop a genuine import
-        // *cycle* (this namespace transitively importing itself) from
-        // recursing forever; owned members are computed with no recursion at
-        // all, so exposing them (and each import's incremental contribution)
-        // here doesn't reopen that.
-        perIndexesCache.set(namespace, members);
-
-        const owner = typeof namespace === 'string' ? indexes.byQualifiedName.get(namespace) : namespace;
-        // Inherited before imported: an inherited membership hides an imported one of the same name (KerML 7.3.2.1).
-        if (owner && (isDefinition(owner.kind) || isUsage(owner.kind))) this.addInheritedMembers(owner, indexes, addMember);
-        const importTargets = owner?.importTargets ?? [];
-        // §7.5.4: a package-level `filter` applies to every import of that package,
-        // combined (AND) with any filter on the specific import itself.
-        const packageFilter = combineFilters(owner?.filterConditions);
-        for (const imp of importTargets) {
-            const effectiveFilter = combineFilters([packageFilter, imp.filter].filter((f): f is FilterExpr => f !== undefined));
-            const filteredAddMember = effectiveFilter
-                ? (name: string, entry: ResolvedMember) => {
-                    if (evaluateFilter(effectiveFilter, entry.symbol)) addMember(name, entry);
-                }
-                : addMember;
-            this.applyImport(imp, namespace, indexes, filteredAddMember);
-        }
-
         return members;
     }
 
     /**
      * Fold the memberships `type` inherits into `addMember` (KerML 7.3.2.1,
-     * 7.3.2.2, 8.3.3.1.10 `Type::inheritedMemberships`): the public and
-     * protected memberships of the types it specializes (`generalsOf`), their
-     * own inherited ones included, without the features redefined there
-     * (`removeRedefinedFeatures`): one another inherited membership's feature
-     * redefines, or one a feature `type` owns redefines, directly or indirectly.
+     * 8.3.3.1.10 `Type::inheritedMemberships`): the public and protected
+     * memberships of the types it specializes, without the features redefined
+     * there, by another inherited feature or by a feature `type` owns.
      */
-    private addInheritedMembers(type: SysMLSymbol, indexes: SymbolIndexes, addMember: (name: string, entry: ResolvedMember) => void): void {
+    private addInheritedMembers(type: SysMLSymbol, scope: RegistryElement, indexes: SymbolIndexes, addMember: (name: string, entry: ResolvedMember) => void): void {
         const inheritable: [string, ResolvedMember][] = [];
         for (const general of this.generalsOf(type, indexes)) {
-            for (const [name, entries] of this.getResolvedMembers(namespaceKeyOf(general), indexes)) {
+            const generalScope = this.scopeOf(general, indexes);
+            if (!generalScope) continue;
+            for (const [name, entries] of this.tableOf(generalScope, indexes)) {
                 for (const entry of entries) {
-                    if (entry.visibility !== 'private' && entry.symbol !== type) inheritable.push([name, entry]);
+                    if (entry.visibility !== 'private' && entry.symbol !== type) inheritable.push([name, { symbol: entry.symbol, visibility: entry.visibility }]);
                 }
             }
         }
-        const redefinedByOwned = new Set((indexes.byParent.get(namespaceKeyOf(type)) ?? [])
+        const ownedSymbols = scope.ownedElementIds
+            .map(id => this.symbolOf(indexes.registry.getElement(id)!, indexes))
+            .filter((owned): owned is SysMLSymbol => owned !== undefined);
+        const redefinedByOwned = new Set(ownedSymbols
             .flatMap(owned => (owned.redefinedFeatureTargets ?? []).map(target => this.resolveRedefinedFeature(type, target, indexes).symbol))
             .filter((feature): feature is SysMLSymbol => feature !== undefined));
         const inheritedFeatures = new Set(inheritable.map(([, entry]) => entry.symbol));
@@ -830,22 +951,23 @@ export class NamespaceResolver {
     }
 
     /**
-     * The types `type` specializes, each once: those it is typed by,
-     * subclassifies or subsets, resolved from the namespace owning it (KerML
-     * 8.2.3.5.2), the feature a shorthand's reference subsetting (`perform a`)
-     * refers to (KerML 8.3.3.3.9, `resolveNamingFeature`), and the features it
-     * redefines (`resolveRedefinedFeature`). Never `type` itself.
+     * The types `type` specializes, each once (KerML 8.3.3.1.8): the targets
+     * of the specializations its own declarations parse to (typing,
+     * subclassification, subsetting, redefinition, `resolveTarget`), and the
+     * feature a shorthand's reference subsetting (`perform a`) refers to
+     * (KerML 8.3.3.3.9). Never `type` itself.
      */
     private generalsOf(type: SysMLSymbol, indexes: SymbolIndexes): SysMLSymbol[] {
-        const redefinedNames = type.redefinedFeatureTargets ?? [];
-        const owner = ownerOf(type, indexes);
-        const generals = [
-            ...[...new Set([...type.typeNames, ...type.specializationNames])]
-                .filter(name => !redefinedNames.includes(name))
-                .map(name => this.resolveQualifiedNameFrom(ownerKeyOf(type, indexes.byId), name, indexes)),
-            ...(type.namingReference !== undefined && !type.namedByRedefinition ? [this.resolveNamingFeature(type, indexes)] : []),
-            ...redefinedNames.map(name => owner ? this.resolveRedefinedFeature(owner, name, indexes).symbol : undefined),
-        ];
+        const element = this.scopeOf(type, indexes);
+        const generals: (SysMLSymbol | undefined)[] = [];
+        for (const id of element?.ownedRelationshipIds ?? []) {
+            const relationship = indexes.registry.getRelationship(id);
+            if (!relationship || relationship.kind === 'import') continue;
+            const { targetId } = this.resolveTarget(relationship, indexes);
+            const target = targetId === undefined ? undefined : indexes.registry.getElement(targetId);
+            generals.push(target && this.symbolOf(target, indexes));
+        }
+        if (type.namingReference !== undefined && !type.namedByRedefinition) generals.push(this.resolveNamingFeature(type, indexes));
         return [...new Set(generals.filter((general): general is SysMLSymbol => general !== undefined && general !== type))];
     }
 
@@ -864,7 +986,7 @@ export class NamespaceResolver {
         // The features of a redefined chain (`:>> x2.p`) are resolved as any reference, from the owner.
         let feature = symbol.namedByRedefinition && chain.length === 0
             ? owner && this.resolveRedefinedFeature(owner, first.name, indexes).symbol
-            : this.resolveReferenceIn(owner, first.name, indexes, symbol).symbol;
+            : this.resolveReferenceIn(owner, first.name, indexes, symbol, symbol.uri).symbol;
         for (const qualified of chain) {
             const [member, ...rest] = qualified.segments;
             feature = feature && this.resolveFeatureReference(feature, member.name, indexes).symbol;
@@ -882,7 +1004,7 @@ export class NamespaceResolver {
      */
     resolveRedefinedFeature(owningType: SysMLSymbol, name: string, indexes: SymbolIndexes): NameResolution {
         for (const general of this.generalsOf(owningType, indexes)) {
-            const resolution = this.resolveQualifiedReferenceFrom(namespaceKeyOf(general), name, indexes);
+            const resolution = this.resolveFrom(this.scopeOf(general, indexes), general.uri, name, indexes);
             if (resolution.symbol || resolution.ambiguous) return resolution;
         }
         return { ambiguous: false };
@@ -903,101 +1025,65 @@ export class NamespaceResolver {
     }
 
     /**
-     * Fold one `import` statement's contribution into `addMember`, per the
-     * membership vs. namespace / shallow vs. `::**` deep distinctions in
-     * ImportTarget (§7.5.3, including the P4/P5/P6 recursive-import example).
-     *
-     * `imp.target` is resolved relative to `importingNamespace` (the importing
-     * namespace itself, per §7.5.1's generic name-resolution rule: begin in the
-     * namespace containing the reference, then walk outward through its
-     * enclosing namespaces), not as an absolute/global name. This covers both:
-     * a target directly owned by the importing namespace itself (e.g. `public
-     * import Inner::X;` where `Inner` is a package declared directly in this
-     * same namespace), and a bare `import C;` inside a nested package that
-     * picks up a `C` only visible via an enclosing package's own import
-     * (§7.5.3's P2/Q example) -- the latter falls through to an outer ancestor
-     * once this namespace's own (owned-only, see the cycle-guard note in
-     * `getResolvedMembers`) members come up empty for that name.
+     * Fold one `import`'s memberships into `addMember` (SysML 7.5.3, KerML
+     * 8.3.2.4.5): its target resolved from the importing namespace outward,
+     * then the target itself (a membership import), its visible members (a
+     * namespace import), and with `::**` theirs recursively.
      */
     private applyImport(
         imp: ImportTarget,
-        importingNamespace: NamespaceKey,
+        importing: NamespaceScope,
+        uri: string,
         indexes: SymbolIndexes,
         addMember: (name: string, entry: ResolvedMember) => void,
     ): void {
-        switch (imp.kind) {
-            case 'membership': {
-                const target = this.resolveQualifiedNameFrom(importingNamespace, imp.target, indexes);
-                if (target) {
-                    addMember(target.name, { symbol: target, visibility: imp.visibility });
-                    if (target.shortName) addMember(target.shortName, { symbol: target, visibility: imp.visibility });
-                }
-                break;
-            }
-            case 'membership-deep': {
-                const target = this.resolveQualifiedNameFrom(importingNamespace, imp.target, indexes);
-                if (target) {
-                    addMember(target.name, { symbol: target, visibility: imp.visibility });
-                    if (target.shortName) addMember(target.shortName, { symbol: target, visibility: imp.visibility });
-                    this.importVisibleMembers(namespaceKeyOf(target), imp.visibility, indexes, addMember, true);
-                }
-                break;
-            }
-            case 'namespace-shallow': {
-                const owner = this.resolveQualifiedNameFrom(importingNamespace, imp.target, indexes);
-                if (owner) this.importVisibleMembers(namespaceKeyOf(owner), imp.visibility, indexes, addMember, false);
-                break;
-            }
-            case 'namespace-deep': {
-                const owner = this.resolveQualifiedNameFrom(importingNamespace, imp.target, indexes);
-                if (owner) this.importVisibleMembers(namespaceKeyOf(owner), imp.visibility, indexes, addMember, true);
-                break;
+        // A target naming distinguishable members (a package and a definition) imports through each.
+        const { symbols: targets, ambiguous } = this.resolveAll(importing, uri, imp.target, indexes, undefined, true);
+        if (ambiguous) return;
+        for (const target of targets) {
+            const targetScope = this.scopeOf(target, indexes);
+            switch (imp.kind) {
+                case 'membership':
+                case 'membership-deep':
+                    for (const name of memberNamesOf(target)) addMember(name, { symbol: target, visibility: imp.visibility });
+                    if (imp.kind === 'membership-deep' && targetScope) this.importVisibleMembers(targetScope, imp.visibility, indexes, addMember, true);
+                    break;
+                case 'namespace-shallow':
+                case 'namespace-deep':
+                    if (targetScope) this.importVisibleMembers(targetScope, imp.visibility, indexes, addMember, imp.kind === 'namespace-deep');
+                    break;
             }
         }
     }
 
     /**
-     * Import the non-private/protected resolved members of namespace `owner`
-     * (its own members plus, transitively, its own public imports), tagging
-     * each with `importVisibility` (this import statement's own keyword, which
-     * governs re-export — not the source member's original visibility). When
-     * `recursive`, also recurse into any imported member that is itself a
-     * namespace (owns members), per the `::**` "continues into namespaces
-     * that are owned members of an imported namespace" rule.
-     *
-     * `visited` guards against a namespace reachable more than once within
-     * one top-level `::**` propagation chain, e.g. a namespace that ends up
-     * a member of itself (`membership-deep`'s `import Self::**;` adds
-     * `Self` as its own member before recursing into it) or a mutual cycle
-     * (`A` deep-imports `B`, `B` deep-imports `A`) -- without it, the *same*
-     * qualifiedName's propagation would restart from scratch every time it's
-     * reached again, recursing forever. This is a different concern from
-     * `getResolvedMembers`'s own cache-based cycle guard (which stops a
-     * given namespace's *table* from being recomputed while already in
-     * progress, letting one import see an earlier import's contribution in
-     * the same namespace) -- that cache is now the same live object across
-     * calls, so a self-referential membership it returns is genuinely
-     * visible here and must be tracked, not relied on to look "not yet
-     * there" the way a frozen snapshot used to accidentally mask it.
+     * Import the public members of namespace `owner` (its own and those it
+     * imports publicly), each with this import's visibility; when `recursive`,
+     * also those of each imported member that is a namespace (`::**`). Each
+     * namespace once, so a namespace importing itself or a cycle of imports ends.
      */
     private importVisibleMembers(
-        owner: NamespaceKey,
+        owner: RegistryElement,
         importVisibility: 'public' | 'private' | 'protected',
         indexes: SymbolIndexes,
         addMember: (name: string, entry: ResolvedMember) => void,
         recursive: boolean,
-        visited: Set<NamespaceKey> = new Set(),
+        visited: Set<RegistryElement> = new Set(),
     ): void {
         if (visited.has(owner)) return;
         visited.add(owner);
-        for (const [name, entries] of this.getResolvedMembers(owner, indexes)) {
+        for (const [name, entries] of this.tableOf(owner, indexes)) {
             for (const entry of entries) {
                 if (entry.visibility === 'private' || entry.visibility === 'protected') continue;
                 addMember(name, { symbol: entry.symbol, visibility: importVisibility });
-                if (recursive) {
-                    this.importVisibleMembers(namespaceKeyOf(entry.symbol), importVisibility, indexes, addMember, true, visited);
-                }
+                const memberScope = recursive ? this.scopeOf(entry.symbol, indexes) : undefined;
+                if (memberScope) this.importVisibleMembers(memberScope, importVisibility, indexes, addMember, true, visited);
             }
         }
     }
+}
+
+/** Whether `scope` is an element of the registry, not a root or the global namespace. */
+function isElementScope(scope: NamespaceScope): scope is RegistryElement {
+    return 'symbolId' in scope;
 }

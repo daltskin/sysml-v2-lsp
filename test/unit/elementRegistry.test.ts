@@ -199,10 +199,7 @@ describe('ElementRegistry: relationships', () => {
         // An unnamed redefining usage takes the name of the feature it redefines (KerML 8.3.3.3.4).
         const redefining = registry.getElements().find(e => e.declarations[0].range.start.line === 6)!;
         expect(relationshipsOf(redefining).map(r => [r.kind, r.target])).toEqual([['redefinition', 'w']]);
-        for (const r of registry.getRelationships()) {
-            expect(r.sourceId).toBe(r.ownerId);
-            expect(r.targetId).toBeUndefined();
-        }
+        for (const r of registry.getRelationships()) expect(r.sourceId).toBe(r.ownerId);
         expectWellFormed(registry);
     });
 

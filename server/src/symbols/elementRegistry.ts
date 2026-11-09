@@ -1,7 +1,7 @@
 import { Range } from 'vscode-languageserver/node';
 import { canonicalUri } from '../utils/documentUri.js';
 import { RegistryIds } from './ids.js';
-import { OwnedSpecialization, SysMLElementKind, SysMLSymbol, escapedName } from './sysmlElements.js';
+import { ImportTarget, OwnedSpecialization, ReferenceChain, SysMLElementKind, SysMLSymbol, escapedName } from './sysmlElements.js';
 
 /** Where an element or relationship is declared. */
 export interface Declaration {
@@ -37,219 +37,330 @@ export interface RegistryRelationship {
     /** Its `owningRelatedElement`, also its `source`. */
     ownerId: string;
     sourceId: string;
-    /** Its `target` as written: text only, never identifying the element. */
+    /** Its `target` as written: text only, never identifying the element (see `NamespaceResolver.resolveTarget`). */
     target: string;
-    /** The element its target resolves to; absent until resolved, and when unresolved or ambiguous. */
-    targetId?: string;
+    /** For a specialization: its target as parsed, a feature chain of qualified names. */
+    chain?: ReferenceChain;
+    /** For a typing: whether it is a conjugated port typing (`~P`). */
+    conjugated?: boolean;
     declarations: Declaration[];
 }
 
-/** An element while the registry is built: its declarations, and its place among its owner's. */
-interface Draft {
+/** An element of the registry with what it is derived from: its declarations, owner, members and path. */
+interface Node {
     element: RegistryElement;
+    /** Its declarations, by document URI, then position. */
     symbols: SysMLSymbol[];
-    owner?: Draft;
-    members: Draft[];
-    /** Its packages by name, so another declaration of one joins it. */
-    packages: Map<string, Draft>;
+    owner?: Node;
+    /** Its members, in the order of their first declarations. */
+    members: Node[];
+    /** Its members that are packages, by name, so another declaration of one joins it. */
+    packages: Map<string, Node>;
+    /** Its path (KerML 8.3.2.1.2 `path()`), its ID derived from it. */
+    path: string;
+    /** Whether its path is its qualified name, so its members' paths can be theirs. */
+    qualified: boolean;
+    /** The ID of its top-level element, the namespace of its own ID. */
+    topLevelId: string;
 }
 
 /**
  * The model of the whole workspace by ID, not by document: every element once,
  * its owner and owned elements by ID, its declarations, and the relationships
  * it declares (KerML 8.3.2.1). Same-named packages of one namespace, in one
- * document or several, are one element. Built from the symbol table's
- * declarations, again when read after a document changed.
+ * document or several, are one element. Kept up to date document by document:
+ * a change re-derives only that document's elements and the namespaces it
+ * shares with others.
  */
 export class ElementRegistry {
     private readonly documents = new Map<string, readonly SysMLSymbol[]>();
-    private elements = new Map<string, RegistryElement>();
-    private relationships = new Map<string, RegistryRelationship>();
+    private readonly nodes = new Map<string, Node>();
+    private readonly nodeOf = new Map<SysMLSymbol, Node>();
+    private readonly relationships = new Map<string, RegistryRelationship>();
+    private readonly roots: Node[] = [];
+    private readonly rootPackages = new Map<string, Node>();
+    /** Each top-level declaration's position among its document's, for a position-based path. */
+    private readonly rootPositions = new Map<SysMLSymbol, number>();
+    /** Each document's top-level imports, the imports of its root namespace, by `canonicalUri`. */
+    private readonly rootImports = new Map<string, readonly ImportTarget[]>();
     private rootIds: string[] = [];
-    private bySymbol = new WeakMap<SysMLSymbol, RegistryElement>();
-    private stale = true;
 
     /** @param ownerOf each declaration's owner, as declared in the parse tree */
     constructor(private readonly ownerOf: (symbol: SysMLSymbol) => SysMLSymbol | undefined) {}
 
-    /** Set the declarations of document `uri`, every owner before its members. */
-    setDocument(uri: string, declarations: readonly SysMLSymbol[]): void {
-        this.documents.set(uri, [...declarations]);
-        this.stale = true;
+    /**
+     * A registry of `symbols` alone, each owned by the symbol its `parentId`
+     * names, for a caller with symbols but no symbol table.
+     */
+    static fromSymbols(symbols: readonly SysMLSymbol[]): ElementRegistry {
+        const byId = new Map(symbols.map(symbol => [symbol.symbolId, symbol]));
+        const registry = new ElementRegistry(symbol => symbol.parentId === undefined ? undefined : byId.get(symbol.parentId));
+        const byUri = new Map<string, SysMLSymbol[]>();
+        for (const symbol of symbols) byUri.set(symbol.uri, [...byUri.get(symbol.uri) ?? [], symbol]);
+        registry.update([...byUri.keys()], [...byUri]);
+        return registry;
+    }
+
+    /**
+     * Set the declarations of document `uri`, in place of any it had, and the
+     * imports written at its top level, which its root namespace owns (KerML 7.2.5.3).
+     */
+    setDocument(uri: string, declarations: readonly SysMLSymbol[], rootImports: readonly ImportTarget[] = []): void {
+        this.update([uri], [[uri, declarations]]);
+        if (rootImports.length > 0) this.rootImports.set(canonicalUri(uri), rootImports);
+        else this.rootImports.delete(canonicalUri(uri));
     }
 
     /** Forget the declarations of document `uri`. */
     removeDocument(uri: string): void {
-        if (this.documents.delete(uri)) this.stale = true;
+        this.rootImports.delete(canonicalUri(uri));
+        if (this.documents.has(uri)) this.update([uri], []);
+    }
+
+    /** The imports of document `uri`'s root namespace, written at its top level. */
+    getRootImports(uri: string): readonly ImportTarget[] {
+        return this.rootImports.get(canonicalUri(uri)) ?? [];
     }
 
     /** The element with `symbolId`, if any. */
     getElement(symbolId: string): RegistryElement | undefined {
-        this.refresh();
-        return this.elements.get(symbolId);
+        return this.nodes.get(symbolId)?.element;
     }
 
     /** The relationship with `symbolId`, if any. */
     getRelationship(symbolId: string): RegistryRelationship | undefined {
-        this.refresh();
         return this.relationships.get(symbolId);
     }
 
     /** The element a declaration belongs to. */
     elementOf(symbol: SysMLSymbol): RegistryElement | undefined {
-        this.refresh();
-        return this.bySymbol.get(symbol);
+        return this.nodeOf.get(symbol)?.element;
     }
 
-    /** Every element, top-level elements and their owned elements in order. */
+    /** The declarations of `element`, in its order of declarations. */
+    symbolsOf(element: RegistryElement): readonly SysMLSymbol[] {
+        return this.nodes.get(element.symbolId)?.symbols ?? [];
+    }
+
+    /** Every element. */
     getElements(): RegistryElement[] {
-        this.refresh();
-        return [...this.elements.values()];
+        return [...this.nodes.values()].map(node => node.element);
     }
 
     /** Every relationship. */
     getRelationships(): RegistryRelationship[] {
-        this.refresh();
         return [...this.relationships.values()];
     }
 
     /** The top-level elements of the workspace, by document URI, then position. */
     getRootIds(): readonly string[] {
-        this.refresh();
         return this.rootIds;
     }
 
-    /** Build the registry again from every document, if one changed since it was last built. */
-    private refresh(): void {
-        if (!this.stale) return;
-        this.stale = false;
-        this.elements = new Map();
-        this.relationships = new Map();
-        this.bySymbol = new WeakMap();
-        const roots = this.draft();
-        this.assignIds(roots);
-        this.rootIds = roots.map(root => root.element.symbolId);
-        for (const root of roots) this.publish(root);
-    }
+    /**
+     * Take out the declarations of documents `removed`, add those of `added`,
+     * and re-derive the namespaces that changed: those losing or gaining a
+     * member or a declaration, and below them only what their paths change.
+     */
+    private update(removed: readonly string[], added: readonly [string, readonly SysMLSymbol[]][]): void {
+        const changedOwners = new Set<Node>();
+        const changedNodes = new Set<Node>();
+        let rootsChanged = false;
+        const touch = (owner: Node | undefined) => {
+            if (owner) changedOwners.add(owner);
+            else rootsChanged = true;
+        };
 
-    /** Group the declarations into elements, packages of one name and namespace into one. */
-    private draft(): Draft[] {
-        const roots: Draft[] = [];
-        const rootPackages = new Map<string, Draft>();
-        const drafts = new Map<SysMLSymbol, Draft>();
-        const uris = [...this.documents.keys()].sort((a, b) => compare(canonicalUri(a), canonicalUri(b)));
-        for (const uri of uris) {
-            for (const symbol of this.documents.get(uri)!) {
-                const ownerSymbol = this.ownerOf(symbol);
-                const owner = ownerSymbol ? drafts.get(ownerSymbol) : undefined;
-                const packages = owner ? owner.packages : rootPackages;
-                const key = packageKey(symbol);
-                const existing = key === undefined ? undefined : packages.get(key);
-                if (existing) {
-                    existing.symbols.push(symbol);
-                    drafts.set(symbol, existing);
+        for (const uri of removed) {
+            const declarations = this.documents.get(uri) ?? [];
+            this.documents.delete(uri);
+            for (const symbol of [...declarations].reverse()) {
+                const node = this.nodeOf.get(symbol);
+                this.nodeOf.delete(symbol);
+                this.rootPositions.delete(symbol);
+                if (!node) continue;
+                node.symbols = node.symbols.filter(s => s !== symbol);
+                touch(node.owner);
+                if (node.symbols.length > 0) {
+                    changedNodes.add(node);
                     continue;
                 }
-                const draft: Draft = {
-                    element: {
-                        symbolId: '',
-                        kind: symbol.kind,
-                        name: symbol.name || undefined,
-                        shortName: symbol.shortName,
-                        isLibraryPackage: symbol.isLibraryPackage,
-                        ownedElementIds: [],
-                        ownedRelationshipIds: [],
-                        declarations: [],
-                    },
-                    symbols: [symbol],
-                    owner,
-                    members: [],
-                    packages: new Map(),
-                };
-                if (key !== undefined) packages.set(key, draft);
-                (owner ? owner.members : roots).push(draft);
-                drafts.set(symbol, draft);
+                const siblings = node.owner ? node.owner.members : this.roots;
+                siblings.splice(siblings.indexOf(node), 1);
+                const packages = node.owner ? node.owner.packages : this.rootPackages;
+                for (const [key, other] of packages) if (other === node) packages.delete(key);
+                this.forget(node);
             }
         }
-        return roots;
+
+        for (const [uri, declarations] of added) {
+            this.documents.set(uri, [...declarations]);
+            declarations.filter(s => !this.ownerOf(s)).sort(compareSites).forEach((s, index) => this.rootPositions.set(s, index + 1));
+        }
+        for (const symbol of this.ownersFirst(added.flatMap(([, declarations]) => declarations))) {
+            const ownerSymbol = this.ownerOf(symbol);
+            const owner = ownerSymbol ? this.nodeOf.get(ownerSymbol) : undefined;
+            const packages = owner ? owner.packages : this.rootPackages;
+            const key = packageKey(symbol);
+            const existing = key === undefined ? undefined : packages.get(key);
+            touch(owner);
+            if (existing) {
+                existing.symbols = [...existing.symbols, symbol].sort(compareSites);
+                this.nodeOf.set(symbol, existing);
+                changedNodes.add(existing);
+                continue;
+            }
+            const node: Node = {
+                element: {
+                    symbolId: '',
+                    kind: symbol.kind,
+                    name: symbol.name || undefined,
+                    shortName: symbol.shortName,
+                    isLibraryPackage: symbol.isLibraryPackage,
+                    ownedElementIds: [],
+                    ownedRelationshipIds: [],
+                    declarations: [],
+                },
+                symbols: [symbol],
+                owner,
+                members: [],
+                packages: new Map(),
+                path: '',
+                qualified: false,
+                topLevelId: '',
+            };
+            if (key !== undefined) packages.set(key, node);
+            (owner ? owner.members : this.roots).push(node);
+            this.nodeOf.set(symbol, node);
+            changedNodes.add(node);
+        }
+
+        if (rootsChanged) this.layoutRoots();
+        for (const owner of changedOwners) if (this.isPlaced(owner)) this.layoutMembers(owner);
+        for (const node of changedNodes) if (this.isPlaced(node)) this.refreshDeclarations(node);
     }
 
-    /** Give every element its symbol ID (`RegistryIds`), each owner before its members. */
-    private assignIds(roots: Draft[]): void {
-        const paths = new Map<Draft, { path: string; qualified: boolean; topLevelId: string }>();
-        // Top-level packages of every document share one namespace for their names; any other
-        // top-level element is in its own document's root namespace (KerML 7.2.5.3).
-        const claimants = claimantsOf(roots, draft => draft.element.kind === SysMLElementKind.Package ? '' : documentOf(draft));
-        const positions = new Map<SysMLSymbol, number>();
-        for (const declarations of this.documents.values()) {
-            declarations.filter(s => !this.ownerOf(s)).forEach((s, index) => positions.set(s, index + 1));
+    /** Whether `node` is still in the registry, with its ID. */
+    private isPlaced(node: Node): boolean {
+        return node.element.symbolId !== '' && this.nodes.get(node.element.symbolId) === node;
+    }
+
+    /** `symbols`, each owner before its members, then by document URI and position. */
+    private ownersFirst(symbols: readonly SysMLSymbol[]): SysMLSymbol[] {
+        const depths = new Map<SysMLSymbol, number>();
+        for (const symbol of symbols) {
+            let depth = 0;
+            const seen = new Set<SysMLSymbol>();
+            for (let owner = this.ownerOf(symbol); owner && !seen.has(owner); owner = this.ownerOf(owner)) {
+                seen.add(owner);
+                depth++;
+            }
+            depths.set(symbol, depth);
         }
-        roots.forEach(root => {
+        return [...symbols].sort((a, b) => depths.get(a)! - depths.get(b)! || compareSites(a, b));
+    }
+
+    /**
+     * Give the top-level elements their IDs: a package by its name, one
+     * element for all documents; any other element by its document and its
+     * segment, or its position when an earlier one of its document has that
+     * segment (KerML 7.2.5.3, 9.1).
+     */
+    private layoutRoots(): void {
+        this.roots.sort(byFirstDeclaration);
+        const claimants = claimantsOf(this.roots, node => node.element.kind === SysMLElementKind.Package ? '' : canonicalUri(node.symbols[0].uri));
+        for (const root of this.roots) {
             const symbol = root.symbols[0];
             const claims = claimants.has(root);
-            const path = claims ? segmentOf(symbol) : `/${positions.get(symbol)}/1`;
-            root.element.symbolId = claims && packageKey(symbol) !== undefined
+            const path = claims ? segmentOf(symbol) : `/${this.rootPositions.get(symbol)}/1`;
+            const id = claims && packageKey(symbol) !== undefined
                 ? RegistryIds.topLevelPackage(symbol.uri, path)
                 : RegistryIds.topLevelElement(symbol.uri, path);
-            paths.set(root, { path, qualified: claims && escapedName(symbol) !== undefined, topLevelId: root.element.symbolId });
+            this.place(root, id, path, claims && escapedName(symbol) !== undefined, id);
+        }
+        this.rootIds = this.roots.map(root => root.element.symbolId);
+    }
+
+    /**
+     * Give `owner`'s members their IDs: each its qualified name as its path, or,
+     * when an earlier member has its segment (a package keeping its own), its
+     * position (KerML 8.3.2.1.2).
+     */
+    private layoutMembers(owner: Node): void {
+        owner.members.sort(byFirstDeclaration);
+        const claimants = claimantsOf(owner.members, () => '');
+        owner.members.forEach((member, index) => {
+            const symbol = member.symbols[0];
+            const named = escapedName(symbol) !== undefined;
+            const claims = claimants.has(member);
+            // KerML 8.3.2.1.2: a member sharing its name with an earlier one has no qualified
+            // name, and its path is its owning membership's position, then its own within it.
+            const path = !claims ? `${owner.path}/${index + 1}/1`
+                : named && owner.qualified ? `${owner.path}::${segmentOf(symbol)}`
+                : `${owner.path}/${segmentOf(symbol)}`;
+            this.place(member, RegistryIds.member(owner.topLevelId, path), path, claims && named && owner.qualified, owner.topLevelId);
         });
-        const pending = [...roots];
-        for (let owner = pending.shift(); owner; owner = pending.shift()) {
-            const { path: ownerPath, qualified: ownerQualified, topLevelId } = paths.get(owner)!;
-            const memberClaimants = claimantsOf(owner.members, () => '');
-            owner.members.forEach((member, index) => {
-                const symbol = member.symbols[0];
-                const named = escapedName(symbol) !== undefined;
-                const claims = memberClaimants.has(member);
-                // KerML 8.3.2.1.2: a member sharing its name with an earlier one has no qualified
-                // name, and its path is its owning membership's position, then its own within it.
-                const path = !claims ? `${ownerPath}/${index + 1}/1`
-                    : named && ownerQualified ? `${ownerPath}::${segmentOf(symbol)}`
-                    : `${ownerPath}/${segmentOf(symbol)}`;
-                member.element.symbolId = RegistryIds.member(topLevelId, path);
-                paths.set(member, { path, qualified: claims && named && ownerQualified, topLevelId });
-                pending.push(member);
-            });
-        }
+        owner.element.ownedElementIds = owner.members.map(member => member.element.symbolId);
     }
 
-    /** Record `draft` and everything it owns, with their relationships, by ID. */
-    private publish(draft: Draft): void {
-        const pending = [draft];
-        for (let next = pending.pop(); next; next = pending.pop()) {
-            const { element } = next;
-            element.ownerId = next.owner?.element.symbolId;
-            element.ownedElementIds = next.members.map(member => member.element.symbolId);
-            element.declarations = next.symbols.map(({ uri, range }) => ({ uri, range }));
-            element.ownedRelationshipIds = this.relationshipsOf(next);
-            this.elements.set(element.symbolId, element);
-            for (const symbol of next.symbols) this.bySymbol.set(symbol, element);
-            pending.push(...[...next.members].reverse());
-        }
+    /**
+     * Set `node`'s ID and path; when either changed (or it is new), re-derive its
+     * relationships and its members, whose IDs depend on them.
+     */
+    private place(node: Node, id: string, path: string, qualified: boolean, topLevelId: string): void {
+        node.element.ownerId = node.owner?.element.symbolId;
+        if (node.element.symbolId === id && node.path === path && node.qualified === qualified && node.topLevelId === topLevelId) return;
+        if (this.nodes.get(node.element.symbolId) === node) this.nodes.delete(node.element.symbolId);
+        node.element.symbolId = id;
+        node.path = path;
+        node.qualified = qualified;
+        node.topLevelId = topLevelId;
+        this.nodes.set(id, node);
+        this.refreshDeclarations(node);
+        this.layoutMembers(node);
     }
 
-    /** Record the specializations and imports `draft`'s declarations declare, and give their IDs in order. */
-    private relationshipsOf(draft: Draft): string[] {
-        const ownerId = draft.element.symbolId;
+    /** Re-derive `node`'s declarations and the relationships they declare, by its current ID. */
+    private refreshDeclarations(node: Node): void {
+        node.element.declarations = node.symbols.map(({ uri, range }) => ({ uri, range }));
+        for (const id of node.element.ownedRelationshipIds) this.relationships.delete(id);
+        node.element.ownedRelationshipIds = this.relationshipsOf(node);
+    }
+
+    /** Take `node` and what it declares out of the registry. */
+    private forget(node: Node): void {
+        if (this.nodes.get(node.element.symbolId) === node) this.nodes.delete(node.element.symbolId);
+        for (const id of node.element.ownedRelationshipIds) this.relationships.delete(id);
+        node.element.symbolId = '';
+    }
+
+    /** Record the specializations and imports `node`'s declarations declare, and give their IDs in order. */
+    private relationshipsOf(node: Node): string[] {
+        const ownerId = node.element.symbolId;
         const ids: string[] = [];
         const seen = new Map<string, number>();
-        const add = (kind: RegistryRelationshipKind, key: string, target: string, uri: string, range: Range): void => {
+        const add = (relationship: Omit<RegistryRelationship, 'symbolId' | 'ownerId' | 'sourceId'>, key: string): void => {
             const count = (seen.get(key) ?? 0) + 1;
             seen.set(key, count);
             const symbolId = RegistryIds.relationship(ownerId, count === 1 ? key : `${key}#${count}`);
-            this.relationships.set(symbolId, { symbolId, kind, ownerId, sourceId: ownerId, target, declarations: [{ uri, range }] });
+            this.relationships.set(symbolId, { symbolId, ownerId, sourceId: ownerId, ...relationship });
             ids.push(symbolId);
         };
-        for (const symbol of draft.symbols) {
-            for (const { kind, target, range } of symbol.ownedSpecializations ?? []) {
-                add(kind, `${kind} ${target}`, target, symbol.uri, range ?? symbol.range);
+        for (const symbol of node.symbols) {
+            for (const { kind, target, range, chain, conjugated } of symbol.ownedSpecializations ?? []) {
+                add({ kind, target, chain, conjugated, declarations: [{ uri: symbol.uri, range: range ?? symbol.range }] }, `${kind} ${target}`);
             }
             for (const { kind, target, range } of symbol.importTargets ?? []) {
-                add('import', `import ${kind} ${target}`, target, symbol.uri, range ?? symbol.range);
+                add({ kind: 'import', target, declarations: [{ uri: symbol.uri, range: range ?? symbol.range }] }, `import ${kind} ${target}`);
             }
         }
         return ids;
     }
+}
+
+/** Order elements by their first declarations. */
+function byFirstDeclaration(a: Node, b: Node): number {
+    return compareSites(a.symbols[0], b.symbols[0]);
 }
 
 /** The key under which same-named packages of one namespace are one element; undefined for any other declaration. */
@@ -263,8 +374,8 @@ function packageKey(symbol: SysMLSymbol): string | undefined {
  * The members that keep their segment as their path: per segment, a package
  * if there is one, else the first, within each group `groupOf` gives.
  */
-function claimantsOf(members: readonly Draft[], groupOf: (draft: Draft) => string): Set<Draft> {
-    const bySegment = new Map<string, Draft>();
+function claimantsOf(members: readonly Node[], groupOf: (node: Node) => string): Set<Node> {
+    const bySegment = new Map<string, Node>();
     for (const member of members) {
         const key = `${groupOf(member)}\0${segmentOf(member.symbols[0])}`;
         const current = bySegment.get(key);
@@ -274,11 +385,6 @@ function claimantsOf(members: readonly Draft[], groupOf: (draft: Draft) => strin
     return new Set(bySegment.values());
 }
 
-/** The document an element is declared in: its first declaration's. */
-function documentOf(draft: Draft): string {
-    return canonicalUri(draft.symbols[0].uri);
-}
-
 /** An element's own path segment: its name as written, or, anonymous, its declaration as written. */
 function segmentOf(symbol: SysMLSymbol): string {
     return escapedName(symbol) ?? symbol.declaration ?? symbol.kind;
@@ -286,4 +392,10 @@ function segmentOf(symbol: SysMLSymbol): string {
 
 function compare(a: string, b: string): number {
     return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** Order declarations by document URI (`canonicalUri`), then by position in it. */
+function compareSites(a: SysMLSymbol, b: SysMLSymbol): number {
+    return compare(canonicalUri(a.uri), canonicalUri(b.uri))
+        || a.range.start.line - b.range.start.line || a.range.start.character - b.range.start.character;
 }

@@ -11,7 +11,7 @@ import { Range } from 'vscode-languageserver/node';
 import { analyseComplexity } from '../analysis/complexityAnalyzer.js';
 import { DocumentManager } from '../documentManager.js';
 import { getLibraryPackageNames } from '../library/libraryIndex.js';
-import { NamespaceKey, NamespaceResolver, buildSymbolIndexes, describeConflictingDeclarations, findConflicts, namespaceKeyOf, otherDeclarations, ownerKeyOf } from '../symbols/namespaceResolver.js';
+import { NamespaceKey, describeConflictingDeclarations, findConflicts, namespaceKeyOf, otherDeclarations, ownerKeyOf } from '../symbols/namespaceResolver.js';
 import { describeNamingIssue, SymbolTable } from '../symbols/symbolTable.js';
 import {
     SysMLElementKind,
@@ -184,7 +184,6 @@ function nameFields(symbol: SysMLSymbol): { name: string; shortName?: string } {
  */
 export class SysMLModelProvider {
     /** Namespace/import-aware name resolution (§7.5), shared with SemanticValidator. */
-    private readonly namespaceResolver = new NamespaceResolver();
 
     /** Cached library package names — never changes after init. */
     private libraryNamesCache?: Set<string>;
@@ -1215,7 +1214,8 @@ export class SysMLModelProvider {
         // this document's own -- a type can be legitimately declared in, or
         // imported from, another file (see NamespaceResolver's own doc comment
         // for why this is shared with SemanticValidator rather than duplicated).
-        const workspaceIndexes = buildSymbolIndexes(symbolTable.getAllSymbols());
+        const workspaceIndexes = symbolTable.getIndexes();
+        const resolver = symbolTable.getResolver();
         if (!this.libraryNamesCache) {
             this.libraryNamesCache = new Set(getLibraryPackageNames());
         }
@@ -1254,7 +1254,7 @@ export class SysMLModelProvider {
             // Check for unresolved type references (check all typeNames)
             for (const tn of symbol.typeNames) {
                 const { resolved, strippedTypeName } =
-                    resolveTypeName(tn, symbol, this.namespaceResolver, workspaceIndexes, libraryNames);
+                    resolveTypeName(tn, symbol, resolver, workspaceIndexes, libraryNames);
                 if (!resolved) {
                     diagnostics.push({
                         code: 'unresolved-type',

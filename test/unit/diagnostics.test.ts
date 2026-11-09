@@ -3710,7 +3710,9 @@ part def Wheel;
 
             const duringDiags = validator.validate(uriA);
             expect(duringDiags.some(d => d.code === 'ambiguous-namespace-name' && d.message.includes("'Wheel'"))).toBe(true);
-            expect(duringDiags.some(d => d.code === 'unresolved-type' && d.message.includes("'Wheel'"))).toBe(true);
+            // Each document is a root namespace of its own (KerML 7.2.5.3): this document's own
+            // top-level `Wheel` resolves from it, though the two still clash by qualified name.
+            expect(duringDiags.some(d => d.code === 'unresolved-type' && d.message.includes("'Wheel'"))).toBe(false);
 
             docManager.parse(mod.TextDocument.create(uriB, 'sysml', 3, bTextNoConflict));
 

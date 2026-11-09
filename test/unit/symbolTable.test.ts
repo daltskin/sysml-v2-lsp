@@ -1593,6 +1593,12 @@ package Demo {
     });
 });
 
+/** A namespace scope as text: an element's name (or, anonymous, its declaration), `root` or `global`. */
+function scopeName(scope: import('../../server/src/symbols/namespaceResolver.js').NamespaceScope): string | undefined {
+    if ('symbolId' in scope) return scope.name ?? scope.shortName;
+    return scope.kind;
+}
+
 describe('anonymous elements indexed by symbol ID', () => {
     // The symbol ID's value is implementation-defined: these tests only rely on it being present,
     // unique, and a lookup key. An anonymous element has no qualified name (KerML); the colliding
@@ -1663,8 +1669,9 @@ describe('anonymous elements indexed by symbol ID', () => {
         const { buildSymbolIndexes, ownerOf, NamespaceResolver } = await import('../../server/src/symbols/namespaceResolver.js');
         const indexes = buildSymbolIndexes(st.getAllSymbols());
         expect(ownerOf(member, indexes)).toBe(iface);
-        // The member still sees the enclosing package, through its anonymous owner.
-        expect([...new NamespaceResolver().namespaceAncestors(member, indexes)]).toEqual([iface, 'Demo', '']);
+        // The member still sees the enclosing package, through its anonymous owner,
+        // then its document's root namespace and the global namespace (KerML 8.2.3.5.4).
+        expect(new NamespaceResolver().namespaceAncestors(member, indexes).map(scopeName)).toEqual([undefined, 'Demo', 'root', 'global']);
     });
 
     it('links each member to its own owner when a declared name is quoted like an anonymous element\'s declaration', async () => {
@@ -1683,8 +1690,13 @@ describe('anonymous elements indexed by symbol ID', () => {
         const indexes = buildSymbolIndexes(st.getAllSymbols());
         expect(ownerOf(w, indexes)).toBe(iface);
         expect(ownerOf(inner, indexes)).toBe(declared);
-        expect([...new NamespaceResolver().namespaceAncestors(w, indexes)]).toEqual([iface, 'Demo', '']);
-        expect([...new NamespaceResolver().namespaceAncestors(inner, indexes)]).toEqual([qualifiedName, 'Demo', '']);
+        // Each owner is its own namespace, the declared one and the anonymous one alike.
+        const resolver = new NamespaceResolver();
+        const [wOwner] = resolver.namespaceAncestors(w, indexes);
+        const [innerOwner] = resolver.namespaceAncestors(inner, indexes);
+        expect(wOwner).not.toBe(innerOwner);
+        expect(resolver.namespaceAncestors(w, indexes).map(scopeName)).toEqual([undefined, 'Demo', 'root', 'global']);
+        expect(resolver.namespaceAncestors(inner, indexes).map(scopeName)).toEqual([declared.name, 'Demo', 'root', 'global']);
     });
 
     it('links every member to its own owner by symbol ID, inside an anonymous element too', async () => {

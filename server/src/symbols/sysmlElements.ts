@@ -246,7 +246,17 @@ export interface OwnedSpecialization {
     notation?: string;
     /** The range of the target as written. */
     range?: Range;
+    /**
+     * The target as parsed: its feature chain of qualified names (KerML 7.3.4.6),
+     * each its names, unquoted, and whether it starts with the global `$::`.
+     */
+    chain?: ReferenceChain;
+    /** Whether the target is a conjugated port typing's `~P` (SysML 8.3.12.3). */
+    conjugated?: boolean;
 }
+
+/** A reference as parsed: a feature chain of qualified names, each with its names and whether it is global (`$::`). */
+export type ReferenceChain = readonly { readonly global: boolean; readonly names: readonly string[] }[];
 
 /**
  * A boolean filter-condition expression (§7.5.4), supporting the metadata

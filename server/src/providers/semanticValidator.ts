@@ -48,18 +48,21 @@ export class SemanticValidator {
         verifiedNames: Set<string>;
     };
 
-    /** Cached symbol indexes, invalidated when workspace symbol table changes. */
-    private indexCache?: {
-        symbols: SysMLSymbol[];
-        indexes: SymbolIndexes;
-    };
+    /** Each document's satisfy block ranges, by URI, for the document version they were taken from. */
+    private satisfyBlockRangesByUri = new Map<string, { version: number; ranges: Array<{ startLine: number; endLine: number }> }>();
 
     /** Cached library package names — never changes after init. */
     private libraryNamesCache?: Set<string>;
 
-    /** Namespace/import-aware name resolution (§7.5), shared with SysMLModelProvider's own diagnostics. */
+    /**
+     * Namespace/import-aware name resolution (§7.5): the workspace symbol table's
+     * resolver while `validate` runs, shared with every other consumer of its
+     * indexes; a resolver of its own without one (`validateSymbols`).
+     */
     private namespaceResolverInstance?: NamespaceResolver;
+    private tableResolver?: NamespaceResolver;
     private get namespaceResolver(): NamespaceResolver {
+        if (this.tableResolver) return this.tableResolver;
         if (!this.namespaceResolverInstance) this.namespaceResolverInstance = new NamespaceResolver();
         return this.namespaceResolverInstance;
     }
@@ -120,7 +123,9 @@ export class SemanticValidator {
         const libraryNames = this.libraryNamesCache;
 
         const text = this.documentManager.getText(uri) ?? '';
-        const indexes = this.getOrBuildIndexes(allSymbols);
+        // The workspace table's indexes and resolver, shared with every other consumer of them.
+        const indexes = symbolTable.getIndexes();
+        this.tableResolver = symbolTable.getResolver();
 
         const diagnostics: Diagnostic[] = [];
 
@@ -530,8 +535,9 @@ export class SemanticValidator {
             satisfiedNames = new Set<string>();
             satisfyBlockRanges = new Map();
             for (const text of workspaceTexts) {
-                this.extractSatisfyReferences(text, satisfiedNames);
-                satisfyBlockRanges.set('__static__', this.extractSatisfyBlockRanges(text));
+                const stripped = stripComments(text);
+                this.extractSatisfyReferences(stripped, satisfiedNames);
+                satisfyBlockRanges.set('__static__', this.extractSatisfyBlockRanges(stripped));
             }
         } else if (this.documentManager) {
             // Build a version fingerprint from all cached document versions.
@@ -546,10 +552,8 @@ export class SemanticValidator {
                 satisfiedNames = relNames.satisfiedNames;
                 satisfyBlockRanges = new Map();
                 for (const uri of uris) {
-                    const text = this.documentManager.getText(uri);
-                    if (text) {
-                        satisfyBlockRanges.set(uri, this.extractSatisfyBlockRanges(text));
-                    }
+                    const ranges = this.satisfyBlockRangesOf(uri);
+                    if (ranges) satisfyBlockRanges.set(uri, ranges);
                 }
                 this.satisfyCache = { versionKey, satisfiedNames, satisfyBlockRanges };
                 // Pre-populate verify cache from the same scan.
@@ -600,18 +604,17 @@ export class SemanticValidator {
     }
 
     /**
-     * Extract requirement references from `satisfy` statements in a text.
+     * Extract requirement references from `satisfy` statements in a text, its comments stripped.
      * Adds both the full qualified name and the simple (last segment) name.
      *
      * Patterns matched:
      *   satisfy QualifiedName by ...
      *   satisfy QualifiedName;
      */
-    private extractSatisfyReferences(text: string, out: Set<string>): void {
+    private extractSatisfyReferences(stripped: string, out: Set<string>): void {
         // Match: satisfy QualifiedName by ...
         //        satisfy QualifiedName;
         //        satisfy requirement X : Y;
-        const stripped = stripComments(text);
         const re = /\bsatisfy\s+(?:requirement\s+)?([\w]+(?:::[\w]+)*)\s+(?:by\b|;|:)/g;
         let m: RegExpExecArray | null;
         while ((m = re.exec(stripped)) !== null) {
@@ -624,12 +627,26 @@ export class SemanticValidator {
     }
 
     /**
-     * Extract the line ranges of satisfy block bodies from text.
+     * The satisfy block ranges of document `uri`, taken from its text once per
+     * document version; undefined for a document without text.
+     */
+    private satisfyBlockRangesOf(uri: string): Array<{ startLine: number; endLine: number }> | undefined {
+        const version = this.documentManager.getVersion(uri);
+        const cached = this.satisfyBlockRangesByUri.get(uri);
+        if (cached && cached.version === version) return cached.ranges;
+        const stripped = this.documentManager.getStrippedText(uri);
+        if (!stripped) return undefined;
+        const ranges = this.extractSatisfyBlockRanges(stripped);
+        this.satisfyBlockRangesByUri.set(uri, { version, ranges });
+        return ranges;
+    }
+
+    /**
+     * Extract the line ranges of satisfy block bodies from text, its comments stripped.
      * Returns an array of { startLine, endLine } for each satisfy { ... } block.
      */
-    private extractSatisfyBlockRanges(text: string): Array<{ startLine: number; endLine: number }> {
+    private extractSatisfyBlockRanges(stripped: string): Array<{ startLine: number; endLine: number }> {
         const ranges: Array<{ startLine: number; endLine: number }> = [];
-        const stripped = stripComments(text);
         const re = /\bsatisfy\b[^;{]*\{/g;
         let m: RegExpExecArray | null;
 
@@ -648,11 +665,12 @@ export class SemanticValidator {
             }
             if (depth !== 0) continue;
 
-            // Lazily build the line-offset table on the first real match.
+            // Lazily build the line-offset table on the first real match; stripping comments
+            // keeps every newline and offset, so the stripped text's are the text's.
             if (!lineOffsets) {
                 lineOffsets = [0];
-                for (let j = 0; j < text.length; j++) {
-                    if (text[j] === '\n') lineOffsets.push(j + 1);
+                for (let j = 0; j < stripped.length; j++) {
+                    if (stripped[j] === '\n') lineOffsets.push(j + 1);
                 }
             }
 
@@ -697,9 +715,10 @@ export class SemanticValidator {
             verifiedNames = new Set<string>();
             satisfyBlockRanges = new Map();
             for (const text of workspaceTexts) {
-                this.extractSatisfyReferences(text, satisfiedNames);
-                this.extractVerifyReferences(text, verifiedNames);
-                satisfyBlockRanges.set('__static__', this.extractSatisfyBlockRanges(text));
+                const stripped = stripComments(text);
+                this.extractSatisfyReferences(stripped, satisfiedNames);
+                this.extractVerifyReferences(stripped, verifiedNames);
+                satisfyBlockRanges.set('__static__', this.extractSatisfyBlockRanges(stripped));
             }
         } else if (this.documentManager) {
             const uris = this.documentManager.getUris();
@@ -715,10 +734,8 @@ export class SemanticValidator {
                 if (!satisfyCacheValid) {
                     satisfyBlockRanges = new Map();
                     for (const uri of uris) {
-                        const text = this.documentManager.getText(uri);
-                        if (text) {
-                            satisfyBlockRanges.set(uri, this.extractSatisfyBlockRanges(text));
-                        }
+                        const ranges = this.satisfyBlockRangesOf(uri);
+                        if (ranges) satisfyBlockRanges.set(uri, ranges);
                     }
                     this.satisfyCache = { versionKey, satisfiedNames: relNames.satisfiedNames, satisfyBlockRanges };
                 }
@@ -788,8 +805,7 @@ export class SemanticValidator {
      *   verify QualifiedName;
      *   verify requirement QualifiedName by ...
      */
-    private extractVerifyReferences(text: string, out: Set<string>): void {
-        const stripped = stripComments(text);
+    private extractVerifyReferences(stripped: string, out: Set<string>): void {
         const re = /\bverify\s+(?:requirement\s+)?([\w]+(?:::[\w]+)*)\s*(?:by\b|;|:|\{)/g;
         let m: RegExpExecArray | null;
         while ((m = re.exec(stripped)) !== null) {
@@ -1389,19 +1405,6 @@ export class SemanticValidator {
             scope = ownerOf(scope, indexes);
         }
         return undefined;
-    }
-
-    /**
-     * Return cached indexes if the workspace symbol table hasn't changed,
-     * otherwise rebuild and cache.
-     */
-    private getOrBuildIndexes(allSymbols: SysMLSymbol[]): SymbolIndexes {
-        if (this.indexCache && this.indexCache.symbols === allSymbols) {
-            return this.indexCache.indexes;
-        }
-        const indexes = buildSymbolIndexes(allSymbols);
-        this.indexCache = { symbols: allSymbols, indexes };
-        return indexes;
     }
 
     private isConstraintKeyword(value: string): boolean {

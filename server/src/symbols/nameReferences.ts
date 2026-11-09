@@ -3,7 +3,7 @@ import { TextDocument } from 'vscode-languageserver-textdocument';
 import { DocumentManager } from '../documentManager.js';
 import { SysMLv2Lexer } from '../generated/SysMLv2Lexer.js';
 import { joinQualifiedName, scanFeaturePaths } from '../utils/identUtils.js';
-import { buildSymbolIndexes, NameResolution, NamespaceResolver, ownerOf } from './namespaceResolver.js';
+import { NameResolution, ownerOf } from './namespaceResolver.js';
 import { isAnonymous, SysMLSymbol } from './sysmlElements.js';
 
 export interface NameReference extends Location {
@@ -17,12 +17,16 @@ export interface NameReference extends Location {
 /** Source-token references shared by navigation and refactoring, resolved with SysML §7.5 visibility. */
 export class NameReferences {
     private readonly symbols;
+    private readonly symbolTable;
     private readonly indexes;
-    private readonly resolver = new NamespaceResolver();
+    private readonly resolver;
 
     constructor(private readonly documents: DocumentManager) {
-        this.symbols = documents.getWorkspaceSymbolTable().getAllSymbols();
-        this.indexes = buildSymbolIndexes(this.symbols);
+        this.symbolTable = documents.getWorkspaceSymbolTable();
+        this.symbols = this.symbolTable.getAllSymbols();
+        // The table's indexes and resolver, shared with every other consumer of them.
+        this.indexes = this.symbolTable.getIndexes();
+        this.resolver = this.symbolTable.getResolver();
     }
 
     at(uri: string, position: Position): NameReference | undefined {
@@ -43,7 +47,8 @@ export class NameReferences {
         const parsed = this.documents.get(uri);
         if (text === undefined || !parsed) return [];
         const doc = TextDocument.create(uri, 'sysml', 0, text);
-        const symbols = this.symbols.filter(symbol => symbol.uri === uri);
+        // The document's own declarations, a package's among them however many documents declare it.
+        const symbols = this.symbolTable.getSymbolsForUri(uri);
         const braces = parsed.tokenStream.getTokens()
             .filter(token => token.type === SysMLv2Lexer.LBRACE)
             .map(token => doc.offsetAt({ line: token.line - 1, character: token.column }));
@@ -112,7 +117,7 @@ export class NameReferences {
                         ambiguous = result.ambiguous;
                     } else {
                         const result = this.resolver.resolveReferenceIn(
-                            namespace?.symbol, joinQualifiedName([segment.name]), this.indexes, namedAfter);
+                            namespace?.symbol, joinQualifiedName([segment.name]), this.indexes, namedAfter, uri);
                         resolved = result.symbol;
                         ambiguous = result.ambiguous;
                     }

@@ -8,9 +8,9 @@ import { SYSML_KEYWORDS } from '../utils/sysmlKeywords.js';
 import { joinQualifiedName, joinReference, scanQualifiedNames, splitQualifiedName, unquoteName as decodeName } from '../utils/identUtils.js';
 import { ElementRegistry } from './elementRegistry.js';
 import { IdRegistry } from './ids.js';
-import { buildSymbolIndexes, NamespaceResolver } from './namespaceResolver.js';
+import { buildSymbolIndexes, NamespaceResolver, type SymbolIndexes } from './namespaceResolver.js';
 import { Scope } from './scope.js';
-import { FilterExpr, ImportTarget, OwnedSpecialization, SysMLElementKind, SysMLSymbol, displayName, isAnonymous, isDefinition, isFlowUsage, isUsage as isUsageKind, escapedName, memberNamesOf } from './sysmlElements.js';
+import { FilterExpr, ImportTarget, OwnedSpecialization, ReferenceChain, SysMLElementKind, SysMLSymbol, displayName, isAnonymous, isDefinition, isFlowUsage, isUsage as isUsageKind, escapedName, memberNamesOf } from './sysmlElements.js';
 
 // ── ruleIndex-based lookup tables ───────────────────────────────────
 // These replace the toLowerCase() + string-comparison chains with O(1)
@@ -489,6 +489,10 @@ export class SymbolTable {
     private ids = new IdRegistry(this.owners, this.members);
     /** The model of the workspace by ID, built from the same declarations */
     private registry = new ElementRegistry(symbol => this.owners.get(symbol));
+    /** The indexes of `getAllSymbols()`'s current result, shared until the table changes (`getIndexes`) */
+    private sharedIndexes: { symbols: SysMLSymbol[]; indexes: SymbolIndexes } | undefined;
+    /** One resolver for every consumer, so they share its member tables for the same indexes */
+    private readonly resolver = new NamespaceResolver();
     /** All symbols indexed by URI for cross-file lookup */
     private symbolsByUri = new Map<string, SysMLSymbol[]>();
     /** All symbols indexed by simple name for O(1) lookup */
@@ -565,7 +569,8 @@ export class SymbolTable {
         this.resolveViewInheritance(uri);
         const declarations = this.symbolsByUri.get(uri) ?? [];
         this.ids.add(declarations);
-        this.registry.setDocument(uri, declarations);
+        // KerML 7.2.5.3: a document's body is its root namespace's, its imports among them.
+        this.registry.setDocument(uri, declarations, this.extractImportsFromBody(tree, SysMLv2Parser.RULE_packageBodyElement));
         this.refreshMergedPackages(declarations);
     }
 
@@ -636,8 +641,8 @@ export class SymbolTable {
         const effectiveNames: EffectiveNamesByUri = new Map();
         const named = this.getAllSymbolsIncludingDuplicates().filter(s => s.namingReference !== undefined);
         if (named.length === 0) return { effectiveNames, cycles: [] };
-        const indexes = buildSymbolIndexes(this.getAllSymbols());
-        const resolver = new NamespaceResolver();
+        const indexes = this.getIndexes();
+        const resolver = this.resolver;
         const features = new Map<SysMLSymbol, SysMLSymbol>();
         for (const symbol of named) {
             const feature = resolver.resolveNamingFeature(symbol, indexes);
@@ -673,6 +678,23 @@ export class SymbolTable {
     }
 
     /** Get a symbol by its `symbolId`; for a package, its merged view across documents. */
+    /**
+     * The indexes of the current symbols, with this table's registry, built once
+     * and shared by every consumer until the table changes. Name resolution
+     * caches its member tables per indexes, so consumers sharing them, with
+     * `getResolver`, resolve each namespace's members once.
+     */
+    getIndexes(): SymbolIndexes {
+        const symbols = this.getAllSymbols();
+        if (this.sharedIndexes?.symbols !== symbols) this.sharedIndexes = { symbols, indexes: buildSymbolIndexes(symbols, this.registry) };
+        return this.sharedIndexes.indexes;
+    }
+
+    /** The name resolver every consumer of `getIndexes` shares. */
+    getResolver(): NamespaceResolver {
+        return this.resolver;
+    }
+
     /** The model of the workspace by ID (`ElementRegistry`), from the same declarations as this table. */
     getElementRegistry(): ElementRegistry {
         return this.registry;
@@ -1094,6 +1116,7 @@ export class SymbolTable {
             documentation,
         };
         this.symbols.set(qualifiedName, merged);
+        this.allSymbolsCache = undefined;
 
         // If this qualifiedName is also in conflict with an incompatible-kind
         // sibling, any package-kind entry already in that conflict set is a
@@ -2113,10 +2136,13 @@ export class SymbolTable {
         // A rule's accessors return null for a part missing after a syntax error.
         const add = (kind: OwnedSpecialization['kind'], targets: (ParserRuleContext | null | undefined)[], notation?: TerminalNode | null): void => {
             for (const targetCtx of targets) {
-                const target = targetCtx && this.specializationTarget(targetCtx);
-                if (target) specializations.push(notation
-                    ? { kind, target, notation: notation.getText(), range: contextToRange(targetCtx) }
-                    : { kind, target, range: contextToRange(targetCtx) });
+                const parsed = targetCtx && this.specializationTarget(targetCtx);
+                if (!parsed) continue;
+                const { target, chain, conjugated } = parsed;
+                const range = contextToRange(targetCtx!);
+                specializations.push(notation
+                    ? { kind, target, notation: notation.getText(), range, chain, conjugated: conjugated || undefined }
+                    : { kind, target, range, chain, conjugated: conjugated || undefined });
             }
         };
         const visit = (node: ParserRuleContext): void => {
@@ -2163,15 +2189,16 @@ export class SymbolTable {
      * Its names are quoted as everywhere in the server (`joinReference`).
      * Undefined for a target missing after a syntax error.
      */
-    private specializationTarget(ctx: ParserRuleContext): string | undefined {
-        const chain = ctx.getRuleContexts(QualifiedNameContext).map(qualifiedName => ({
+    private specializationTarget(ctx: ParserRuleContext): { target: string; chain: ReferenceChain; conjugated: boolean } | undefined {
+        const written = ctx.getRuleContexts(QualifiedNameContext).map(qualifiedName => ({
             global: qualifiedName.DOLLAR() !== null,
             names: qualifiedName.getRuleContexts(NameContext).map(name => name.getText()),
         }));
         // A name missing after a syntax error has no text; an empty name is written `''`.
-        if (chain.length === 0 || chain.some(({ names }) => names.length === 0 || names.some(name => !name))) return undefined;
-        return joinReference(chain.map(({ global, names }) => ({ global, names: names.map(decodeName) })),
-            ctx instanceof ConjugatedPortTypingContext);
+        if (written.length === 0 || written.some(({ names }) => names.length === 0 || names.some(name => !name))) return undefined;
+        const chain = written.map(({ global, names }) => ({ global, names: names.map(decodeName) }));
+        const conjugated = ctx instanceof ConjugatedPortTypingContext;
+        return { target: joinReference(chain, conjugated), chain, conjugated };
     }
 
     /**

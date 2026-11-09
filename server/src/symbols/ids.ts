@@ -211,10 +211,26 @@ function compareDeclarationSites(a: SysMLSymbol, b: SysMLSymbol): number {
  * order documents are indexed in, so the same declarations give the same IDs
  * on every machine and in every session.
  */
+/** The UUIDs `RegistryIds` derived, by namespace and name, as the registry derives them again on every rebuild. */
+const registryUuids = new Map<string, string>();
+
+/** `uuidV5`, remembered: cleared when it grows past a bound, so it can't grow without one. */
+function registryUuid(namespace: string, name: string): string {
+    // A namespace is a UUID of fixed length, so the two can't run into each other.
+    const key = namespace + name;
+    let uuid = registryUuids.get(key);
+    if (uuid === undefined) {
+        if (registryUuids.size >= 500_000) registryUuids.clear();
+        uuid = uuidV5(namespace, name);
+        registryUuids.set(key, uuid);
+    }
+    return uuid;
+}
+
 export const RegistryIds = {
     /** A top-level package, one element however many documents declare it: its URL is the project's URL prefix and its name. */
     topLevelPackage(uri: string, name: string): string {
-        return uuidV5(NAMESPACE_URL, getUrlPrefix(uri) + encodeURIComponent(name));
+        return registryUuid(NAMESPACE_URL, getUrlPrefix(uri) + encodeURIComponent(name));
     },
     /**
      * Any other top-level element: its URL is the project's URL prefix, its
@@ -222,14 +238,14 @@ export const RegistryIds = {
      * its own (KerML 7.2.5.3).
      */
     topLevelElement(uri: string, segment: string): string {
-        return uuidV5(NAMESPACE_URL, `${getUrlPrefix(uri)}${encodeURIComponent(canonicalUri(uri))}/${encodeURIComponent(segment)}`);
+        return registryUuid(NAMESPACE_URL, `${getUrlPrefix(uri)}${encodeURIComponent(canonicalUri(uri))}/${encodeURIComponent(segment)}`);
     },
     /** A nested element: its path (KerML 8.3.2.1.2 `path()`) in the namespace of its top-level element's ID. */
     member(topLevelId: string, path: string): string {
-        return uuidV5(topLevelId, path);
+        return registryUuid(topLevelId, path);
     },
     /** A relationship its owner declares: its key (kind and target as written) in a namespace of the owner's own. */
     relationship(ownerId: string, key: string): string {
-        return uuidV5(uuidV5(ownerId, 'relationships'), key);
+        return registryUuid(registryUuid(ownerId, 'relationships'), key);
     },
 } as const;

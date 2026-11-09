@@ -1,0 +1,220 @@
+import { describe, expect, it } from 'vitest';
+import { parseDocument } from '../../server/src/parser/parseDocument.js';
+import type { RegistryRelationship } from '../../server/src/symbols/elementRegistry.js';
+import { SymbolTable } from '../../server/src/symbols/symbolTable.js';
+
+/** The targets of the relationships in `documents`, as `document:line` of the element each resolves to. */
+function targets(documents: Array<{ uri: string; text: string }>) {
+    const st = new SymbolTable();
+    st.buildAll(documents.map(({ uri, text }) => [uri, parseDocument(text)]));
+    const registry = st.getElementRegistry();
+    const indexes = st.getIndexes();
+    const resolver = st.getResolver();
+    const relationshipsAt = (uri: string, line: number, kind?: RegistryRelationship['kind']) => registry.getRelationships()
+        .filter(r => r.declarations.some(d => d.uri === uri && d.range.start.line === line) && (!kind || r.kind === kind));
+    return {
+        /** Where the target of the relationship of `kind` written at `line` of `uri` is declared, if it resolves. */
+        at(uri: string, line: number, kind?: RegistryRelationship['kind']): string | undefined {
+            const [relationship, ...others] = relationshipsAt(uri, line, kind);
+            expect(relationship, `a relationship at ${uri}:${line}`).toBeDefined();
+            expect(others, `one relationship at ${uri}:${line}`).toHaveLength(0);
+            const { targetId } = resolver.resolveTarget(relationship, indexes);
+            const element = targetId === undefined ? undefined : registry.getElement(targetId);
+            return element && `${element.declarations[0].uri}:${element.declarations[0].range.start.line}`;
+        },
+        /** Whether that relationship's target is ambiguous. */
+        ambiguousAt(uri: string, line: number, kind?: RegistryRelationship['kind']): boolean {
+            return resolver.resolveTarget(relationshipsAt(uri, line, kind)[0], indexes).ambiguous;
+        },
+    };
+}
+
+const doc = (text: string) => ({ uri: 'file:///w/a.sysml', text });
+const A = 'file:///w/a.sysml';
+
+describe('relationship targets (KerML 8.3.2.1.3, 8.2.3.5)', () => {
+    it('resolves SysML Table 4 "Redefinition" to the inherited feature, not a same-named one elsewhere', () => {
+        const { at } = targets([doc(`package Redefinition {
+    part def Part1;
+    part def Part1S :> Part1;
+    part def Part2;
+    part def Part2R :> Part2;
+    part part1 : Part1 [0..*] {
+        part part2 : Part2 [0..*];
+    }
+    part part1S : Part1S [1] :> part1 {
+        part part2R : Part2R :>> part2;
+        part :>> part2;
+    }
+    part other {
+        part part2 : Part2;
+    }
+}
+`)]);
+        expect(at(A, 9, 'redefinition')).toBe(`${A}:6`);
+        expect(at(A, 10, 'redefinition')).toBe(`${A}:6`);
+        expect(at(A, 9, 'typing')).toBe(`${A}:4`);
+        expect(at(A, 8, 'subsetting')).toBe(`${A}:5`);
+    });
+
+    it('resolves a typing and a subclassification by name, qualified name and quoted name', () => {
+        const { at } = targets([doc(`package P {
+    package Q { part def 'Wheel Hub'; part def W; }
+    part def S :> Q::W;
+    part a : Q::'Wheel Hub';
+    part b : S;
+}
+`)]);
+        expect(at(A, 2)).toBe(`${A}:1`);
+        expect(at(A, 3)).toBe(`${A}:1`);
+        expect(at(A, 4)).toBe(`${A}:2`);
+    });
+
+    it('resolves a general named like a package and a definition to the definition, in either order', () => {
+        for (const [first, second] of [['package A { part def x; }', 'part def A;'], ['part def A;', 'package A { part def x; }']]) {
+            const { at } = targets([doc(`package P {\n    ${first}\n    ${second}\n    part a : A;\n    part def D :> A;\n}\n`)]);
+            const definitionLine = first.startsWith('part def') ? 1 : 2;
+            expect(at(A, 3)).toBe(`${A}:${definitionLine}`);
+            expect(at(A, 4)).toBe(`${A}:${definitionLine}`);
+        }
+    });
+
+    it('resolves a subsetting\'s feature chain through the features of each feature\'s type', () => {
+        const { at } = targets([doc(`package P {
+    part def Engine;
+    part def Vehicle { part engine : Engine; }
+    part v : Vehicle;
+    part e :> v.engine;
+}
+`)]);
+        expect(at(A, 4)).toBe(`${A}:2`);
+    });
+
+    it('resolves a redefinition owned by a package by the basic resolution (KerML 8.2.3.5.2)', () => {
+        const { at } = targets([doc('package P {\n    part w;\n    part x :>> w;\n}\n')]);
+        expect(at(A, 2)).toBe(`${A}:1`);
+    });
+
+    it('resolves a global name in the global namespace, past a local element of that name', () => {
+        const { at } = targets([doc(`package G { part def T; }
+package P {
+    package G { part def T; }
+    part a : $::G::T;
+    part b : G::T;
+}
+`)]);
+        expect(at(A, 3)).toBe(`${A}:0`);
+        expect(at(A, 4)).toBe(`${A}:2`);
+    });
+
+    it('resolves a target declared in another document', () => {
+        const { at } = targets([
+            { uri: 'file:///w/b.sysml', text: 'package Lib { part def E; }\n' },
+            doc('package P {\n    private import Lib::*;\n    part e : E;\n}\n'),
+        ]);
+        expect(at(A, 2)).toBe('file:///w/b.sysml:0');
+        expect(at(A, 1, 'import')).toBe('file:///w/b.sysml:0');
+    });
+
+    it('gives no target for an unresolved, an ambiguous and a conjugated port typing target', () => {
+        const { at, ambiguousAt } = targets([doc(`package P {
+    part def A;
+    part def A;
+    port def Pt;
+    part a : A;
+    part u : Missing;
+    port p : ~Pt;
+}
+`)]);
+        expect(at(A, 4)).toBeUndefined();
+        expect(ambiguousAt(A, 4)).toBe(true);
+        expect(at(A, 5)).toBeUndefined();
+        expect(ambiguousAt(A, 5)).toBe(false);
+        expect(at(A, 6)).toBeUndefined();
+    });
+
+    it('follows a chain through a feature that only redefines, its name as written or quoted', () => {
+        const { at } = targets([doc(`package P {
+    part def W { part ib; }
+    part def B { part w : W; }
+    part def B2 :> B { part x :>> w; part y :>> 'w'; }
+    part b : B2;
+    part c :> b.x.ib;
+    part d :> b.y.ib;
+}
+`)]);
+        expect(at(A, 5)).toBe(`${A}:1`);
+        expect(at(A, 6)).toBe(`${A}:1`);
+    });
+
+    it('ends a self-referential and a mutually referential chain, leaving it unresolved', () => {
+        const { at } = targets([doc(`package P {
+    part a :>> a.x;
+    part p :>> q.x :> q;
+    part q :>> p.y :> p;
+}
+`)]);
+        expect(at(A, 1)).toBeUndefined();
+        expect(at(A, 2, 'redefinition')).toBeUndefined();
+        expect(at(A, 3, 'redefinition')).toBeUndefined();
+    });
+
+    it('resolves a chain repeating a feature through its own type (KerML 8.3.3.3.5)', () => {
+        const { at } = targets([doc(`package P {
+    part def N { part next : N; attribute val; }
+    part n : N;
+    part z :> n.next.next.val;
+}
+`)]);
+        expect(at(A, 3)).toBe(`${A}:1`);
+    });
+
+    it('resolves through circular specializations the same in every declaration order', () => {
+        const declarations = ['part def X :> Y { part a; }', 'part def Y :> X { part b; }', 'part x : X;'];
+        const orders = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+        for (const order of orders) {
+            const lines = order.map(i => declarations[i]);
+            const text = `package P {\n${lines.map(l => `    ${l}`).join('\n')}\n    part u :> x.a;\n    part v :> x.b;\n}\n`;
+            const { at } = targets([doc(text)]);
+            const lineOf = (i: number) => order.indexOf(i) + 1;
+            expect(at(A, 4), `order ${order}`).toBe(`${A}:${lineOf(0)}`);
+            expect(at(A, 5), `order ${order}`).toBe(`${A}:${lineOf(1)}`);
+        }
+    });
+
+    it('never resolves a feature to itself', () => {
+        const { at } = targets([doc('package P {\n    part def W { part w; }\n    part def V :> W { part w :>> w; }\n}\n')]);
+        expect(at(A, 2, 'redefinition')).toBe(`${A}:1`);
+    });
+});
+
+describe('relationship targets on the corpus', () => {
+    it('resolves every relationship of the standard library, examples and fixtures to an element, never a type to a package', async () => {
+        const { readdirSync, readFileSync } = await import('fs');
+        const { join, resolve } = await import('path');
+        const { pathToFileURL } = await import('url');
+        const { SysMLElementKind } = await import('../../server/src/symbols/sysmlElements.js');
+        const root = resolve(__dirname, '..', '..');
+        const files = ['sysml.library', 'examples', join('test', 'fixtures', 'valid')].flatMap(dir =>
+            readdirSync(join(root, dir), { withFileTypes: true, recursive: true })
+                .filter(entry => entry.isFile() && /\.(sysml|kerml)$/.test(entry.name))
+                .map(entry => join(entry.parentPath, entry.name)));
+        const st = new SymbolTable();
+        st.buildAll(files.map(file => [pathToFileURL(file).href, parseDocument(readFileSync(file, 'utf8'))]));
+        const registry = st.getElementRegistry();
+        const indexes = st.getIndexes();
+        const resolver = st.getResolver();
+        let resolved = 0;
+        for (const relationship of registry.getRelationships()) {
+            const { targetId } = resolver.resolveTarget(relationship, indexes);
+            if (targetId === undefined) continue;
+            resolved++;
+            const target = registry.getElement(targetId);
+            expect(target, relationship.target).toBeDefined();
+            if (relationship.kind === 'typing' || relationship.kind === 'specializes') {
+                expect(target!.kind, `${relationship.kind} ${relationship.target}`).not.toBe(SysMLElementKind.Package);
+            }
+        }
+        expect(resolved).toBeGreaterThan(registry.getRelationships().length / 2);
+    }, 120_000);
+});
