@@ -3259,6 +3259,55 @@ package Test {
             ]);
         });
 
+        it('flags a flow usage declared as a message (SysML 8.2.2.16 `Message`), by its production only', async () => {
+            const model = await getModelForText(`
+package Test {
+    part def P {
+        part a { event occurrence e; }
+        part b { event occurrence e; }
+        // A message from a to b: words in a comment are not a declaration.
+        message m1 of Signal from a.e to b.e;
+        message a.e to b.e;
+        message <m3> named3;
+        message of Signal;
+        message;
+        flow f1 from a.e to b.e;
+        flow 'message' from a.e to b.e;
+        succession flow f3 from a.e to b.e;
+        flow outer from a.e to b.e {
+            message inner from a.e to b.e;
+        }
+    }
+    occurrence o {
+        part c;
+        part d;
+        message m4 from c to d;
+    }
+}
+`, ['elements']);
+
+            const flows: any[] = [];
+            const visit = (elements: any[]) => elements.forEach(element => {
+                if (element.type === 'flow' || element.type === 'succession flow') flows.push(element);
+                visit(element.children ?? []);
+            });
+            visit(model.elements ?? []);
+
+            expect(flows.map(flow => [flow.type, flow.name || flow.displayName, flow.attributes.isMessage ?? false])).toEqual([
+                ['flow', 'm1', true],
+                ['flow', 'a.e→b.e', true],
+                ['flow', 'named3', true],
+                ['flow', 'message of Signal', true],
+                ['flow', expect.any(String), true],
+                ['flow', 'f1', false],
+                ['flow', 'message', false],
+                ['succession flow', 'f3', false],
+                ['flow', 'outer', false],
+                ['flow', 'inner', true],
+                ['flow', 'm4', true],
+            ]);
+        });
+
         it('should project flow types separately from named payload types and include succession edges', async () => {
             const model = await getModelForText(`
 package Test {

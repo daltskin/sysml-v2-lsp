@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- `sysml/model` marks a flow usage declared as a message with the attribute `isMessage: true` (SysML 8.2.2.16 `Message`), told apart by the production it was parsed from. Its `type` stays `flow`; a flow and a succession flow are unchanged.
+
 ### Fixed
 
 - `sysml/model` writes names that aren't basic names quoted, as KerML `escapedName()` does (KerML 8.3.2.1.2), in specialization targets, `resolvedTypes` and hotspot qualified names (`~'P-1'`, `Q::'Part Def'`). Reserved keywords are taken from the grammar, which departs from SysML 8.2.2.1.2 for `language`, `locale`, `crosses` and KerML-only keywords.
