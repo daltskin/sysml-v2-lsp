@@ -2710,22 +2710,24 @@ package Demo {
 }
 `, ['elements']);
                 expect(specializationsOf(model, ['Demo', 'Quoted Def'])).toEqual([['specializes', 'Base', ':>']]);
+                // A name spelled like a reserved keyword is quoted (SysML 7.2.2), one spelled like an unreserved keyword isn't.
                 expect(specializationsOf(model, ['Demo', 'p', 's1'])).toEqual([['subsetting', 'var', ':>']]);
-                expect(specializationsOf(model, ['Demo', 'p', 's2'])).toEqual([['subsetting', 'specializes', ':>']]);
-                expect(specializationsOf(model, ['Demo', 'p', 'specializes'])).toEqual([['redefinition', 'specializes', ':>>']]);
+                expect(specializationsOf(model, ['Demo', 'p', 's2'])).toEqual([['subsetting', "'specializes'", ':>']]);
+                expect(specializationsOf(model, ['Demo', 'p', 'specializes'])).toEqual([['redefinition', "'specializes'", ':>>']]);
                 expect(specializationsOf(model, ['Demo', 'p', 'var'])).toEqual([['redefinition', 'var', 'redefines']]);
-                // A name is quoted only where it is needed to split the target again.
-                expect(specializationsOf(model, ['Demo', 'p', 'q1'])).toEqual([['subsetting', 'dry mass', ':>'], ['subsetting', "'a::b'", ':>']]);
-                expect(specializationsOf(model, ['Demo', 'p', 'q2'])).toEqual([['redefinition', 'Base::dry mass', ':>>']]);
+                // A name that isn't a basic name is quoted, as KerML `escapedName()` writes it (8.3.2.1.2).
+                expect(specializationsOf(model, ['Demo', 'p', 'q1'])).toEqual([['subsetting', "'dry mass'", ':>'], ['subsetting', "'a::b'", ':>']]);
+                expect(specializationsOf(model, ['Demo', 'p', 'q2'])).toEqual([['redefinition', "Base::'dry mass'", ':>>']]);
                 expect(specializationsOf(model, ['Demo', 'p', 'q3'])).toEqual([['subsetting', 'm', ':>']]);
                 expect(specializationsOf(model, ['Demo', 'p', 'c1'])).toEqual([['subsetting', 'engine.cylinder', ':>']]);
-                expect(specializationsOf(model, ['Demo', 'p', 'c2'])).toEqual([['subsetting', "'my.engine'.the cylinder", ':>']]);
+                expect(specializationsOf(model, ['Demo', 'p', 'c2'])).toEqual([['subsetting', "'my.engine'.'the cylinder'", ':>']]);
                 expect(specializationsOf(model, ['Demo', 'p', 'cp'])).toEqual([['typing', '~P', undefined]]);
                 expect(specializationsOf(model, ['Demo', 'p', 'c3'])).toEqual([['subsetting', "'my.engine'", ':>']]);
                 expect(specializationsOf(model, ['Demo', 'p', 'c4'])).toEqual([['subsetting', "Base::'my.engine'", ':>']]);
                 expect(specializationsOf(model, ['Demo', 'p', 'cp2'])).toEqual([['typing', '~Demo::P', undefined]]);
-                // A conjugated port definition by its own name (SysML 8.3.12.3) stays quoted, apart from the conjugation `~P`.
-                expect(specializationsOf(model, ['Demo', 'p', 'cp3'])).toEqual([['typing', '~P-1', undefined]]);
+                // The `~` of a conjugated port typing is outside the quotes (SysML 7.12.3); a conjugated port
+                // definition by its own name (SysML 8.3.12.3) stays quoted, apart from the conjugation `~P`.
+                expect(specializationsOf(model, ['Demo', 'p', 'cp3'])).toEqual([['typing', "~'P-1'", undefined]]);
                 expect(specializationsOf(model, ['Demo', 'p', 'cp4'])).toEqual([['typing', "P::'~P'", undefined]]);
                 expect(specializationsOf(model, ['Demo', 'p', 'cp5'])).toEqual([['typing', "'~P'", undefined]]);
                 // Quoted short names, with and without a `.`, as targets and on the declaring element.
@@ -2986,6 +2988,136 @@ package Demo {
                 // An empty name (KerML 8.2.2.3) is a target too, written `''`.
                 expect(specializationsOf(model, ['Demo', 'p', 'q3'])).toEqual([['typing', "''", undefined]]);
             });
+
+            it('writes targets and qualified names as KerML escapedName() writes their names (KerML 8.3.2.1.2)', async () => {
+                const model = await getModelForText(`
+package Q {
+    port def 'P-1';
+    part def 'Part Def';
+    part def 'part';
+    part def 'Vehicle';
+    part def 'a.b';
+    part def 'Ω';
+    part def type;
+    part def 'Base 1';
+    part def 'Sub-1' :> 'Base 1';
+    part p1 {
+        port c : ~'P-1';
+        port t : Q::'P-1';
+        port u : ~Q::'P-1';
+    }
+    part x1 : 'Part Def';
+    part x2 : 'part';
+    part x3 : 'Vehicle';
+    part x4 : 'Ω';
+    part x5 : type;
+    part x6 : Q::'a.b';
+}
+`, ['elements', 'resolvedTypes']);
+                // SysML 7.12.3: the `~` of a conjugated port typing is outside the quotes.
+                expect(specializationsOf(model, ['Q', 'p1', 'c'])).toEqual([['typing', "~'P-1'", undefined]]);
+                expect(specializationsOf(model, ['Q', 'p1', 't'])).toEqual([['typing', "Q::'P-1'", undefined]]);
+                expect(specializationsOf(model, ['Q', 'p1', 'u'])).toEqual([['typing', "~Q::'P-1'", undefined]]);
+                expect(specializationsOf(model, ['Q', 'x1'])).toEqual([['typing', "'Part Def'", undefined]]);
+                // SysML 7.2.2: a reserved keyword and a non-ASCII name aren't basic names; an unreserved keyword is.
+                expect(specializationsOf(model, ['Q', 'x2'])).toEqual([['typing', "'part'", undefined]]);
+                expect(specializationsOf(model, ['Q', 'x4'])).toEqual([['typing', "'Ω'", undefined]]);
+                expect(specializationsOf(model, ['Q', 'x5'])).toEqual([['typing', 'type', undefined]]);
+                // A basic name written quoted is written as a basic name.
+                expect(specializationsOf(model, ['Q', 'x3'])).toEqual([['typing', 'Vehicle', undefined]]);
+                expect(specializationsOf(model, ['Q', 'x6'])).toEqual([['typing', "Q::'a.b'", undefined]]);
+
+                const resolved = model.resolvedTypes!;
+                expect(Object.keys(resolved).filter(key => /^Q::[^:]+$/.test(key) && resolved[key].kind === 'part def').sort()).toEqual(
+                    ["Q::'Base 1'", "Q::'Part Def'", "Q::'Sub-1'", "Q::'a.b'", "Q::'part'", "Q::'Ω'", 'Q::Vehicle', 'Q::type'].sort());
+                expect(resolved["Q::'P-1'"].qualifiedName).toBe("Q::'P-1'");
+                expect(resolved["Q::'Sub-1'"]).toMatchObject({ simpleName: 'Sub-1', specializes: ["'Base 1'"], specializationChain: ["'Base 1'"] });
+                expect(resolved['Q::x1']).toMatchObject({ qualifiedName: 'Q::x1', specializes: ["'Part Def'"] });
+
+                const hotspots = model.stats!.complexity!.hotspots.map(h => h.qualifiedName);
+                expect(hotspots).toContain("Q::'Part Def'");
+                expect(hotspots).toContain("Q::'part'");
+                expect(hotspots).not.toContain('Q::Part Def');
+            });
+
+            it('quotes each target name in the keyword and the symbol notation of every specialization kind', async () => {
+                const model = await getModelForText(`
+package 'Top Pkg' {
+    part def 'Base 1';
+    part def 'part';
+    part def S1 :> 'Base 1';
+    part def S2 specializes 'part';
+    part def H { part 'p-1'; part 'part'; ref part 'r 1'; part 'type'; }
+    part h1 : H {
+        part a :> 'p-1';
+        part b subsets 'part';
+        part c :>> 'p-1';
+        part d redefines 'part';
+        part e ::> 'r 1';
+        part f references 'r 1';
+        part g defined by 'Base 1';
+        part k typed by 'part';
+        part m : type;
+    }
+}
+`, ['elements']);
+                const pkg = ['Top Pkg'];
+                expect(specializationsOf(model, [...pkg, 'S1'])).toEqual([['specializes', "'Base 1'", ':>']]);
+                expect(specializationsOf(model, [...pkg, 'S2'])).toEqual([['specializes', "'part'", 'specializes']]);
+                expect(specializationsOf(model, [...pkg, 'h1', 'a'])).toEqual([['subsetting', "'p-1'", ':>']]);
+                expect(specializationsOf(model, [...pkg, 'h1', 'b'])).toEqual([['subsetting', "'part'", 'subsets']]);
+                expect(specializationsOf(model, [...pkg, 'h1', 'c'])).toEqual([['redefinition', "'p-1'", ':>>']]);
+                expect(specializationsOf(model, [...pkg, 'h1', 'd'])).toEqual([['redefinition', "'part'", 'redefines']]);
+                expect(specializationsOf(model, [...pkg, 'h1', 'e'])).toEqual([['referenceSubsetting', "'r 1'", '::>']]);
+                expect(specializationsOf(model, [...pkg, 'h1', 'f'])).toEqual([['referenceSubsetting', "'r 1'", 'references']]);
+                expect(specializationsOf(model, [...pkg, 'h1', 'g'])).toEqual([['typing', "'Base 1'", undefined]]);
+                expect(specializationsOf(model, [...pkg, 'h1', 'k'])).toEqual([['typing', "'part'", undefined]]);
+                expect(specializationsOf(model, [...pkg, 'h1', 'm'])).toEqual([['typing', 'type', undefined]]);
+            });
+
+            it('quotes the names of a feature chain, global or not, with `$::` and `.` outside the quotes', async () => {
+                const model = await getModelForText(`
+package 'Top Pkg' {
+    part def 'B C' { part 'e-f'; part d; part 'part'; }
+    part v : 'B C';
+    part h : 'B C';
+    part w1 :> v.'e-f';
+    part w2 :> h.'part';
+    part w3 :> $::'Top Pkg'::v.'e-f';
+    part w4 :> $::'Top Pkg'::v.d;
+}
+`, ['elements']);
+                const pkg = ['Top Pkg'];
+                expect(specializationsOf(model, [...pkg, 'w1'])).toEqual([['subsetting', "v.'e-f'", ':>']]);
+                expect(specializationsOf(model, [...pkg, 'w2'])).toEqual([['subsetting', "h.'part'", ':>']]);
+                expect(specializationsOf(model, [...pkg, 'w3'])).toEqual([['subsetting', "$::'Top Pkg'::v.'e-f'", ':>']]);
+                expect(specializationsOf(model, [...pkg, 'w4'])).toEqual([['subsetting', "$::'Top Pkg'::v.d", ':>']]);
+            });
+
+            it('keeps a short name unquoted, and quotes it in the qualified name of an element with only a short name', async () => {
+                const model = await getModelForText(`
+package Q {
+    part def <'s-1'> 'Long Name';
+    part def <'only-short'>;
+}
+`, ['elements', 'resolvedTypes']);
+                const children = model.elements![0].children!;
+                expect(children.map(e => [e.name, e.shortName])).toEqual([['Long Name', 's-1'], ['', 'only-short']]);
+                expect(model.resolvedTypes!["Q::'Long Name'"]).toMatchObject({ simpleName: 'Long Name', shortName: 's-1' });
+                expect(model.resolvedTypes!["Q::'only-short'"]).toMatchObject({ qualifiedName: "Q::'only-short'" });
+            });
+
+            it('keeps names and simple names unquoted', async () => {
+                const model = await getModelForText(`
+package Q {
+    part def 'Part Def';
+    part def 'My Part';
+}
+`, ['elements', 'resolvedTypes']);
+                const children = model.elements![0].children!;
+                expect(children.map(e => e.name)).toEqual(['Part Def', 'My Part']);
+                expect(model.resolvedTypes!["Q::'Part Def'"].simpleName).toBe('Part Def');
+            });
         });
 
         it('should extract visibility (public, private, protected)', async () => {
@@ -3127,6 +3259,55 @@ package Test {
             ])).toEqual([
                 ['source', 'target', 'Payload'],
                 ['source', 'target', 'OtherPayload'],
+            ]);
+        });
+
+        it('flags a flow usage declared as a message (SysML 8.2.2.16 `Message`), by its production only', async () => {
+            const model = await getModelForText(`
+package Test {
+    part def P {
+        part a { event occurrence e; }
+        part b { event occurrence e; }
+        // A message from a to b: words in a comment are not a declaration.
+        message m1 of Signal from a.e to b.e;
+        message a.e to b.e;
+        message <m3> named3;
+        message of Signal;
+        message;
+        flow f1 from a.e to b.e;
+        flow 'message' from a.e to b.e;
+        succession flow f3 from a.e to b.e;
+        flow outer from a.e to b.e {
+            message inner from a.e to b.e;
+        }
+    }
+    occurrence o {
+        part c;
+        part d;
+        message m4 from c to d;
+    }
+}
+`, ['elements']);
+
+            const flows: any[] = [];
+            const visit = (elements: any[]) => elements.forEach(element => {
+                if (element.type === 'flow' || element.type === 'succession flow') flows.push(element);
+                visit(element.children ?? []);
+            });
+            visit(model.elements ?? []);
+
+            expect(flows.map(flow => [flow.type, flow.name || flow.displayName, flow.attributes.isMessage ?? false])).toEqual([
+                ['flow', 'm1', true],
+                ['flow', 'a.e→b.e', true],
+                ['flow', 'named3', true],
+                ['flow', 'message of Signal', true],
+                ['flow', expect.any(String), true],
+                ['flow', 'f1', false],
+                ['flow', 'message', false],
+                ['succession flow', 'f3', false],
+                ['flow', 'outer', false],
+                ['flow', 'inner', true],
+                ['flow', 'm4', true],
             ]);
         });
 

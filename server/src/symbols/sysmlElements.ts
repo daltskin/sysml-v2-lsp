@@ -1,5 +1,4 @@
 import { Range } from 'vscode-languageserver/node';
-import { quoteName } from '../utils/identUtils.js';
 
 /**
  * Kinds of SysML elements tracked in the symbol table.
@@ -169,8 +168,11 @@ export interface SysMLSymbol {
     source?: string;
     /** Target reference for a transition usage. */
     target?: string;
-    /** Payload and endpoints declared by a flow usage. */
-    flowDetails?: { itemType?: string; payloadDeclared?: boolean; source?: string; target?: string };
+    /**
+     * Payload and endpoints declared by a flow usage, and `isMessage` when it is declared as a
+     * message (SysML 8.2.2.16 `Message`), not as a flow.
+     */
+    flowDetails?: { itemType?: string; payloadDeclared?: boolean; source?: string; target?: string; isMessage?: boolean };
     /** Accepter text used to trigger a transition usage. */
     transitionTrigger?: string;
     /** Explicit succession edges owned by an action definition or usage. */
@@ -283,16 +285,6 @@ export type FilterExpr =
  */
 export function isAnonymous(symbol: SysMLSymbol): boolean {
     return !symbol.name && !symbol.shortName;
-}
-
-/**
- * KerML 8.3.2.1.2 `escapedName()`: the name, else the short name, as written
- * in the notation (quoted and escaped unless a basic name); undefined for an
- * anonymous element. For identifiers only, never instead of either name.
- */
-export function escapedName(symbol: SysMLSymbol): string | undefined {
-    const name = symbol.name || symbol.shortName;
-    return name ? quoteName(name) : undefined;
 }
 
 /**

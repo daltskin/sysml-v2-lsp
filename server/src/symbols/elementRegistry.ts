@@ -1,8 +1,9 @@
 import { Range } from 'vscode-languageserver/node';
 import { canonicalUri } from '../utils/documentUri.js';
+import { escapedName } from '../utils/identUtils.js';
 import { getUrlPrefix } from '../utils/uuid.js';
 import { RegistryIds } from './ids.js';
-import { ImportTarget, OwnedSpecialization, ReferenceChain, SysMLElementKind, SysMLSymbol, escapedName } from './sysmlElements.js';
+import { ImportTarget, OwnedSpecialization, ReferenceChain, SysMLElementKind, SysMLSymbol, isAnonymous, nameText } from './sysmlElements.js';
 
 /** Where an element or relationship is declared. */
 export interface Declaration {
@@ -308,7 +309,7 @@ export class ElementRegistry {
                     const suffix = index === 0 ? '' : `#${index + 1}`;
                     const symbol = root.symbols[0];
                     const id = RegistryIds.topLevel(symbol.uri, segment, suffix);
-                    const qualifiedPath = escapedName(symbol) !== undefined ? segment : undefined;
+                    const qualifiedPath = writtenName(symbol) !== undefined ? segment : undefined;
                     if (this.place(root, id, segment + suffix, qualifiedPath, id)) changed.push(root);
                 });
             }
@@ -333,7 +334,7 @@ export class ElementRegistry {
                 owner.members.sort(byFirstDeclaration);
                 for (const member of owner.members) {
                     const segment = segmentOf(member.symbols[0]);
-                    const qualifiedPath = escapedName(member.symbols[0]) !== undefined && owner.qualifiedPath !== undefined
+                    const qualifiedPath = writtenName(member.symbols[0]) !== undefined && owner.qualifiedPath !== undefined
                         ? `${owner.qualifiedPath}::${segment}` : undefined;
                     entries.push({ node: member, path: qualifiedPath ?? `${owner.path}/${segment}`, qualifiedPath });
                 }
@@ -434,7 +435,7 @@ function byFirstDeclaration(a: Node, b: Node): number {
  * project (one URL prefix) are one package.
  */
 function packageKey(symbol: SysMLSymbol, topLevel = false): string | undefined {
-    const name = escapedName(symbol);
+    const name = writtenName(symbol);
     if (symbol.kind !== SysMLElementKind.Package || name === undefined) return undefined;
     return `${topLevel ? `${getUrlPrefix(symbol.uri)}\0` : ''}${symbol.isLibraryPackage ? 'library ' : ''}${name}`;
 }
@@ -452,9 +453,18 @@ function groupByPath<T extends { node: Node; path: string }>(entries: readonly T
     return groups;
 }
 
+/**
+ * `symbol`'s name as KerML `escapedName()` writes it (KerML 8.3.2.1.2): its
+ * name, else its short name, quoted unless a basic name; undefined for an
+ * anonymous element.
+ */
+function writtenName(symbol: SysMLSymbol): string | undefined {
+    return isAnonymous(symbol) ? undefined : escapedName(nameText(symbol));
+}
+
 /** An element's own path segment: its name as written, or, anonymous, its declaration as written. */
 function segmentOf(symbol: SysMLSymbol): string {
-    return escapedName(symbol) ?? symbol.declaration ?? symbol.kind;
+    return writtenName(symbol) ?? symbol.declaration ?? symbol.kind;
 }
 
 function compare(a: string, b: string): number {

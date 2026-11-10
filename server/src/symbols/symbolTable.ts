@@ -1366,6 +1366,9 @@ export class SymbolTable {
             payloadDeclared: payload !== undefined,
             source: endpoints[0],
             target: endpoints[1],
+            // A message is a flow usage declared by the `Message` production (SysML 8.2.2.16),
+            // told apart by the rule it was parsed from, not by its text.
+            ...(ctx.ruleIndex === SysMLv2Parser.RULE_message ? { isMessage: true } : {}),
         };
     }
 
@@ -1957,8 +1960,8 @@ export class SymbolTable {
     /**
      * The general type or feature a specialization's target rule names: its
      * qualified name, or its feature chain (`v.engine`), with a global `$::`
-     * (KerML 7.2.2) and a conjugated port typing's `~` (`~P`, SysML 8.3.12.3).
-     * Its names are quoted as everywhere in the server (`joinReference`).
+     * (KerML 7.2.5.1) and a conjugated port typing's `~` (`~P`, SysML 8.3.12.3).
+     * Its names are written as in the textual notation (`joinReference`).
      * Undefined for a target missing after a syntax error.
      */
     private specializationTarget(ctx: ParserRuleContext): { target: string; chain: ReferenceChain; conjugated: boolean } | undefined {

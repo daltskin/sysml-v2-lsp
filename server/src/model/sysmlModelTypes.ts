@@ -83,7 +83,7 @@ export interface SysMLModelResult {
     /** Pre-extracted activity diagrams (when scope includes 'activityDiagrams'). */
     activityDiagrams?: ActivityDiagramDTO[];
 
-    /** Resolved type information keyed by element path (when scope includes 'resolvedTypes'). */
+    /** Resolved type information keyed by qualified name, as KerML 8.3.2.1.2 represents it (when scope includes 'resolvedTypes'). */
     resolvedTypes?: Record<string, ResolvedTypeDTO>;
 
     /** Semantic diagnostics (when scope includes 'diagnostics'). */
@@ -223,6 +223,8 @@ export interface SysMLElementDTO {
      *   itemType      – Payload type for a flow usage
      *   flowSource    – Source feature path for a flow usage
      *   flowTarget    – Target feature path for a flow usage
+     *   isMessage     – true for a flow usage declared as a message (`message`,
+     *                   SysML 8.2.2.16 `Message`); a flow's `type` is 'flow' either way
      *   direction     – Feature direction: 'in' | 'out' | 'inout'
      *   multiplicity  – Multiplicity string (e.g., "0..1", "1..*")
      *   ordered       – true when declared `ordered`
@@ -279,7 +281,10 @@ export interface RelationshipDTO {
      */
     symbolId?: string;
 
-    /** Target element name. */
+    /**
+     * Target element name. For a specialization, the reference as in the textual notation, each
+     * name as KerML `escapedName()` writes it (KerML 8.3.2.1.2).
+     */
     target: string;
 
     /**
@@ -408,6 +413,7 @@ export interface ActivityStateDTO {
 // ---------------------------------------------------------------------------
 
 export interface ResolvedTypeDTO {
+    /** As KerML `qualifiedName` represents it (8.3.2.1.2): each segment name as `escapedName()` writes it. */
     qualifiedName: string;
     simpleName: string;
     /** Its short name, if it has one; `simpleName` is empty when it has only a short name. */
