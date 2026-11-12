@@ -327,6 +327,44 @@ describe('navigation resolves a name as `sysml/model` does', () => {
     });
 });
 
+describe('navigation through a package and a same-named definition, in either declaration order', () => {
+    /** Whether navigation finds no single element for the token at `needle` (`offset` into it) of `text`. */
+    async function navigationAt(text: string, needle: string, offset: number) {
+        const { DocumentManager } = await import('../../server/src/documentManager.js');
+        const { NameReferences } = await import('../../server/src/symbols/nameReferences.js');
+        const { TextDocument } = await import('vscode-languageserver-textdocument');
+        const dm = new DocumentManager();
+        dm.parse(TextDocument.create('file:///w/a.sysml', 'sysml', 1, text));
+        const index = text.indexOf(needle) + offset;
+        const before = text.slice(0, index).split('\n');
+        const reference = new NameReferences(dm).at('file:///w/a.sysml', { line: before.length - 1, character: before[before.length - 1].length });
+        return { symbol: reference?.symbol && `${reference.symbol.kind}:${reference.symbol.range.start.line}`, ambiguous: reference?.isAmbiguous ?? false };
+    }
+
+    const orders = [['package K { part def Inner; }', 'part def K { part def Inner; }'], ['part def K { part def Inner; }', 'package K { part def Inner; }']];
+
+    it('finds no single element for a qualified name each of them owns the last name of', async () => {
+        for (const [first, second] of orders) {
+            const text = `package W {\n    ${first}\n    ${second}\n    part y : K::Inner;\n}\n`;
+            expect(await navigationAt(text, 'K::Inner', 3), first).toEqual({ symbol: undefined, ambiguous: true });
+            expect(await navigationAt(text, 'K::Inner', 0), first).toEqual({ symbol: undefined, ambiguous: true });
+        }
+    });
+
+    it('finds no single element for an import of both, though the import imports from each', async () => {
+        for (const [first, second] of orders) {
+            const text = `package W {\n    ${first}\n    ${second}\n    package U { private import K::*; part u : Inner; }\n}\n`;
+            expect(await navigationAt(text, 'K::*', 0), first).toEqual({ symbol: undefined, ambiguous: true });
+        }
+    });
+
+    it('goes to the one element an import names, and resolves a name in its filter as a reference', async () => {
+        const text = 'package W {\n    metadata def K;\n    package L { part def a; }\n    package U { private import L::*[@K]; }\n}\n';
+        expect(await navigationAt(text, 'L::*', 0)).toEqual({ symbol: 'package:2', ambiguous: false });
+        expect(await navigationAt(text, '@K', 1)).toEqual({ symbol: 'metadata def:1', ambiguous: false });
+    });
+});
+
 describe('duplicate definitions over every declaration of a namespace (KerML 8.3.2.4.3)', () => {
     /** The `duplicate-definition` diagnostics of each document, as `line message`. */
     async function duplicates(documents: Array<{ uri: string; text: string }>): Promise<Record<string, string[]>> {

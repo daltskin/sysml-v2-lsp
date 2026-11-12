@@ -247,6 +247,35 @@ describe('relationship targets through imports of a namespace whose table is sti
     });
 });
 
+describe('relationship targets naming more than one element', () => {
+    it('leaves a qualified general reached through a package and a same-named definition owning that name each ambiguous, in either order', () => {
+        for (const order of [['package K { part def Inner; }', 'part def K { part def Inner; }'], ['part def K { part def Inner; }', 'package K { part def Inner; }']]) {
+            const { at, ambiguousAt } = targets([doc(`package W {\n    ${order[0]}\n    ${order[1]}\n    part y : K::Inner;\n}\n`)]);
+            expect(at(A, 3), order[0]).toBeUndefined();
+            expect(ambiguousAt(A, 3), order[0]).toBe(true);
+        }
+    });
+
+    it('still resolves a qualified general reached through only one of them, and an import through both', () => {
+        const { at } = targets([doc(`package W {
+    package K { part def Only; }
+    part def K { part def Inner; }
+    part y : K::Only;
+    part z : K::Inner;
+    package U {
+        private import K::*;
+        part u : Only;
+        part v : Inner;
+    }
+}
+`)]);
+        expect(at(A, 3)).toBe(`${A}:1`);
+        expect(at(A, 4)).toBe(`${A}:2`);
+        expect(at(A, 7)).toBe(`${A}:1`);
+        expect(at(A, 8)).toBe(`${A}:2`);
+    });
+});
+
 describe('relationship targets of a type specializing itself (KerML 8.2.3.5.1, 8.2.3.5.2)', () => {
     it('resolves a definition specializing itself to itself, and a nested one of the outer\'s name to the nested one', () => {
         const { at } = targets([doc('package O {\n    part def S :> S;\n    part def A {\n        part def A :> A;\n    }\n}\n')]);

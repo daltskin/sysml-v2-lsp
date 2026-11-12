@@ -4,22 +4,18 @@
 
 ### Added
 
-- `sysml/model` reports the element a specialization's target resolves to as `targetId` (its general), next to the target as written, in `elements` and `relationships`. It is absent when the target is unresolved or ambiguous, for a conjugated port typing (`~P`), and for a target in the standard library, whose elements have no `symbolId`.
-- `sysml/model` gives every node of a package declared more than once the same `symbolId`, and lists each of its declarations in the workspace as `declarations`.
-- The `initialize` result reports how symbol IDs are derived, as `sysml.symbolIdScheme` (`element-registry/1`, which gives the same symbol IDs as before), so a client that stores them knows when a release changes them.
+- `sysml/model` reports `targetId`, the `symbolId` of the element a specialization's target resolves to. It is absent when the target is unresolved, resolves to more than one element, is a conjugated port typing (`~P`) or is in the standard library.
+- A package declared more than once has one `symbolId` in `sysml/model`, and lists its `declarations`.
+- The `initialize` result reports how symbol IDs are derived, as `sysml.symbolIdScheme` (`element-registry/1`; IDs are unchanged).
 
 ### Fixed
 
-- An import written at the top level of a document applies to the top-level elements of every document (SysML 7.5.5); it was ignored.
-- Two package declarations with the same name in one namespace of one document keep the imports, documentation and metadata of both, not only of the second.
-- Each of two same-named declarations of another kind in one namespace is a namespace of its own: a reference from inside one resolves to its own member, `sysml/model`'s tree lists only each one's own children, and the definitions inside each are checked for duplicates apart. Their members were pooled.
-- A name through a package and a same-named definition declared after it (`A::B`) resolves; the package had lost its entry.
-- A specialization naming a package and a same-named definition specializes the definition (KerML 8.3.3.1.8), also when the package is declared first.
-- A name imported through a package that re-exports it, at the top level, in a nested package or through mutual public imports, resolves whatever the declaration order, document order and order of the requests: a namespace's members were cached from another namespace's table before that one was complete.
-- Go to definition, hover and references resolve a name as `sysml/model` does: a general named like a package and a definition goes to the definition, and a qualified name goes through the qualifier having its last name, in either declaration order. They went to the one declared first.
-- A type specializing itself (`part def S :> S;`), or a feature subsetting a feature of its own name in its owning type, resolves to itself, as the basic name resolution gives it (KerML 8.2.3.5.1, 8.2.3.5.2); only a usage named after its reference (`perform a`) never resolves to itself. It resolved to an outer element of that name, or not at all.
-- The duplicate-definition check counts the definitions of a namespace in every document declaring it, the root namespace included, so each document reports the same count.
-- A feature chain through a feature that only redefines (`b.x.ib` with `x :>> w`) and a redefinition owned by a package resolve: a type's generals come from its parsed specializations, not from type names read from the text.
+- A top-level import applies to the top-level elements of every document (SysML 7.5.5); it was ignored.
+- Each of two same-named declarations in one namespace keeps its own imports and members; they were pooled or lost.
+- A qualified name through a package and a same-named definition resolves through each, and a general naming both is the definition (KerML 8.3.3.1.8).
+- Go to definition, hover and references resolve names as `sysml/model` does.
+- The duplicate definition check counts a namespace's definitions in every document declaring it, not only in one.
+- A feature chain through a feature that only redefines, and a redefinition owned by a package, resolve.
 
 ## [0.43.0]
 

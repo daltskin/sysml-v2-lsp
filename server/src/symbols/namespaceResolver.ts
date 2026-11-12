@@ -319,6 +319,13 @@ export interface TargetResolution {
     readonly ambiguous: boolean;
 }
 
+/**
+ * How a name is resolved (`NamespaceResolver.resolveSegmentsIn`): as a
+ * reference, as the general of a typing or specialization, or as an import's
+ * target.
+ */
+export type ResolutionMode = 'reference' | 'general' | 'import';
+
 /** A result of a qualified name's resolution, with the result of its qualification part it was reached through. */
 interface PathStep {
     readonly symbol: SysMLSymbol;
@@ -443,8 +450,8 @@ export class NamespaceResolver {
     private targetOf(relationship: RegistryRelationship, owner: RegistryElement, declaring: SysMLSymbol, indexes: SymbolIndexes): NameResolution {
         if (relationship.kind === 'import') {
             // An import's target is resolved from the importing namespace outward (SysML 7.5.3).
-            const { symbols, ambiguous } = this.resolveAll(owner, relationship.target, indexes, undefined, true);
-            return ambiguous || symbols.length > 1 ? { ambiguous: true } : { symbol: symbols[0], ambiguous: false };
+            const segments = this.resolveSegments(owner, splitQualifiedName(relationship.target), indexes, undefined, 'import');
+            return segments[segments.length - 1];
         }
         const chain = relationship.chain;
         if (!chain || chain.length === 0 || relationship.conjugated) return { ambiguous: false };
@@ -452,7 +459,7 @@ export class NamespaceResolver {
         const single = chain.length === 1;
         if ((relationship.kind === 'typing' || relationship.kind === 'specializes') && single) {
             const start = first.global ? GLOBAL_NAMESPACE : this.owningScope(declaring, indexes);
-            const segments = this.resolveSegments(start, first.names, indexes, this.namedAfter(declaring), true);
+            const segments = this.resolveSegments(start, first.names, indexes, this.namedAfter(declaring), 'general');
             return segments[segments.length - 1];
         }
         if (relationship.kind === 'redefinition' && single && !first.global) {
@@ -729,17 +736,18 @@ export class NamespaceResolver {
     /**
      * Resolve qualified name `names` from `start` (none: the root namespace)
      * to one element, by segment: each segment's element the one the name's
-     * result is reached through. As `resolveFrom`, or, for the general of a
-     * typing or specialization, as `targetOf` does: a type, never a package
-     * (KerML 8.3.3.1.8 `general : Type`), through each qualifier.
+     * result is reached through. A `reference` as `resolveFrom` does; the
+     * `general` of a typing or specialization a type, never a package (KerML
+     * 8.3.3.1.8 `general : Type`); an `import` target as `applyImport` does,
+     * through each qualifier. More than one result is ambiguous.
      */
     private resolveSegments(
         start: NamespaceScope | undefined, names: readonly string[], indexes: SymbolIndexes,
-        excluding: SysMLSymbol | undefined, general: boolean,
+        excluding: SysMLSymbol | undefined, mode: ResolutionMode,
     ): NameResolution[] {
-        const { steps, ambiguous, reached } = this.resolvePath(start, names, indexes, excluding, general);
+        const { steps, ambiguous, reached } = this.resolvePath(start, names, indexes, excluding, mode !== 'reference');
         if (ambiguous) return names.map(() => ({ ambiguous: true }));
-        const results = general ? steps.filter(step => step.symbol.kind !== SysMLElementKind.Package).slice(0, 1) : steps;
+        const results = mode === 'general' ? steps.filter(step => step.symbol.kind !== SysMLElementKind.Package) : steps;
         if (results.length > 1) return names.map(() => ({ ambiguous: true }));
         const segments: NameResolution[] = names.map((_, index) =>
             // Unresolved: each qualifier still the one element the name resolved to up to it, if one.
@@ -757,14 +765,15 @@ export class NamespaceResolver {
      * Resolve the qualified name `names` written in `namespace` (none: at the
      * top level), each segment to the element the name is reached through, as
      * `resolveReferenceIn` does, or, for the general of a typing or
-     * specialization, as `resolveTarget` does. `excluding` as there.
+     * specialization and for an import's target, as `resolveTarget` does.
+     * `excluding` as there.
      */
     resolveSegmentsIn(
         namespace: SysMLSymbol | undefined, names: readonly string[], indexes: SymbolIndexes,
-        excluding: SysMLSymbol | undefined, general: boolean,
+        excluding: SysMLSymbol | undefined, mode: ResolutionMode,
     ): NameResolution[] {
         const scope = namespace ? this.scopeOf(namespace, indexes) : undefined;
-        return this.resolveSegments(scope, names, indexes, excluding, general);
+        return this.resolveSegments(scope, names, indexes, excluding, mode);
     }
 
     /**

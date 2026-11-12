@@ -133,6 +133,11 @@ export class ElementRegistry {
         if (this.documents.has(uri)) this.update([uri], []);
     }
 
+    /** The imports at the top level of document `uri`. */
+    getRootImports(uri: string): readonly ImportTarget[] {
+        return this.rootImports.get(canonicalUri(uri)) ?? [];
+    }
+
     /** The imports written at the top level of every document, by document URI: those of the root namespace. */
     getAllRootImports(): readonly ImportTarget[] {
         return [...this.rootImports].sort(([a], [b]) => compare(a, b)).flatMap(([, imports]) => imports);
