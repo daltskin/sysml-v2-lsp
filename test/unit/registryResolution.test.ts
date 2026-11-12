@@ -251,3 +251,119 @@ package Y { part def y; }
         for (const s of all) expect(st.getSymbolById(s.symbolId)).toBe(s);
     });
 });
+
+describe('navigation resolves a name as `sysml/model` does', () => {
+    /** Each document parsed, and what the token at `needle` (its `n`th occurrence, `offset` into it) resolves to. */
+    async function navigation(documents: Array<{ uri: string; text: string }>) {
+        const { DocumentManager } = await import('../../server/src/documentManager.js');
+        const { NameReferences } = await import('../../server/src/symbols/nameReferences.js');
+        const { TextDocument } = await import('vscode-languageserver-textdocument');
+        const dm = new DocumentManager();
+        for (const { uri, text } of documents) dm.parse(TextDocument.create(uri, 'sysml', 1, text));
+        const [{ uri, text }] = documents;
+        const positionOf = (needle: string, offset: number) => {
+            const index = text.indexOf(needle) + offset;
+            const before = text.slice(0, index).split('\n');
+            return { line: before.length - 1, character: before[before.length - 1].length };
+        };
+        const references = new NameReferences(dm);
+        return {
+            /** The element the token resolves to, as its kind and line. */
+            at(needle: string, offset = 0): string | undefined {
+                const symbol = references.at(uri, positionOf(needle, offset))?.symbol;
+                return symbol && `${symbol.kind}:${symbol.range.start.line}`;
+            },
+            /** The lines of the references to the element declared at `needle`. */
+            to(needle: string, offset = 0): number[] {
+                const symbol = references.at(uri, positionOf(needle, offset))?.symbol;
+                return symbol ? references.to(symbol, false).map(r => r.range.start.line).sort((a, b) => a - b) : [];
+            },
+        };
+    }
+
+    const packageFirst = `package Q {
+    package B { part def b; }
+    part def B { part bb; }
+    part def C :> B;
+    part y : B;
+    part z :> B::bb;
+    part x : B::b;
+}
+`;
+    const definitionFirst = `package Q {
+    part def B { part bb; }
+    package B { part def b; }
+    part def C :> B;
+    part y : B;
+    part z :> B::bb;
+    part x : B::b;
+}
+`;
+
+    it('resolves a general named like a package and a definition to the definition, in either order (KerML 8.3.3.1.8)', async () => {
+        for (const [text, definitionLine] of [[packageFirst, 2], [definitionFirst, 1]] as const) {
+            const { at } = await navigation([{ uri: 'file:///w/a.sysml', text }]);
+            expect(at(':> B;', 3)).toBe(`part def:${definitionLine}`);
+            expect(at(': B;', 2)).toBe(`part def:${definitionLine}`);
+        }
+    });
+
+    it('resolves a qualified name through the qualifier having its last name, and the qualifier to that one', async () => {
+        for (const [text, definitionLine, packageLine] of [[packageFirst, 2, 1], [definitionFirst, 1, 2]] as const) {
+            const { at } = await navigation([{ uri: 'file:///w/a.sysml', text }]);
+            expect(at('B::bb', 3)).toBe(`part:${definitionLine}`);
+            expect(at('B::bb', 0)).toBe(`part def:${definitionLine}`);
+            expect(at('B::b;', 3)).toBe(`part def:${packageLine}`);
+            expect(at('B::b;', 0)).toBe(`package:${packageLine}`);
+        }
+    });
+
+    it('lists as references of the definition only the names resolving to it, not the package\'s', async () => {
+        for (const text of [packageFirst, definitionFirst]) {
+            const { to } = await navigation([{ uri: 'file:///w/a.sysml', text }]);
+            expect(to('part def B', 9)).toEqual([3, 4, 5]);
+            expect(to('package B', 8)).toEqual([6]);
+        }
+    });
+});
+
+describe('duplicate definitions over every declaration of a namespace (KerML 8.3.2.4.3)', () => {
+    /** The `duplicate-definition` diagnostics of each document, as `line message`. */
+    async function duplicates(documents: Array<{ uri: string; text: string }>): Promise<Record<string, string[]>> {
+        const { DocumentManager } = await import('../../server/src/documentManager.js');
+        const { SemanticValidator } = await import('../../server/src/providers/semanticValidator.js');
+        const { TextDocument } = await import('vscode-languageserver-textdocument');
+        const dm = new DocumentManager();
+        for (const { uri, text } of documents) dm.parse(TextDocument.create(uri, 'sysml', 1, text));
+        const validator = new SemanticValidator(dm);
+        return Object.fromEntries(documents.map(({ uri }) => [uri.split('/').pop(), validator.validate(uri)
+            .filter(d => d.code === 'duplicate-definition').map(d => `${d.range.start.line} ${d.message}`).sort()]));
+    }
+
+    it('counts the definitions of a package declared in two documents in both', async () => {
+        expect(await duplicates([
+            { uri: 'file:///w/a.sysml', text: 'package M {\n    part def D;\n    part def D;\n}\n' },
+            { uri: 'file:///w/b.sysml', text: 'package M {\n    part def D;\n}\n' },
+        ])).toEqual({
+            'a.sysml': [`1 Duplicate definition: 'D' is defined 3 times in the same scope`, `2 Duplicate definition: 'D' is defined 3 times in the same scope`],
+            'b.sysml': [`1 Duplicate definition: 'D' is defined 3 times in the same scope`],
+        });
+    });
+
+    it('counts the top-level definitions of two documents, members of the one root namespace', async () => {
+        expect(await duplicates([
+            { uri: 'file:///w/a.sysml', text: 'part def W;\n' },
+            { uri: 'file:///w/b.sysml', text: 'part def W;\n' },
+        ])).toEqual({
+            'a.sysml': [`0 Duplicate definition: 'W' is defined 2 times in the same scope`],
+            'b.sysml': [`0 Duplicate definition: 'W' is defined 2 times in the same scope`],
+        });
+    });
+
+    it('does not count same-named definitions of two namespaces, nor a definition and a usage', async () => {
+        expect(await duplicates([
+            { uri: 'file:///w/a.sysml', text: 'package M { part def D; part D; }\npackage N { part def D; }\n' },
+            { uri: 'file:///w/b.sysml', text: 'package O { part def D; }\n' },
+        ])).toEqual({ 'a.sysml': [], 'b.sysml': [] });
+    });
+});

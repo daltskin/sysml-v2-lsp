@@ -73,12 +73,15 @@ export class NameReferences {
                 segment.name === target.name || segment.name === target.shortName))) continue;
             const namespace = namespaces.find(ns => ns.body < path.start && path.end <= ns.end);
             const redefiningOwner = this.redefiningOwner(symbols, doc, path.start, path.end);
+            const general = path.qualifiedNames.length === 1 && this.isGeneral(symbols, doc, path.start, path.end);
             let receiver: SysMLSymbol | undefined;
             let receiverAmbiguous = false;
             for (let group = 0; group < path.qualifiedNames.length; group++) {
                 const qualified = path.qualifiedNames[group];
                 let resolved: SysMLSymbol | undefined;
                 let ambiguous = false;
+                // The name resolved as a whole, each segment the element its result is reached through.
+                let segments: NameResolution[] | undefined;
                 for (let index = 0; index < qualified.segments.length; index++) {
                     const segment = qualified.segments[index];
                     const range = Range.create(doc.positionAt(segment.start), doc.positionAt(segment.end));
@@ -100,6 +103,9 @@ export class NameReferences {
                     if (declaration) {
                         resolved = declaration;
                         ambiguous = false;
+                    } else if (index > 0 && segments) {
+                        resolved = segments[index].symbol;
+                        ambiguous = segments[index].ambiguous;
                     } else if (index > 0) {
                         if (resolved) {
                             const result = this.resolver.resolveMemberReference(resolved, segment.name, this.indexes);
@@ -116,10 +122,10 @@ export class NameReferences {
                         resolved = result.symbol;
                         ambiguous = result.ambiguous;
                     } else {
-                        const result = this.resolver.resolveReferenceIn(
-                            namespace?.symbol, joinQualifiedName([segment.name]), this.indexes, namedAfter);
-                        resolved = result.symbol;
-                        ambiguous = result.ambiguous;
+                        segments = this.resolver.resolveSegmentsIn(namespace?.symbol,
+                            qualified.segments.map(s => s.name), this.indexes, namedAfter, general);
+                        resolved = segments[0].symbol;
+                        ambiguous = segments[0].ambiguous;
                     }
                     if (cursor !== undefined && (cursor < segment.start || cursor > segment.end)) continue;
                     if (target && segment.name !== target.name && segment.name !== target.shortName) continue;
@@ -134,6 +140,18 @@ export class NameReferences {
             }
         }
         return refs;
+    }
+
+    /**
+     * Whether the reference from `start` to `end` is the general of a typing
+     * or specialization (not a conjugated one), which resolves to a type,
+     * never a package (`NamespaceResolver.resolveTarget`).
+     */
+    private isGeneral(symbols: SysMLSymbol[], doc: TextDocument, start: number, end: number): boolean {
+        return symbols.some(symbol => symbol.ownedSpecializations?.some(specialization =>
+            (specialization.kind === 'typing' || specialization.kind === 'specializes') && !specialization.conjugated &&
+            specialization.range !== undefined &&
+            doc.offsetAt(specialization.range.start) <= start && end <= doc.offsetAt(specialization.range.end)));
     }
 
     /**

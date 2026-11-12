@@ -297,8 +297,9 @@ export function evaluateFilter(expr: FilterExpr, symbol: SysMLSymbol): boolean {
  * The root namespace of the workspace (SysML 7.5.5): every document's
  * top-level elements and top-level imports, one namespace for all documents,
  * as the textual notation leaves the extent of a root namespace to the tool.
- * It is the global namespace too (SysML 7.5.1, 7.5.5), the standard library's
- * top-level elements among its members.
+ * It is the global namespace too (SysML 7.5.1, 7.5.5). The standard library's
+ * elements are not among its members: they are not in the element registry,
+ * and are found by a separate library lookup.
  */
 export const GLOBAL_NAMESPACE = { kind: 'global' } as const;
 
@@ -308,16 +309,38 @@ export type NamespaceScope = RegistryElement | typeof GLOBAL_NAMESPACE;
 /** A namespace's resolved members by name, as `getResolvedMembers` gives them. */
 type MemberTable = Map<string, ResolvedMember[]>;
 
-/** What a relationship's target resolves to: the element's ID, none when unresolved or ambiguous. */
+/**
+ * What a relationship's target resolves to: the element's ID; none when
+ * unresolved or ambiguous, or when it is a standard library element, which
+ * the element registry has no entry for.
+ */
 export interface TargetResolution {
     readonly targetId?: string;
     readonly ambiguous: boolean;
 }
 
-/** What the resolver caches for one `SymbolIndexes`. */
+/** A result of a qualified name's resolution, with the result of its qualification part it was reached through. */
+interface PathStep {
+    readonly symbol: SysMLSymbol;
+    readonly via?: PathStep;
+}
+
+/** A cached result: a namespace's member table, or a relationship's target by the relationship's ID. */
+type CacheKey = NamespaceScope | string;
+
+/**
+ * What the resolver caches for one `SymbolIndexes`, and the results still
+ * being computed, innermost last. A result computed from one still being
+ * computed is provisional: `dependents` drops it once that one is done.
+ */
 interface ResolverCache {
     tables: Map<NamespaceScope, MemberTable>;
     targets: Map<string, TargetResolution>;
+    inProgress: CacheKey[];
+    /** For a provisional result, the results in progress it was computed from. */
+    sources: Map<CacheKey, Set<CacheKey>>;
+    /** For a result in progress, the provisional results computed from it. */
+    dependents: Map<CacheKey, Set<CacheKey>>;
 }
 
 /**
@@ -395,20 +418,25 @@ export class NamespaceResolver {
      * definition the server records no element for.
      */
     resolveTarget(relationship: RegistryRelationship, indexes: SymbolIndexes): TargetResolution {
-        const { targets } = this.cacheOf(indexes);
-        let resolution = targets.get(relationship.symbolId);
-        if (!resolution) {
-            // KerML 8.2.3.5.1: a name pending resolution is not resolved again, so a target whose
-            // resolution comes back to itself (`part a :>> a.x;`) is unresolved there.
-            targets.set(relationship.symbolId, { ambiguous: false });
+        const cache = this.cacheOf(indexes);
+        const key = relationship.symbolId;
+        const cached = cache.targets.get(key);
+        if (cached) return cached;
+        // KerML 8.2.3.5.1: a name pending resolution is not resolved again, so a target whose
+        // resolution comes back to itself (`part a :>> a.x;`) is unresolved there.
+        cache.targets.set(key, { ambiguous: false });
+        this.begin(cache, key);
+        try {
             const owner = indexes.registry.getElement(relationship.ownerId);
             const declaring = owner && indexes.registry.symbolsOf(owner)
                 .find(s => relationship.declarations.some(d => isSameDocumentUri(d.uri, s.uri)));
             const target = declaring && owner ? this.targetOf(relationship, owner, declaring, indexes) : { ambiguous: false };
-            resolution = { targetId: target.symbol && this.scopeOf(target.symbol, indexes)?.symbolId, ambiguous: target.ambiguous };
-            targets.set(relationship.symbolId, resolution);
+            const resolution = { targetId: target.symbol && this.scopeOf(target.symbol, indexes)?.symbolId, ambiguous: target.ambiguous };
+            cache.targets.set(key, resolution);
+            return resolution;
+        } finally {
+            this.end(cache, key);
         }
-        return resolution;
     }
 
     /** The target of `relationship`, which `owner` declares in `declaring`, by the rule of its kind. */
@@ -423,11 +451,9 @@ export class NamespaceResolver {
         const [first] = chain;
         const single = chain.length === 1;
         if ((relationship.kind === 'typing' || relationship.kind === 'specializes') && single) {
-            // A general is a type, never a package (KerML 8.3.3.1.8 `general : Type`).
             const start = first.global ? GLOBAL_NAMESPACE : this.owningScope(declaring, indexes);
-            const { symbols, ambiguous } = this.resolveAll(start, joinQualifiedName(first.names), indexes, declaring, true);
-            if (ambiguous) return { ambiguous: true };
-            return { symbol: symbols.find(s => s.kind !== SysMLElementKind.Package), ambiguous: false };
+            const segments = this.resolveSegments(start, first.names, indexes, this.namedAfter(declaring), true);
+            return segments[segments.length - 1];
         }
         if (relationship.kind === 'redefinition' && single && !first.global) {
             // KerML 8.2.3.5.1: a feature of a definition or usage redefines one of its owner's generals' features.
@@ -443,16 +469,16 @@ export class NamespaceResolver {
     /**
      * Resolve a feature chain written in `from`'s declaration (SysML 7.6.6,
      * 8.2.3.5.2): its first qualified name from the namespace owning `from`
-     * (or, global, from the global namespace), never to `from` itself, each
-     * later one's first name among the previous feature's features, the rest
-     * among that one's members.
+     * (or, global, from the global namespace), each later one's first name
+     * among the previous feature's features, the rest among that one's members.
      */
     private resolveChain(from: SysMLSymbol, chain: ReferenceChain, indexes: SymbolIndexes): NameResolution {
         const [first, ...rest] = chain;
         const name = joinQualifiedName(first.names);
+        const excluding = this.namedAfter(from);
         let result = first.global
-            ? this.resolveFrom(GLOBAL_NAMESPACE, name, indexes, from)
-            : this.resolveFrom(this.owningScope(from, indexes), name, indexes, from);
+            ? this.resolveFrom(GLOBAL_NAMESPACE, name, indexes, excluding)
+            : this.resolveFrom(this.owningScope(from, indexes), name, indexes, excluding);
         for (const link of rest) {
             const [feature, ...members] = link.names;
             if (!result.symbol || feature === undefined) return result.symbol ? { ambiguous: false } : result;
@@ -498,6 +524,21 @@ export class NamespaceResolver {
             .filter((member): member is SysMLSymbol => member !== undefined && !isAnonymous(member));
     }
 
+    /**
+     * The named elements the namespace owning `symbol` owns, each once, from
+     * every document declaring it: a package's or, for a top-level element,
+     * the root namespace's, `symbol` among them.
+     */
+    siblingsOf(symbol: SysMLSymbol, indexes: SymbolIndexes): SysMLSymbol[] {
+        const element = this.scopeOf(symbol, indexes);
+        if (!element) return [symbol];
+        const owner = element.ownerId === undefined ? undefined : indexes.registry.getElement(element.ownerId);
+        const ids = element.ownerId === undefined ? indexes.registry.getRootIds() : owner?.ownedElementIds ?? [];
+        return ids
+            .map(id => this.symbolOf(indexes.registry.getElement(id)!, indexes))
+            .filter((member): member is SysMLSymbol => member !== undefined && !isAnonymous(member));
+    }
+
     /** The ID of the element owning `symbol` in the registry; `''` for a top-level element, owned by the root namespace. */
     ownerIdOf(symbol: SysMLSymbol, indexes: SymbolIndexes): string {
         return this.scopeOf(symbol, indexes)?.ownerId ?? '';
@@ -533,10 +574,55 @@ export class NamespaceResolver {
     private cacheOf(indexes: SymbolIndexes): ResolverCache {
         let cache = this.cacheByIndexes.get(indexes);
         if (!cache) {
-            cache = { tables: new Map(), targets: new Map() };
+            cache = { tables: new Map(), targets: new Map(), inProgress: [], sources: new Map(), dependents: new Map() };
             this.cacheByIndexes.set(indexes, cache);
         }
         return cache;
+    }
+
+    /** Start computing `key`. */
+    private begin(cache: ResolverCache, key: CacheKey): void {
+        cache.inProgress.push(key);
+    }
+
+    /**
+     * Done computing `key`: drop the provisional results computed from it, so
+     * the next read computes them again from its complete result.
+     */
+    private end(cache: ResolverCache, key: CacheKey): void {
+        cache.inProgress.pop();
+        for (const dependent of cache.dependents.get(key) ?? []) {
+            if (typeof dependent === 'string') cache.targets.delete(dependent);
+            else cache.tables.delete(dependent);
+            cache.sources.delete(dependent);
+        }
+        cache.dependents.delete(key);
+    }
+
+    /**
+     * Record that `key`'s members are copied: if it, or a provisional table it
+     * was computed from, is still in progress, everything computed since
+     * started from it is provisional on it.
+     */
+    private noteRead(cache: ResolverCache, key: CacheKey): void {
+        const pending = cache.inProgress.includes(key) ? [key] : [...cache.sources.get(key) ?? []];
+        for (const source of pending) {
+            const index = cache.inProgress.indexOf(source);
+            if (index === -1) continue;
+            for (const reader of cache.inProgress.slice(index + 1)) {
+                let dependents = cache.dependents.get(source);
+                if (!dependents) cache.dependents.set(source, dependents = new Set());
+                dependents.add(reader);
+                let sources = cache.sources.get(reader);
+                if (!sources) cache.sources.set(reader, sources = new Set());
+                sources.add(source);
+            }
+        }
+    }
+
+    /** The usage named after the reference it is declared with (`perform a`), which that reference never resolves to. */
+    private namedAfter(symbol: SysMLSymbol): SysMLSymbol | undefined {
+        return symbol.namingReference !== undefined ? symbol : undefined;
     }
 
     /**
@@ -580,45 +666,105 @@ export class NamespaceResolver {
         start: NamespaceScope | undefined, name: string, indexes: SymbolIndexes,
         excluding: SysMLSymbol | undefined, all: boolean,
     ): { symbols: SysMLSymbol[]; ambiguous: boolean } {
-        const [first, ...rest] = splitQualifiedName(name);
-        const ancestors = this.ancestorsOf(start, indexes);
-        const unresolved = { symbols: [], ambiguous: false };
+        const { steps, ambiguous } = this.resolvePath(start, splitQualifiedName(name), indexes, excluding, all);
+        return { symbols: steps.map(step => step.symbol), ambiguous };
+    }
 
-        let current: SysMLSymbol[] = [];
+    /**
+     * `resolveAll` by the name's segments, each result with the path it was
+     * reached through; and, by segment, what the name resolved to up to it,
+     * for a name whose later segment doesn't resolve.
+     */
+    private resolvePath(
+        start: NamespaceScope | undefined, names: readonly string[], indexes: SymbolIndexes,
+        excluding: SysMLSymbol | undefined, all: boolean,
+    ): { steps: PathStep[]; ambiguous: boolean; reached: SysMLSymbol[][] } {
+        const [first, ...rest] = names;
+        const ancestors = this.ancestorsOf(start, indexes);
+        const reached: SysMLSymbol[][] = [];
+        const unresolved = { steps: [], ambiguous: false, reached };
+        if (first === undefined) return unresolved;
+
+        let current: PathStep[] = [];
         for (const ancestor of ancestors) {
             const members = this.tableOf(ancestor, indexes).get(first);
             const candidates = excluding ? members?.filter(member => member.symbol !== excluding) : members;
             if (candidates && candidates.length > 0) {
                 // Ambiguous among all the namespace's members of that name, the excluded one
                 // included: two indistinguishable members leave the name unresolved there.
-                if (this.isAmbiguous(members!, indexes)) return { symbols: [], ambiguous: true };
-                current = rest.length > 0 || all ? candidates.map(c => c.symbol) : [candidates[0].symbol];
+                if (this.isAmbiguous(members!, indexes)) return { steps: [], ambiguous: true, reached };
+                current = (rest.length > 0 || all ? candidates : [candidates[0]]).map(c => ({ symbol: c.symbol }));
                 break;
             }
         }
         if (current.length === 0) return unresolved;
+        reached.push(current.map(step => step.symbol));
 
         // A later segment is a member of the namespace the one before it resolved to, visible
         // from `start`: public, or private or protected to a reference from within that
         // namespace, protected also from a specialization of it (SysML 7.5.3).
         for (const [index, segment] of rest.entries()) {
             const last = index === rest.length - 1;
-            const next: SysMLSymbol[] = [];
-            for (const owner of current) {
+            const next: PathStep[] = [];
+            for (const step of current) {
+                const owner = step.symbol;
                 const ownerScope = this.scopeOf(owner, indexes);
                 const members = ownerScope && this.tableOf(ownerScope, indexes).get(segment);
                 if (!members) continue;
-                if (this.isAmbiguous(members, indexes)) return { symbols: [], ambiguous: true };
+                if (this.isAmbiguous(members, indexes)) return { steps: [], ambiguous: true, reached };
                 const visible = members.filter(m => m.visibility === 'public'
                     || ancestors.includes(ownerScope!)
                     || (m.visibility === 'protected' && this.isProtectedVisibleFrom(ancestors, owner, indexes)));
-                if (visible.length === 0) continue;
-                next.push(...(last && !all ? [visible[0]] : visible).map(m => m.symbol));
+                for (const member of last && !all ? visible.slice(0, 1) : visible) {
+                    if (!next.some(other => other.symbol === member.symbol)) next.push({ symbol: member.symbol, via: step });
+                }
             }
-            current = [...new Set(next)];
+            current = next;
             if (current.length === 0) return unresolved;
+            reached.push(current.map(step => step.symbol));
         }
-        return { symbols: current, ambiguous: false };
+        return { steps: current, ambiguous: false, reached };
+    }
+
+    /**
+     * Resolve qualified name `names` from `start` (none: the root namespace)
+     * to one element, by segment: each segment's element the one the name's
+     * result is reached through. As `resolveFrom`, or, for the general of a
+     * typing or specialization, as `targetOf` does: a type, never a package
+     * (KerML 8.3.3.1.8 `general : Type`), through each qualifier.
+     */
+    private resolveSegments(
+        start: NamespaceScope | undefined, names: readonly string[], indexes: SymbolIndexes,
+        excluding: SysMLSymbol | undefined, general: boolean,
+    ): NameResolution[] {
+        const { steps, ambiguous, reached } = this.resolvePath(start, names, indexes, excluding, general);
+        if (ambiguous) return names.map(() => ({ ambiguous: true }));
+        const results = general ? steps.filter(step => step.symbol.kind !== SysMLElementKind.Package).slice(0, 1) : steps;
+        if (results.length > 1) return names.map(() => ({ ambiguous: true }));
+        const segments: NameResolution[] = names.map((_, index) =>
+            // Unresolved: each qualifier still the one element the name resolved to up to it, if one.
+            ({ symbol: reached[index]?.length === 1 ? reached[index][0] : undefined, ambiguous: false }));
+        if (results.length === 1) {
+            let step: PathStep | undefined = results[0];
+            for (let index = names.length - 1; index >= 0 && step; index--, step = step.via) segments[index] = { symbol: step.symbol, ambiguous: false };
+        } else {
+            segments[names.length - 1] = { ambiguous: false };
+        }
+        return segments;
+    }
+
+    /**
+     * Resolve the qualified name `names` written in `namespace` (none: at the
+     * top level), each segment to the element the name is reached through, as
+     * `resolveReferenceIn` does, or, for the general of a typing or
+     * specialization, as `resolveTarget` does. `excluding` as there.
+     */
+    resolveSegmentsIn(
+        namespace: SysMLSymbol | undefined, names: readonly string[], indexes: SymbolIndexes,
+        excluding: SysMLSymbol | undefined, general: boolean,
+    ): NameResolution[] {
+        const scope = namespace ? this.scopeOf(namespace, indexes) : undefined;
+        return this.resolveSegments(scope, names, indexes, excluding, general);
     }
 
     /**
@@ -698,12 +844,31 @@ export class NamespaceResolver {
      * root namespace has its document's top-level elements, the global
      * namespace every document's.
      */
-    private tableOf(scope: NamespaceScope, indexes: SymbolIndexes): MemberTable {
-        const { tables } = this.cacheOf(indexes);
-        const cached = tables.get(scope);
-        if (cached) return cached;
-
+    private tableOf(scope: NamespaceScope, indexes: SymbolIndexes, copying = false): MemberTable {
+        const cache = this.cacheOf(indexes);
+        const cached = cache.tables.get(scope);
+        if (cached) {
+            if (copying) this.noteRead(cache, scope);
+            return cached;
+        }
+        // Cached before inheritance and imports, so a namespace reached again while its table is
+        // computed sees what it has so far and a cycle ends (KerML 8.2.3.5.1); a table that
+        // copied its members then (`copying`: imported or inherited them) is provisional, and
+        // computed again once this one is done.
         const members: MemberTable = new Map();
+        cache.tables.set(scope, members);
+        this.begin(cache, scope);
+        try {
+            this.fillTable(scope, members, indexes);
+        } finally {
+            this.end(cache, scope);
+        }
+        return members;
+    }
+
+    /** Fill the member table of `scope` (`tableOf`). */
+    private fillTable(scope: NamespaceScope, members: MemberTable, indexes: SymbolIndexes): void {
+
         // The same element reaching this namespace through more than one membership has
         // the most permissive visibility of them, whatever order they're found in.
         const addMember = (name: string, entry: ResolvedMember) => {
@@ -724,17 +889,13 @@ export class NamespaceResolver {
 
         if (!isElementScope(scope)) {
             for (const id of indexes.registry.getRootIds()) addOwned(indexes.registry.getElement(id)!);
-            tables.set(scope, members);
             // Every document's top-level imports are memberships of the one root namespace,
             // visible within all its top-level elements (SysML 7.5.5).
             for (const imp of indexes.registry.getAllRootImports()) this.applyImport(imp, scope, indexes, addMember);
-            return members;
+            return;
         }
 
         for (const id of scope.ownedElementIds) addOwned(indexes.registry.getElement(id)!);
-        // Seeded with the live table before imports, so an import resolved relative to this
-        // namespace sees its owned members and the earlier imports, and an import cycle ends.
-        tables.set(scope, members);
 
         const owner = this.symbolOf(scope, indexes);
         // Inherited before imported: an inherited membership hides an imported one of the same name (KerML 7.3.2.1).
@@ -754,7 +915,6 @@ export class NamespaceResolver {
                 this.applyImport(imp, scope, indexes, filteredAddMember);
             }
         }
-        return members;
     }
 
     /**
@@ -768,7 +928,7 @@ export class NamespaceResolver {
         for (const general of this.generalsOf(type, indexes)) {
             const generalScope = this.scopeOf(general, indexes);
             if (!generalScope) continue;
-            for (const [name, entries] of this.tableOf(generalScope, indexes)) {
+            for (const [name, entries] of this.tableOf(generalScope, indexes, true)) {
                 for (const entry of entries) {
                     if (entry.visibility !== 'private' && entry.symbol !== type) inheritable.push([name, { symbol: entry.symbol, visibility: entry.visibility }]);
                 }
@@ -795,7 +955,8 @@ export class NamespaceResolver {
      * of the specializations its own declarations parse to (typing,
      * subclassification, subsetting, redefinition, `resolveTarget`), and the
      * feature a shorthand's reference subsetting (`perform a`) refers to
-     * (SysML 7.17.6, 7.9.5). Never `type` itself.
+     * (SysML 7.17.6, 7.9.5). `type` itself when it specializes itself, as
+     * KerML 8.2.3.5.1 allows circular specialization.
      */
     private generalsOf(type: SysMLSymbol, indexes: SymbolIndexes): SysMLSymbol[] {
         const element = this.scopeOf(type, indexes);
@@ -808,7 +969,7 @@ export class NamespaceResolver {
             generals.push(target && this.symbolOf(target, indexes));
         }
         if (type.namingReference !== undefined && !type.namedByRedefinition) generals.push(this.resolveNamingFeature(type, indexes));
-        return [...new Set(generals.filter((general): general is SysMLSymbol => general !== undefined && general !== type))];
+        return [...new Set(generals.filter((general): general is SysMLSymbol => general !== undefined))];
     }
 
     /**
@@ -911,7 +1072,7 @@ export class NamespaceResolver {
     ): void {
         if (visited.has(owner)) return;
         visited.add(owner);
-        for (const [name, entries] of this.tableOf(owner, indexes)) {
+        for (const [name, entries] of this.tableOf(owner, indexes, true)) {
             for (const entry of entries) {
                 if (entry.visibility === 'private' || entry.visibility === 'protected') continue;
                 addMember(name, { symbol: entry.symbol, visibility: importVisibility });

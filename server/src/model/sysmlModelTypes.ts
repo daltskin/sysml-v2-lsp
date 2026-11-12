@@ -289,7 +289,8 @@ export interface RelationshipDTO {
 
     /**
      * For a specialization: the `symbolId` of the element its target resolves
-     * to (its general); absent when unresolved or ambiguous. `target` stays the
+     * to (its general); absent when unresolved or ambiguous, and when it is a
+     * standard library element, which has no `symbolId`. `target` stays the
      * text as written.
      */
     targetId?: string;

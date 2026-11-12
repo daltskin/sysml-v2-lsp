@@ -188,6 +188,83 @@ package P {
     });
 });
 
+/** Every order of `items`. */
+function permutations<T>(items: readonly T[]): T[][] {
+    if (items.length <= 1) return [[...items]];
+    return items.flatMap((item, i) => permutations([...items.slice(0, i), ...items.slice(i + 1)]).map(rest => [item, ...rest]));
+}
+
+describe('relationship targets through imports of a namespace whose table is still being computed (KerML 8.2.3.5.1)', () => {
+    /** The targets of the typings at `lines` of `documents`, in every order of querying them, each on a fresh table. */
+    function inEveryQueryOrder(documents: Array<{ uri: string; text: string }>, lines: Array<[string, number]>): Set<string> {
+        const results = new Set<string>();
+        for (const order of permutations(lines)) {
+            const { at } = targets(documents);
+            const found = new Map(order.map(([uri, line]) => [`${uri}:${line}`, at(uri, line, 'typing')]));
+            results.add(JSON.stringify(lines.map(([uri, line]) => found.get(`${uri}:${line}`))));
+        }
+        return results;
+    }
+
+    it('resolves a name imported at the top level through a package re-exporting it, in every declaration and query order', () => {
+        const declarations = ['package X { part def xm; }', 'package A { public import X::*; part s2 : xm; }', 'private import A::*;', 'part useXm : xm;'];
+        for (const order of permutations([0, 1, 2, 3])) {
+            const text = order.map(i => declarations[i]).join('\n') + '\n';
+            const lineOf = (i: number) => order.indexOf(i);
+            const results = inEveryQueryOrder([doc(text)], [[A, lineOf(1)], [A, lineOf(3)]]);
+            expect([...results], `order ${order}`).toEqual([JSON.stringify([`${A}:${lineOf(0)}`, `${A}:${lineOf(0)}`])]);
+        }
+    });
+
+    it('resolves it in every document order and query order when the declarations are in two documents', () => {
+        const lib = 'package Lib { part def LibT; }\npackage M { public import Lib::*; part useLib : LibT; }\n';
+        const top = 'private import M::*;\npart topC3 : LibT;\n';
+        for (const [libUri, topUri] of [['file:///w/a.sysml', 'file:///w/b.sysml'], ['file:///w/b.sysml', 'file:///w/a.sysml']]) {
+            const results = inEveryQueryOrder([{ uri: libUri, text: lib }, { uri: topUri, text: top }], [[libUri, 1], [topUri, 1]]);
+            expect([...results], `${libUri} ${topUri}`).toEqual([JSON.stringify([`${libUri}:0`, `${libUri}:0`])]);
+        }
+    });
+
+    it('resolves it through a nested package\'s import of a sibling re-exporting it, in every declaration and query order', () => {
+        for (const sFirst of [true, false]) {
+            const members = ['    package A { public import X::*; part s : xm; }', '    part u : xm;'];
+            const text = ['package T {', '    private import T::A::*;', ...(sFirst ? members : [...members].reverse()), '}', 'package X { part def xm; }', ''].join('\n');
+            const [sLine, uLine] = sFirst ? [2, 3] : [3, 2];
+            const results = inEveryQueryOrder([doc(text)], [[A, sLine], [A, uLine]]);
+            expect([...results], `s first: ${sFirst}`).toEqual([JSON.stringify([`${A}:5`, `${A}:5`])]);
+        }
+    });
+
+    it('resolves names through mutual public imports in every declaration and query order', () => {
+        const declarations = ['package B {\n    public import A::*;\n    public import C::*;\n    part u : a1;\n}', 'package A {\n    public import B::*;\n    part def a1;\n    part w : c1;\n}', 'package C {\n    part def c1;\n}'];
+        for (const order of permutations([0, 1, 2])) {
+            const blocks = order.map(i => declarations[i]);
+            const start = (i: number) => blocks.slice(0, order.indexOf(i)).reduce((lines, block) => lines + block.split('\n').length, 0);
+            const text = blocks.join('\n') + '\n';
+            const results = inEveryQueryOrder([doc(text)], [[A, start(0) + 3], [A, start(1) + 3]]);
+            expect([...results], `order ${order}`).toEqual([JSON.stringify([`${A}:${start(1) + 2}`, `${A}:${start(2) + 1}`])]);
+        }
+    });
+});
+
+describe('relationship targets of a type specializing itself (KerML 8.2.3.5.1, 8.2.3.5.2)', () => {
+    it('resolves a definition specializing itself to itself, and a nested one of the outer\'s name to the nested one', () => {
+        const { at } = targets([doc('package O {\n    part def S :> S;\n    part def A {\n        part def A :> A;\n    }\n}\n')]);
+        expect(at(A, 1)).toBe(`${A}:1`);
+        expect(at(A, 3)).toBe(`${A}:3`);
+    });
+
+    it('resolves a feature subsetting its own name in its owning type to itself, as the basic resolution does', () => {
+        const { at } = targets([doc('package O {\n    part x;\n    part def D {\n        part x :> x;\n    }\n}\n')]);
+        expect(at(A, 3)).toBe(`${A}:3`);
+    });
+
+    it('still resolves a usage named after its reference to the feature it references, never to itself', () => {
+        const { at } = targets([doc('package O {\n    action a;\n    part p {\n        perform a;\n    }\n}\n')]);
+        expect(at(A, 3)).toBe(`${A}:1`);
+    });
+});
+
 describe('relationship targets on the corpus', () => {
     it('resolves every relationship of the standard library, examples and fixtures to an element, never a type to a package', async () => {
         const { readdirSync, readFileSync } = await import('fs');

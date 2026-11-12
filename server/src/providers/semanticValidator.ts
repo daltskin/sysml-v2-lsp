@@ -1500,48 +1500,37 @@ export class SemanticValidator {
         return out;
     }
 
+    /**
+     * Definitions of the document that share a name, or short name, with
+     * another definition of the namespace they are declared in, counted over
+     * every document declaring that namespace (KerML 8.3.2.4.3).
+     */
     private checkDuplicateDefinitions(symbols: SysMLSymbol[], indexes: SymbolIndexes): Diagnostic[] {
         const diagnostics: Diagnostic[] = [];
-        const definitionsByScope = new Map<string, Map<string, SysMLSymbol[]>>();
+        // The definitions of each namespace, by its ID in the registry: one however many documents declare it.
+        const definitionsByScope = new Map<string, SysMLSymbol[]>();
 
         for (const symbol of symbols) {
             // An anonymous definition declares no name, so it can't duplicate one.
             if (!isDefinition(symbol.kind) || isAnonymous(symbol)) continue;
-
-            // The namespace it is declared in, by its ID in the registry: one scope however
-            // many documents declare it, and one per declaration of two same-named ones.
             const scope = this.namespaceResolver.ownerIdOf(symbol, indexes);
-            let scopeMap = definitionsByScope.get(scope);
-            if (!scopeMap) {
-                scopeMap = new Map();
-                definitionsByScope.set(scope, scopeMap);
+            let definitions = definitionsByScope.get(scope);
+            if (!definitions) {
+                definitions = this.namespaceResolver.siblingsOf(symbol, indexes).filter(s => isDefinition(s.kind));
+                definitionsByScope.set(scope, definitions);
             }
-
             // By each name it is known by: `<A> X` and `<A> Y` both define `A` (KerML 8.3.2.4.3).
             for (const name of memberNamesOf(symbol)) {
-                let defs = scopeMap.get(name);
-                if (!defs) {
-                    defs = [];
-                    scopeMap.set(name, defs);
-                }
-                defs.push(symbol);
-            }
-        }
-
-        for (const scopeMap of definitionsByScope.values()) {
-            for (const [name, defs] of scopeMap) {
-                if (defs.length > 1) {
-                    for (const def of defs) {
-                        diagnostics.push({
-                            severity: DiagnosticSeverity.Warning,
-                            range: def.selectionRange,
-                            message: `Duplicate definition: '${name}' is defined ${defs.length} times in the same scope`,
-                            source: 'sysml',
-                            code: 'duplicate-definition',
-                            data: { symbolId: def.symbolId },
-                        });
-                    }
-                }
+                const count = definitions.filter(definition => memberNamesOf(definition).includes(name)).length;
+                if (count < 2) continue;
+                diagnostics.push({
+                    severity: DiagnosticSeverity.Warning,
+                    range: symbol.selectionRange,
+                    message: `Duplicate definition: '${name}' is defined ${count} times in the same scope`,
+                    source: 'sysml',
+                    code: 'duplicate-definition',
+                    data: { symbolId: symbol.symbolId },
+                });
             }
         }
 
