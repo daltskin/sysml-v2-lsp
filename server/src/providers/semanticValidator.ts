@@ -2,7 +2,7 @@ import { Diagnostic, DiagnosticSeverity, Position, Range } from 'vscode-language
 import { DocumentManager } from '../documentManager.js';
 import { getLibraryPackageNames, resolveLibraryType } from '../library/libraryIndex.js';
 import { SysMLModelProvider } from '../model/sysmlModelProvider.js';
-import { NamespaceResolver, SymbolIndexes, buildSymbolIndexes, describeConflictingDeclarations, findConflicts, NamespaceKey, namespaceKeyOf, otherDeclarations, ownerKeyOf, ownerOf } from '../symbols/namespaceResolver.js';
+import { NamespaceResolver, SymbolIndexes, buildSymbolIndexes, describeConflictingDeclarations, findConflicts, otherDeclarations, ownerOf } from '../symbols/namespaceResolver.js';
 import { SysMLElementKind, SysMLSymbol, displayName, isAnonymous, isDefinition, memberNamesOf, nameText } from '../symbols/sysmlElements.js';
 import { describeNamingIssue, NamingIssue } from '../symbols/symbolTable.js';
 import { resolveTypeName } from '../symbols/typeResolution.js';
@@ -35,31 +35,34 @@ const CONNECTOR_KINDS: ReadonlySet<SysMLElementKind> = new Set([
 export class SemanticValidator {
     private readonly modelProvider: SysMLModelProvider;
 
-    /** Cached workspace-wide satisfy data, invalidated when any document version changes. */
+    /** Cached workspace-wide satisfy data, invalidated when any document text changes (`DocumentManager.getRevision`). */
     private satisfyCache?: {
-        versionKey: string;
+        revisionKey: string;
         satisfiedNames: Set<string>;
         satisfyBlockRanges: Map<string, Array<{ startLine: number; endLine: number }>>;
     };
 
-    /** Cached workspace-wide verify data, invalidated when any document version changes. */
+    /** Cached workspace-wide verify data, invalidated when any document text changes (`DocumentManager.getRevision`). */
     private verifyCache?: {
-        versionKey: string;
+        revisionKey: string;
         verifiedNames: Set<string>;
     };
 
-    /** Cached symbol indexes, invalidated when workspace symbol table changes. */
-    private indexCache?: {
-        symbols: SysMLSymbol[];
-        indexes: SymbolIndexes;
-    };
+    /** Each document's satisfy block ranges, by URI, for the text revision they were taken from. */
+    private satisfyBlockRangesByUri = new Map<string, { revision: number; ranges: Array<{ startLine: number; endLine: number }> }>();
 
     /** Cached library package names — never changes after init. */
     private libraryNamesCache?: Set<string>;
 
-    /** Namespace/import-aware name resolution (§7.5), shared with SysMLModelProvider's own diagnostics. */
+    /**
+     * Namespace/import-aware name resolution (§7.5): the workspace symbol table's
+     * resolver while `validate` runs, shared with every other consumer of its
+     * indexes; a resolver of its own without one (`validateSymbols`).
+     */
     private namespaceResolverInstance?: NamespaceResolver;
+    private tableResolver?: NamespaceResolver;
     private get namespaceResolver(): NamespaceResolver {
+        if (this.tableResolver) return this.tableResolver;
         if (!this.namespaceResolverInstance) this.namespaceResolverInstance = new NamespaceResolver();
         return this.namespaceResolverInstance;
     }
@@ -120,7 +123,9 @@ export class SemanticValidator {
         const libraryNames = this.libraryNamesCache;
 
         const text = this.documentManager.getText(uri) ?? '';
-        const indexes = this.getOrBuildIndexes(allSymbols);
+        // The workspace table's indexes and resolver, shared with every other consumer of them.
+        const indexes = symbolTable.getIndexes();
+        this.tableResolver = symbolTable.getResolver();
 
         const diagnostics: Diagnostic[] = [];
 
@@ -134,8 +139,8 @@ export class SemanticValidator {
             );
         }
 
-        diagnostics.push(...this.checkDuplicateDefinitions(symbols));
-        diagnostics.push(...this.checkAmbiguousNamespaceName(symbols, allSymbols));
+        diagnostics.push(...this.checkDuplicateDefinitions(symbols, indexes));
+        diagnostics.push(...this.checkAmbiguousNamespaceName(symbols, indexes));
         diagnostics.push(...this.checkUnusedDefinitions(allSymbols, uri));
         diagnostics.push(...this.checkRedefinitionMultiplicity(symbols, indexes, text));
         diagnostics.push(...this.checkPortCompatibility(text, uri, symbols, indexes));
@@ -410,7 +415,7 @@ export class SemanticValidator {
             }
         }
 
-        diagnostics.push(...instance.checkDuplicateDefinitions(symbolsInUri));
+        diagnostics.push(...instance.checkDuplicateDefinitions(symbolsInUri, indexes));
         diagnostics.push(...instance.checkUnusedDefinitions(allSymbols));
         diagnostics.push(...instance.checkRedefinitionMultiplicity(symbolsInUri, indexes, opts?.text));
         diagnostics.push(...instance.checkCircularSpecialization(symbolsInUri, indexes));
@@ -530,15 +535,16 @@ export class SemanticValidator {
             satisfiedNames = new Set<string>();
             satisfyBlockRanges = new Map();
             for (const text of workspaceTexts) {
-                this.extractSatisfyReferences(text, satisfiedNames);
-                satisfyBlockRanges.set('__static__', this.extractSatisfyBlockRanges(text));
+                const stripped = stripComments(text);
+                this.extractSatisfyReferences(stripped, satisfiedNames);
+                satisfyBlockRanges.set('__static__', this.extractSatisfyBlockRanges(stripped));
             }
         } else if (this.documentManager) {
-            // Build a version fingerprint from all cached document versions.
+            // A fingerprint of every cached document's text revision.
             const uris = this.documentManager.getUris();
-            const versionKey = uris.map(u => u + ':' + this.documentManager.getVersion(u)).join('|');
+            const revisionKey = uris.map(u => u + ':' + this.documentManager.getRevision(u)).join('|');
 
-            if (this.satisfyCache && this.satisfyCache.versionKey === versionKey) {
+            if (this.satisfyCache && this.satisfyCache.revisionKey === revisionKey) {
                 satisfiedNames = this.satisfyCache.satisfiedNames;
                 satisfyBlockRanges = this.satisfyCache.satisfyBlockRanges;
             } else {
@@ -546,15 +552,13 @@ export class SemanticValidator {
                 satisfiedNames = relNames.satisfiedNames;
                 satisfyBlockRanges = new Map();
                 for (const uri of uris) {
-                    const text = this.documentManager.getText(uri);
-                    if (text) {
-                        satisfyBlockRanges.set(uri, this.extractSatisfyBlockRanges(text));
-                    }
+                    const ranges = this.satisfyBlockRangesOf(uri);
+                    if (ranges) satisfyBlockRanges.set(uri, ranges);
                 }
-                this.satisfyCache = { versionKey, satisfiedNames, satisfyBlockRanges };
+                this.satisfyCache = { revisionKey, satisfiedNames, satisfyBlockRanges };
                 // Pre-populate verify cache from the same scan.
-                if (!this.verifyCache || this.verifyCache.versionKey !== versionKey) {
-                    this.verifyCache = { versionKey, verifiedNames: relNames.verifiedNames };
+                if (!this.verifyCache || this.verifyCache.revisionKey !== revisionKey) {
+                    this.verifyCache = { revisionKey, verifiedNames: relNames.verifiedNames };
                 }
             }
         } else {
@@ -600,18 +604,17 @@ export class SemanticValidator {
     }
 
     /**
-     * Extract requirement references from `satisfy` statements in a text.
+     * Extract requirement references from `satisfy` statements in a text, its comments stripped.
      * Adds both the full qualified name and the simple (last segment) name.
      *
      * Patterns matched:
      *   satisfy QualifiedName by ...
      *   satisfy QualifiedName;
      */
-    private extractSatisfyReferences(text: string, out: Set<string>): void {
+    private extractSatisfyReferences(stripped: string, out: Set<string>): void {
         // Match: satisfy QualifiedName by ...
         //        satisfy QualifiedName;
         //        satisfy requirement X : Y;
-        const stripped = stripComments(text);
         const re = /\bsatisfy\s+(?:requirement\s+)?([\w]+(?:::[\w]+)*)\s+(?:by\b|;|:)/g;
         let m: RegExpExecArray | null;
         while ((m = re.exec(stripped)) !== null) {
@@ -624,12 +627,28 @@ export class SemanticValidator {
     }
 
     /**
-     * Extract the line ranges of satisfy block bodies from text.
+     * The satisfy block ranges of document `uri`, taken from its text once per
+     * revision of that text (`DocumentManager.getRevision`), so a document
+     * opened again isn't given the ranges of its earlier text; undefined for a
+     * document without text.
+     */
+    private satisfyBlockRangesOf(uri: string): Array<{ startLine: number; endLine: number }> | undefined {
+        const revision = this.documentManager.getRevision(uri);
+        const cached = this.satisfyBlockRangesByUri.get(uri);
+        if (cached && cached.revision === revision) return cached.ranges;
+        const stripped = this.documentManager.getStrippedText(uri);
+        if (!stripped) return undefined;
+        const ranges = this.extractSatisfyBlockRanges(stripped);
+        this.satisfyBlockRangesByUri.set(uri, { revision, ranges });
+        return ranges;
+    }
+
+    /**
+     * Extract the line ranges of satisfy block bodies from text, its comments stripped.
      * Returns an array of { startLine, endLine } for each satisfy { ... } block.
      */
-    private extractSatisfyBlockRanges(text: string): Array<{ startLine: number; endLine: number }> {
+    private extractSatisfyBlockRanges(stripped: string): Array<{ startLine: number; endLine: number }> {
         const ranges: Array<{ startLine: number; endLine: number }> = [];
-        const stripped = stripComments(text);
         const re = /\bsatisfy\b[^;{]*\{/g;
         let m: RegExpExecArray | null;
 
@@ -648,11 +667,12 @@ export class SemanticValidator {
             }
             if (depth !== 0) continue;
 
-            // Lazily build the line-offset table on the first real match.
+            // Lazily build the line-offset table on the first real match; stripping comments
+            // keeps every newline and offset, so the stripped text's are the text's.
             if (!lineOffsets) {
                 lineOffsets = [0];
-                for (let j = 0; j < text.length; j++) {
-                    if (text[j] === '\n') lineOffsets.push(j + 1);
+                for (let j = 0; j < stripped.length; j++) {
+                    if (stripped[j] === '\n') lineOffsets.push(j + 1);
                 }
             }
 
@@ -697,16 +717,17 @@ export class SemanticValidator {
             verifiedNames = new Set<string>();
             satisfyBlockRanges = new Map();
             for (const text of workspaceTexts) {
-                this.extractSatisfyReferences(text, satisfiedNames);
-                this.extractVerifyReferences(text, verifiedNames);
-                satisfyBlockRanges.set('__static__', this.extractSatisfyBlockRanges(text));
+                const stripped = stripComments(text);
+                this.extractSatisfyReferences(stripped, satisfiedNames);
+                this.extractVerifyReferences(stripped, verifiedNames);
+                satisfyBlockRanges.set('__static__', this.extractSatisfyBlockRanges(stripped));
             }
         } else if (this.documentManager) {
             const uris = this.documentManager.getUris();
-            const versionKey = uris.map(u => u + ':' + this.documentManager.getVersion(u)).join('|');
+            const revisionKey = uris.map(u => u + ':' + this.documentManager.getRevision(u)).join('|');
 
-            const satisfyCacheValid = this.satisfyCache && this.satisfyCache.versionKey === versionKey;
-            const verifyCacheValid = this.verifyCache && this.verifyCache.versionKey === versionKey;
+            const satisfyCacheValid = this.satisfyCache && this.satisfyCache.revisionKey === revisionKey;
+            const verifyCacheValid = this.verifyCache && this.verifyCache.revisionKey === revisionKey;
 
             // Collect from model once if either cache is stale.
             if (!satisfyCacheValid || !verifyCacheValid) {
@@ -715,15 +736,13 @@ export class SemanticValidator {
                 if (!satisfyCacheValid) {
                     satisfyBlockRanges = new Map();
                     for (const uri of uris) {
-                        const text = this.documentManager.getText(uri);
-                        if (text) {
-                            satisfyBlockRanges.set(uri, this.extractSatisfyBlockRanges(text));
-                        }
+                        const ranges = this.satisfyBlockRangesOf(uri);
+                        if (ranges) satisfyBlockRanges.set(uri, ranges);
                     }
-                    this.satisfyCache = { versionKey, satisfiedNames: relNames.satisfiedNames, satisfyBlockRanges };
+                    this.satisfyCache = { revisionKey, satisfiedNames: relNames.satisfiedNames, satisfyBlockRanges };
                 }
                 if (!verifyCacheValid) {
-                    this.verifyCache = { versionKey, verifiedNames: relNames.verifiedNames };
+                    this.verifyCache = { revisionKey, verifiedNames: relNames.verifiedNames };
                 }
             }
 
@@ -788,8 +807,7 @@ export class SemanticValidator {
      *   verify QualifiedName;
      *   verify requirement QualifiedName by ...
      */
-    private extractVerifyReferences(text: string, out: Set<string>): void {
-        const stripped = stripComments(text);
+    private extractVerifyReferences(stripped: string, out: Set<string>): void {
         const re = /\bverify\s+(?:requirement\s+)?([\w]+(?:::[\w]+)*)\s*(?:by\b|;|:|\{)/g;
         let m: RegExpExecArray | null;
         while ((m = re.exec(stripped)) !== null) {
@@ -973,8 +991,8 @@ export class SemanticValidator {
             const lDef = lDefSyms.find(s => s.kind.includes('def'));
             const rDef = rDefSyms.find(s => s.kind.includes('def'));
             // Check if the definition has child symbols (features) by looking at byParent index
-            const lChildren = lDef ? (indexes.byParent.get(namespaceKeyOf(lDef)) ?? []) : [];
-            const rChildren = rDef ? (indexes.byParent.get(namespaceKeyOf(rDef)) ?? []) : [];
+            const lChildren = lDef ? this.namespaceResolver.ownedMembersOf(lDef, indexes) : [];
+            const rChildren = rDef ? this.namespaceResolver.ownedMembersOf(rDef, indexes) : [];
             if (lChildren.length === 0 && rChildren.length === 0) continue;
 
             // Skip when port types share a common feature name — this indicates
@@ -1049,7 +1067,7 @@ export class SemanticValidator {
 
     /** The feature `name` of `owner`: its own member, else a member of one of its types or their supertypes. */
     private findFeature(owner: SysMLSymbol, name: string, indexes: SymbolIndexes): SysMLSymbol | undefined {
-        const own = (indexes.byParent.get(namespaceKeyOf(owner)) ?? []).find(s => memberNamesOf(s).includes(name));
+        const own = this.namespaceResolver.ownedMembersOf(owner, indexes).find(s => memberNamesOf(s).includes(name));
         if (own) return own;
         for (const typeName of owner.typeNames) {
             // KerML 1.0 section 7.3.4.6 resolves a chain segment in the
@@ -1057,7 +1075,7 @@ export class SemanticValidator {
             const type = this.namespaceResolver.resolveNameFrom(owner, typeName, indexes);
             if (!type || !isDefinition(type.kind)) continue;
             for (const definition of this.getSpecializationHierarchy(type, indexes).flat()) {
-                const member = (indexes.byParent.get(namespaceKeyOf(definition)) ?? []).find(s => memberNamesOf(s).includes(name));
+                const member = this.namespaceResolver.ownedMembersOf(definition, indexes).find(s => memberNamesOf(s).includes(name));
                 if (member) return member;
             }
         }
@@ -1234,7 +1252,7 @@ export class SemanticValidator {
         }
 
         const membersByLevel = hierarchy.map(level =>
-            level.flatMap(namespace => indexes.byParent.get(namespaceKeyOf(namespace)) ?? []));
+            level.flatMap(namespace => this.namespaceResolver.ownedMembersOf(namespace, indexes)));
         const hiddenMembers = new Set<string>();
 
         // KerML v1.0 §7.3.4.5 removes redefined inherited features from the
@@ -1254,7 +1272,7 @@ export class SemanticValidator {
                     const owner = ownerOf(redefining, indexes);
                     if (!owner) continue;
                     for (const ancestor of this.getSpecializationHierarchy(owner, indexes).slice(1).flat()) {
-                        for (const candidate of indexes.byParent.get(namespaceKeyOf(ancestor)) ?? []) {
+                        for (const candidate of this.namespaceResolver.ownedMembersOf(ancestor, indexes)) {
                             if (candidate.kind === SysMLElementKind.SubjectUsage) hiddenMembers.add(candidate.symbolId);
                         }
                     }
@@ -1303,7 +1321,7 @@ export class SemanticValidator {
                 const candidates: SysMLSymbol[] = [];
                 while (frontier.length > 0 && candidates.length === 0) {
                     for (const type of frontier) {
-                        for (const member of indexes.byParent.get(namespaceKeyOf(type)) ?? []) {
+                        for (const member of this.namespaceResolver.ownedMembersOf(type, indexes)) {
                             if (memberNamesOf(member).includes(targetName) && member.visibility !== 'private'
                                 && !alreadyRedefined.has(member.symbolId)) {
                                 candidates.push(member);
@@ -1389,19 +1407,6 @@ export class SemanticValidator {
             scope = ownerOf(scope, indexes);
         }
         return undefined;
-    }
-
-    /**
-     * Return cached indexes if the workspace symbol table hasn't changed,
-     * otherwise rebuild and cache.
-     */
-    private getOrBuildIndexes(allSymbols: SysMLSymbol[]): SymbolIndexes {
-        if (this.indexCache && this.indexCache.symbols === allSymbols) {
-            return this.indexCache.indexes;
-        }
-        const indexes = buildSymbolIndexes(allSymbols);
-        this.indexCache = { symbols: allSymbols, indexes };
-        return indexes;
     }
 
     private isConstraintKeyword(value: string): boolean {
@@ -1497,48 +1502,37 @@ export class SemanticValidator {
         return out;
     }
 
-    private checkDuplicateDefinitions(symbols: SysMLSymbol[]): Diagnostic[] {
+    /**
+     * Definitions of the document that share a name, or short name, with
+     * another definition of the namespace they are declared in, counted over
+     * every document declaring that namespace (KerML 8.3.2.4.3).
+     */
+    private checkDuplicateDefinitions(symbols: SysMLSymbol[], indexes: SymbolIndexes): Diagnostic[] {
         const diagnostics: Diagnostic[] = [];
-        const definitionsByScope = new Map<NamespaceKey, Map<string, SysMLSymbol[]>>();
-        const byId = new Map(symbols.map(s => [s.symbolId, s]));
+        // The definitions of each namespace, by its ID in the registry: one however many documents declare it.
+        const definitionsByScope = new Map<string, SysMLSymbol[]>();
 
         for (const symbol of symbols) {
             // An anonymous definition declares no name, so it can't duplicate one.
             if (!isDefinition(symbol.kind) || isAnonymous(symbol)) continue;
-
-            // The namespace it is declared in: one scope however many documents declare it.
-            const scope = ownerKeyOf(symbol, byId);
-            let scopeMap = definitionsByScope.get(scope);
-            if (!scopeMap) {
-                scopeMap = new Map();
-                definitionsByScope.set(scope, scopeMap);
+            const scope = this.namespaceResolver.ownerIdOf(symbol, indexes);
+            let definitions = definitionsByScope.get(scope);
+            if (!definitions) {
+                definitions = this.namespaceResolver.siblingsOf(symbol, indexes).filter(s => isDefinition(s.kind));
+                definitionsByScope.set(scope, definitions);
             }
-
             // By each name it is known by: `<A> X` and `<A> Y` both define `A` (KerML 8.3.2.4.3).
             for (const name of memberNamesOf(symbol)) {
-                let defs = scopeMap.get(name);
-                if (!defs) {
-                    defs = [];
-                    scopeMap.set(name, defs);
-                }
-                defs.push(symbol);
-            }
-        }
-
-        for (const scopeMap of definitionsByScope.values()) {
-            for (const [name, defs] of scopeMap) {
-                if (defs.length > 1) {
-                    for (const def of defs) {
-                        diagnostics.push({
-                            severity: DiagnosticSeverity.Warning,
-                            range: def.selectionRange,
-                            message: `Duplicate definition: '${name}' is defined ${defs.length} times in the same scope`,
-                            source: 'sysml',
-                            code: 'duplicate-definition',
-                            data: { symbolId: def.symbolId },
-                        });
-                    }
-                }
+                const count = definitions.filter(definition => memberNamesOf(definition).includes(name)).length;
+                if (count < 2) continue;
+                diagnostics.push({
+                    severity: DiagnosticSeverity.Warning,
+                    range: symbol.selectionRange,
+                    message: `Duplicate definition: '${name}' is defined ${count} times in the same scope`,
+                    source: 'sysml',
+                    code: 'duplicate-definition',
+                    data: { symbolId: symbol.symbolId },
+                });
             }
         }
 
@@ -1566,9 +1560,9 @@ export class SemanticValidator {
      * that name -- including from inside one of the conflicting
      * declarations to its own child -- are unexpectedly unresolved.
      */
-    private checkAmbiguousNamespaceName(symbols: SysMLSymbol[], allSymbols: SysMLSymbol[]): Diagnostic[] {
+    private checkAmbiguousNamespaceName(symbols: SysMLSymbol[], indexes: SymbolIndexes): Diagnostic[] {
         const diagnostics: Diagnostic[] = [];
-        const conflicts = findConflicts(allSymbols);
+        const conflicts = findConflicts(indexes);
         if (conflicts.size === 0) return diagnostics;
 
         for (const symbol of symbols) {

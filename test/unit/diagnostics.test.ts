@@ -1758,6 +1758,61 @@ package Test {
         });
     });
 
+    describe('requirement warnings of a document closed and opened again at the same version', () => {
+        /** The unsatisfied and unverified requirement warnings of each text, opened in turn at one uri and version 1, the one before closed. */
+        async function reopened(texts: string[]): Promise<Array<{ unsatisfied: string[]; unverified: string[] }>> {
+            const { DocumentManager } = await import('../../server/src/documentManager.js');
+            const { SemanticValidator } = await import('../../server/src/providers/semanticValidator.js');
+            const uri = 'file:///w/reopen.sysml';
+            const docManager = new DocumentManager();
+            const validator = new SemanticValidator(docManager);
+            const results = [];
+            for (const [index, text] of texts.entries()) {
+                if (index > 0) docManager.remove(uri);
+                docManager.parse(await makeDoc(text, uri));
+                const diags = validator.validate(uri);
+                const lines = (code: string) => diags.filter(d => d.code === code).map(d => `${d.range.start.line} ${d.message.split("'")[1]}`).sort();
+                results.push({ unsatisfied: lines('unsatisfied-requirement'), unverified: lines('unverified-requirement') });
+            }
+            return results;
+        }
+
+        const withBlock = `package P {
+    part def V;
+    part v : V;
+    requirement r;
+    satisfy r by v {
+        requirement a;
+        requirement b;
+    }
+    verification case def T;
+    verify r by T;
+}
+`;
+        // The same lines, without the satisfy block, and with nothing satisfied or verified.
+        const without = `package P {
+    part def V;
+    part v : V;
+    requirement r;
+    part def W;
+    requirement a;
+    requirement b;
+}
+`;
+
+        it('warns for requirements on the lines of a satisfy block of the earlier text', async () => {
+            const [, after] = await reopened([withBlock, without]);
+            expect(after.unsatisfied).toEqual(['3 r', '5 a', '6 b']);
+            expect(after.unverified).toEqual(['3 r', '5 a', '6 b']);
+        });
+
+        it('gives the same text the same warnings when opened again', async () => {
+            const [first, second, third] = await reopened([without, withBlock, without]);
+            expect(third).toEqual(first);
+            expect(second).toEqual({ unsatisfied: [], unverified: [] });
+        });
+    });
+
     describe('unverified requirements', () => {
         it('should warn when a satisfied requirement has no verify statement', async () => {
             const text = `
@@ -3799,9 +3854,8 @@ package External {
             // Unlike the exact-membership imports above, a wildcard import
             // doesn't name which declaration's member it wants -- it must
             // still pick up both B (owned by the package) and B2 (owned by
-            // the part def), since `getResolvedMembers("A")` pools every
-            // owned child under that qualifiedName regardless of which of
-            // the two (valid, distinguishable) "A" declarations it came from.
+            // the part def), since a wildcard import through `A` imports through each of
+            // the two (valid, distinguishable) "A" declarations.
             const pkgAText = `
 package A {
     part def B;

@@ -1035,10 +1035,99 @@ package InheritTest {
         const symbols = st.getAllSymbols();
         const view = symbols.find(s => s.name === 'mySensorView');
         expect(view).toBeDefined();
-        // View should inherit filter from its definition
-        if (view!.viewFilters && view!.viewFilters.length > 0) {
-            expect(view!.viewFilters![0]).toContain('PartUsage');
-        }
+        // SysML 7.26.2: the view inherits the filter of its definition, in the same document.
+        expect(view!.viewFilters).toEqual(['@SysML::PartUsage']);
+        expect(view!.exposeTargets).toEqual(['Sensor']);
+    });
+
+    it('inherits filters and rendering through a chain of view definitions in the same document (SysML 7.26.2)', async () => {
+        const { st } = await buildST(`
+package InheritChain {
+    view def BaseView {
+        filter @SysML::PartUsage;
+        render asTreeDiagram;
+    }
+    view def SubView :> BaseView {
+        filter @SysML::PortUsage;
+    }
+    view sub : SubView;
+    view own : SubView {
+        render asTableForm;
+    }
+}
+`);
+        const byName = (name: string) => st.getAllSymbols().find(s => s.name === name)!;
+        expect(byName('SubView').viewFilters).toEqual(['@SysML::PortUsage', '@SysML::PartUsage']);
+        expect(byName('SubView').viewRendering).toBe('asTreeDiagram');
+        expect(byName('sub').viewFilters).toEqual(['@SysML::PortUsage', '@SysML::PartUsage']);
+        expect(byName('sub').viewRendering).toBe('asTreeDiagram');
+        // A rendering of its own isn't replaced by an inherited one.
+        expect(byName('own').viewRendering).toBe('asTableForm');
+    });
+
+    describe('view inheritance across documents (SysML 7.26.2)', () => {
+        const defs = { uri: 'file:///w/defs.sysml', text: 'package Defs {\n    view def BaseView { filter @SysML::PartUsage; render asTreeDiagram; }\n    view def SubView :> BaseView { filter @SysML::PortUsage; }\n}\n' };
+        const views = { uri: 'file:///w/views.sysml', text: 'package Views1 {\n    private import Defs::*;\n    view v : SubView;\n    view q : Defs::BaseView;\n}\n' };
+        const props = (st: { getAllSymbols(): Array<{ name: string; viewFilters?: string[]; viewRendering?: string }> }, name: string) => {
+            const view = st.getAllSymbols().find(s => s.name === name)!;
+            return { filters: view.viewFilters, rendering: view.viewRendering };
+        };
+
+        it('inherits from a view definition of another document, in either build order', async () => {
+            for (const order of [[defs, views], [views, defs]]) {
+                const st = await buildMultiFileST(order);
+                expect(props(st, 'v'), order[0].uri).toEqual({ filters: ['@SysML::PortUsage', '@SysML::PartUsage'], rendering: 'asTreeDiagram' });
+                expect(props(st, 'q'), order[0].uri).toEqual({ filters: ['@SysML::PartUsage'], rendering: 'asTreeDiagram' });
+            }
+        });
+
+        it('follows the definition a view is typed by, not another view definition of the same name', async () => {
+            const other = { uri: 'file:///w/other.sysml', text: 'package Other {\n    view def SubView { render asTableForm; }\n}\n' };
+            for (const order of [[defs, other, views], [views, other, defs]]) {
+                const st = await buildMultiFileST(order);
+                expect(props(st, 'v').rendering, order[0].uri).toBe('asTreeDiagram');
+            }
+        });
+
+        it('follows a change or removal of the defining document', async () => {
+            const { parseDocument } = await import('../../server/src/parser/parseDocument.js');
+            const st = await buildMultiFileST([defs, views]);
+            st.build(defs.uri, parseDocument(defs.text.replace('render asTreeDiagram;', 'render asTableForm;').replace('filter @SysML::PortUsage;', '')));
+            expect(props(st, 'v')).toEqual({ filters: ['@SysML::PartUsage'], rendering: 'asTableForm' });
+            st.removeUri(defs.uri);
+            expect(props(st, 'v')).toEqual({ filters: undefined, rendering: undefined });
+        });
+
+        it('inherits from the owned view definition, not an imported one it hides (KerML 7.2.5.4)', async () => {
+            const q = { uri: 'file:///w/q.sysml', text: 'package Q {\n    metadata def K;\n    view def VD { filter @K; render asTreeDiagram; }\n}\n' };
+            const u = { uri: 'file:///w/u.sysml', text: 'package U {\n    private import Q::*;\n    metadata def M;\n    view def VD { filter @M; }\n    view v : VD;\n}\n' };
+            for (const order of [[q, u], [u, q]]) {
+                expect(props(await buildMultiFileST(order), 'v'), order[0].uri).toEqual({ filters: ['@M'], rendering: undefined });
+            }
+        });
+
+        it('gives every view definition on a cycle the filters of the whole cycle, in any declaration and document order (KerML 8.2.3.5.1)', async () => {
+            const defs = ['view def A :> B { filter @SysML::PartUsage; }', 'view def B :> C { filter @SysML::PortUsage; render asTreeDiagram; }', 'view def C :> A { filter @SysML::ItemUsage; }'];
+            const orders = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+            for (const order of orders) {
+                const cycle = { uri: 'file:///w/cycle.sysml', text: `package Cyc {\n${order.map(i => `    ${defs[i]}\n`).join('')}}\n` };
+                const users = { uri: 'file:///w/users.sysml', text: 'package Users {\n    private import Cyc::*;\n    view a : A;\n    view b : B;\n    view c : C;\n}\n' };
+                for (const documents of [[cycle, users], [users, cycle]]) {
+                    const st = await buildMultiFileST(documents);
+                    for (const name of ['A', 'B', 'C', 'a', 'b', 'c']) {
+                        const { filters, rendering } = props(st, name);
+                        expect([...(filters ?? [])].sort(), `${name}, order ${order}, ${documents[0].uri}`)
+                            .toEqual(['@SysML::ItemUsage', '@SysML::PartUsage', '@SysML::PortUsage']);
+                        expect(rendering, `${name}, order ${order}`).toBe('asTreeDiagram');
+                    }
+                }
+            }
+        });
+
+        it('ends on a cycle of view definitions specializing one another', async () => {
+            const st = await buildMultiFileST([{ uri: 'file:///w/c.sysml', text: 'package C {\n    view def A :> B { filter @SysML::PartUsage; }\n    view def B :> A { render asTreeDiagram; }\n    view c : A;\n}\n' }]);
+            expect(props(st, 'c')).toEqual({ filters: ['@SysML::PartUsage'], rendering: 'asTreeDiagram' });
+        });
     });
 });
 
@@ -1257,7 +1346,7 @@ describe('getAllSymbols() completeness for colliding qualifiedNames (any kind, n
     // permanently erase the other(s) from `getAllSymbols()` -- data loss
     // that would happen regardless of whether the collision is a genuine
     // naming *conflict* per KerML's `isDistinguishableFrom` rule (see
-    // `findConflictedQualifiedNames`'s doc comment in namespaceResolver.ts)
+    // `findConflicts`'s doc comment in namespaceResolver.ts)
     // or a perfectly valid collision between different, non-conforming
     // kinds (e.g. `package A` and an unrelated `part def A`, used below
     // precisely because it's *not* flagged as a conflict -- both must still
@@ -1470,15 +1559,15 @@ package Demo {
             expect(st.getSymbol('Demo::connect a.p to b.p')).toBe(declared);
             expect(st.getSymbolById(anonymous.symbolId!)).toBe(anonymous);
             expect(st.findByName('connect a.p to b.p')).toEqual([declared]);
-            expect(st.getGlobalScope().resolve('Demo')).toBeDefined();
+            expect(st.getSymbol('Demo')).toBeDefined();
 
-            const { buildSymbolIndexes, findConflictedQualifiedNames } = await import('../../server/src/symbols/namespaceResolver.js');
+            const { buildSymbolIndexes, findConflicts, NamespaceResolver } = await import('../../server/src/symbols/namespaceResolver.js');
             const indexes = buildSymbolIndexes(st.getAllSymbols());
             expect(indexes.byName.get('connect a.p to b.p')).toEqual([declared]);
-            expect(indexes.byParent.get('Demo')).not.toContain(anonymous);
+            expect(new NamespaceResolver().ownedMembersOf(st.getSymbol('Demo')!, indexes)).not.toContain(anonymous);
             expect(indexes.byId.get(anonymous.symbolId)).toBe(anonymous);
             expect(anonymous.qualifiedName).toBeUndefined();
-            expect(findConflictedQualifiedNames(st.getAllSymbols()).size).toBe(0);
+            expect(findConflicts(st.getIndexes()).size).toBe(0);
         });
     }
 
@@ -1508,8 +1597,8 @@ package Demo {
         // The first end keeps its own name: only the part is found by it.
         expect(st.findByName('a').map((s) => s.kind)).toEqual(['part']);
 
-        const { findConflictedQualifiedNames } = await import('../../server/src/symbols/namespaceResolver.js');
-        expect(findConflictedQualifiedNames(st.getAllSymbols()).size).toBe(0);
+        const { findConflicts } = await import('../../server/src/symbols/namespaceResolver.js');
+        expect(findConflicts(st.getIndexes()).size).toBe(0);
     });
 });
 
@@ -1566,12 +1655,12 @@ package Demo {
         expect(st.getSymbol('Demo::S::transition first s1 then s2')).toBe(transitions[2]);
         expect(st.findByName('transition first s1 then s2')).toEqual([transitions[2]]);
 
-        const { findConflictedQualifiedNames } = await import('../../server/src/symbols/namespaceResolver.js');
-        expect(findConflictedQualifiedNames(st.getAllSymbols()).size).toBe(0);
+        const { findConflicts } = await import('../../server/src/symbols/namespaceResolver.js');
+        expect(findConflicts(st.getIndexes()).size).toBe(0);
     });
 });
 
-describe('findConflictedQualifiedNames and anonymous elements', () => {
+describe('name clashes and anonymous elements', () => {
     // The same package reopened in two files, each with an anonymous interface and connection between
     // the same ends, at the same position: each pair has the same declaration, but every one keeps its own
     // symbol ID. Both files also declare `link`, a real conflict.
@@ -1599,7 +1688,7 @@ package Demo {
 `;
 
     it('excludes anonymous elements sharing a name across documents, but still reports declared duplicates', async () => {
-        const { findConflictedQualifiedNames } = await import('../../server/src/symbols/namespaceResolver.js');
+        const { findConflicts } = await import('../../server/src/symbols/namespaceResolver.js');
         const st = await buildMultiFileST([
             { uri: 'test://a.sysml', text: fileA },
             { uri: 'test://b.sysml', text: fileB },
@@ -1613,11 +1702,17 @@ package Demo {
         expect(shared.every((s) => s.qualifiedName === undefined)).toBe(true);
         expect(new Set(shared.map((s) => s.symbolId)).size).toBe(4);
 
-        const conflicts = findConflictedQualifiedNames(all);
-        expect([...conflicts.keys()]).toEqual(['Demo::link']);
-        expect(conflicts.get('Demo::link')).toHaveLength(2);
+        const conflicts = [...findConflicts(st.getIndexes()).values()];
+        expect(conflicts.map(({ names }) => names)).toEqual([['link'], ['link']]);
+        expect(conflicts[0].declarations).toHaveLength(2);
     });
 });
+
+/** A namespace scope as text: an element's name or short name (none when anonymous), or `global`. */
+function scopeName(scope: import('../../server/src/symbols/namespaceResolver.js').NamespaceScope): string | undefined {
+    if ('symbolId' in scope) return scope.name ?? scope.shortName;
+    return scope.kind;
+}
 
 describe('anonymous elements indexed by symbol ID', () => {
     // The symbol ID's value is implementation-defined: these tests only rely on it being present,
@@ -1669,11 +1764,10 @@ describe('anonymous elements indexed by symbol ID', () => {
         expect(st.getSymbol(qualifiedName)).toBe(declared);
         expect(st.getSymbolById(iface.symbolId!)).toBe(iface);
 
-        const { buildSymbolIndexes, findConflictedQualifiedNames } = await import('../../server/src/symbols/namespaceResolver.js');
+        const { buildSymbolIndexes, findConflicts } = await import('../../server/src/symbols/namespaceResolver.js');
         const indexes = buildSymbolIndexes(st.getAllSymbols());
-        expect(indexes.byQualifiedName.get(qualifiedName)).toBe(declared);
         expect(indexes.byId.get(iface.symbolId!)).toBe(iface);
-        expect(findConflictedQualifiedNames(st.getAllSymbols()).size).toBe(0);
+        expect(findConflicts(st.getIndexes()).size).toBe(0);
     });
 
     it('follows a member\'s parent link to its anonymous owner', async () => {
@@ -1689,8 +1783,9 @@ describe('anonymous elements indexed by symbol ID', () => {
         const { buildSymbolIndexes, ownerOf, NamespaceResolver } = await import('../../server/src/symbols/namespaceResolver.js');
         const indexes = buildSymbolIndexes(st.getAllSymbols());
         expect(ownerOf(member, indexes)).toBe(iface);
-        // The member still sees the enclosing package, through its anonymous owner.
-        expect([...new NamespaceResolver().namespaceAncestors(member, indexes)]).toEqual([iface, 'Demo', '']);
+        // The member still sees the enclosing package, through its anonymous owner,
+        // then the root namespace of the workspace, the global one (SysML 7.5.1, 7.5.5).
+        expect(new NamespaceResolver().namespaceAncestors(member, indexes).map(scopeName)).toEqual([undefined, 'Demo', 'global']);
     });
 
     it('links each member to its own owner when a declared name is quoted like an anonymous element\'s declaration', async () => {
@@ -1709,8 +1804,13 @@ describe('anonymous elements indexed by symbol ID', () => {
         const indexes = buildSymbolIndexes(st.getAllSymbols());
         expect(ownerOf(w, indexes)).toBe(iface);
         expect(ownerOf(inner, indexes)).toBe(declared);
-        expect([...new NamespaceResolver().namespaceAncestors(w, indexes)]).toEqual([iface, 'Demo', '']);
-        expect([...new NamespaceResolver().namespaceAncestors(inner, indexes)]).toEqual([qualifiedName, 'Demo', '']);
+        // Each owner is its own namespace, the declared one and the anonymous one alike.
+        const resolver = new NamespaceResolver();
+        const [wOwner] = resolver.namespaceAncestors(w, indexes);
+        const [innerOwner] = resolver.namespaceAncestors(inner, indexes);
+        expect(wOwner).not.toBe(innerOwner);
+        expect(resolver.namespaceAncestors(w, indexes).map(scopeName)).toEqual([undefined, 'Demo', 'global']);
+        expect(resolver.namespaceAncestors(inner, indexes).map(scopeName)).toEqual([declared.name, 'Demo', 'global']);
     });
 
     it('links every member to its own owner by symbol ID, inside an anonymous element too', async () => {
@@ -1737,12 +1837,12 @@ describe('anonymous elements indexed by symbol ID', () => {
 
         const { buildSymbolIndexes, NamespaceResolver } = await import('../../server/src/symbols/namespaceResolver.js');
         const indexes = buildSymbolIndexes(st.getAllSymbols());
-        expect(indexes.byParent.get(iface)).toEqual([w]);
-        expect(indexes.byParent.get(qualifiedName)).toEqual([inner]);
-
         const resolver = new NamespaceResolver();
+        expect(resolver.ownedMembersOf(iface, indexes)).toEqual([w]);
+        expect(resolver.ownedMembersOf(st.getSymbol(qualifiedName)!, indexes)).toEqual([inner]);
+
         expect([...resolver.getResolvedMembers(iface, indexes).keys()]).toEqual(['w']);
-        expect([...resolver.getResolvedMembers(qualifiedName, indexes).keys()]).toEqual(['inner']);
+        expect([...resolver.getResolvedMembers(st.getSymbol(qualifiedName)!, indexes).keys()]).toEqual(['inner']);
         // Each member sees its own namespace's members, not the other's.
         expect(resolver.isLocallyVisible(w, 'w', indexes)).toBe(true);
         expect(resolver.isLocallyVisible(w, 'inner', indexes)).toBe(false);
@@ -1769,7 +1869,7 @@ describe('anonymous elements indexed by symbol ID', () => {
             expect(result.errors).toHaveLength(0);
             const { buildSymbolIndexes, NamespaceResolver } = await import('../../server/src/symbols/namespaceResolver.js');
             const indexes = buildSymbolIndexes(st.getAllSymbols());
-            const members = new NamespaceResolver().getResolvedMembers('Demo', indexes);
+            const members = new NamespaceResolver().getResolvedMembers(st.getSymbol('Demo')!, indexes);
             for (const [name, kind] of [['interface a.p to b.p', 'interface'], ['allocate a to b', 'allocation']] as const) {
                 const anonymous = st.getSymbolsForUri('test://test.sysml').find((s) => s.kind === kind)!;
                 expect([anonymous.declaration, isAnonymous(anonymous)]).toEqual([name, true]);

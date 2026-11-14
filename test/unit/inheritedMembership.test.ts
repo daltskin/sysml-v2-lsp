@@ -29,8 +29,9 @@ async function resolvedMembers(text: string, qualifiedName: string): Promise<Map
     const { buildSymbolIndexes, NamespaceResolver } = await import('../../server/src/symbols/namespaceResolver.js');
     const dm = new DocumentManager();
     dm.parse(TextDocument.create('test://inherited.sysml', 'sysml', 1, text));
-    const indexes = buildSymbolIndexes(dm.getWorkspaceSymbolTable().getAllSymbols());
-    const members = new NamespaceResolver().getResolvedMembers(qualifiedName, indexes);
+    const symbolTable = dm.getWorkspaceSymbolTable();
+    const indexes = buildSymbolIndexes(symbolTable.getAllSymbols());
+    const members = new NamespaceResolver().getResolvedMembers(symbolTable.getSymbol(qualifiedName)!, indexes);
     return new Map([...members].map(([name, entries]) => [name, entries.map(entry => entry.symbol.qualifiedName)]));
 }
 
@@ -41,8 +42,9 @@ async function redefinedFeature(text: string, owningType: string, name: string):
     const { buildSymbolIndexes, NamespaceResolver } = await import('../../server/src/symbols/namespaceResolver.js');
     const dm = new DocumentManager();
     dm.parse(TextDocument.create('test://inherited.sysml', 'sysml', 1, text));
-    const indexes = buildSymbolIndexes(dm.getWorkspaceSymbolTable().getAllSymbols());
-    return new NamespaceResolver().resolveRedefinedFeature(indexes.byQualifiedName.get(owningType)!, name, indexes).symbol?.qualifiedName;
+    const symbolTable = dm.getWorkspaceSymbolTable();
+    const indexes = buildSymbolIndexes(symbolTable.getAllSymbols());
+    return new NamespaceResolver().resolveRedefinedFeature(symbolTable.getSymbol(owningType)!, name, indexes).symbol?.qualifiedName;
 }
 
 describe('name resolution through inherited memberships (KerML 7.3.2.1, 8.2.3.5.3)', () => {
@@ -326,7 +328,7 @@ package P {
         private import Lib::*;
     }
 }`;
-        expect((await resolvedMembers(text, 'P::B')).get('p')).toEqual(['P::A::p', 'Lib::p']);
+        expect((await resolvedMembers(text, 'P::B')).get('p')).toEqual(['P::A::p']);
     });
 
     it('does not inherit a private member', async () => {

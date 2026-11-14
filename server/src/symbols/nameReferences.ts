@@ -2,8 +2,8 @@ import { Location, Position, Range } from 'vscode-languageserver/node';
 import { TextDocument } from 'vscode-languageserver-textdocument';
 import { DocumentManager } from '../documentManager.js';
 import { SysMLv2Lexer } from '../generated/SysMLv2Lexer.js';
-import { joinQualifiedName, scanFeaturePaths } from '../utils/identUtils.js';
-import { buildSymbolIndexes, NameResolution, NamespaceResolver, ownerOf } from './namespaceResolver.js';
+import { joinQualifiedName, scanFeaturePaths, splitQualifiedName } from '../utils/identUtils.js';
+import { NameResolution, ownerOf, ResolutionMode } from './namespaceResolver.js';
 import { isAnonymous, SysMLSymbol } from './sysmlElements.js';
 
 export interface NameReference extends Location {
@@ -17,12 +17,16 @@ export interface NameReference extends Location {
 /** Source-token references shared by navigation and refactoring, resolved with SysML §7.5 visibility. */
 export class NameReferences {
     private readonly symbols;
+    private readonly symbolTable;
     private readonly indexes;
-    private readonly resolver = new NamespaceResolver();
+    private readonly resolver;
 
     constructor(private readonly documents: DocumentManager) {
-        this.symbols = documents.getWorkspaceSymbolTable().getAllSymbols();
-        this.indexes = buildSymbolIndexes(this.symbols);
+        this.symbolTable = documents.getWorkspaceSymbolTable();
+        this.symbols = this.symbolTable.getAllSymbols();
+        // The table's indexes and resolver, shared with every other consumer of them.
+        this.indexes = this.symbolTable.getIndexes();
+        this.resolver = this.symbolTable.getResolver();
     }
 
     at(uri: string, position: Position): NameReference | undefined {
@@ -43,7 +47,8 @@ export class NameReferences {
         const parsed = this.documents.get(uri);
         if (text === undefined || !parsed) return [];
         const doc = TextDocument.create(uri, 'sysml', 0, text);
-        const symbols = this.symbols.filter(symbol => symbol.uri === uri);
+        // The document's own declarations, a package's among them however many documents declare it.
+        const symbols = this.symbolTable.getSymbolsForUri(uri);
         const braces = parsed.tokenStream.getTokens()
             .filter(token => token.type === SysMLv2Lexer.LBRACE)
             .map(token => doc.offsetAt({ line: token.line - 1, character: token.column }));
@@ -68,12 +73,17 @@ export class NameReferences {
                 segment.name === target.name || segment.name === target.shortName))) continue;
             const namespace = namespaces.find(ns => ns.body < path.start && path.end <= ns.end);
             const redefiningOwner = this.redefiningOwner(symbols, doc, path.start, path.end);
+            const mode: ResolutionMode = path.qualifiedNames.length !== 1 ? 'reference'
+                : this.isGeneral(symbols, doc, path.start, path.end) ? 'general'
+                    : this.isImportTarget(uri, symbols, doc, path.qualifiedNames[0], path.start) ? 'import' : 'reference';
             let receiver: SysMLSymbol | undefined;
             let receiverAmbiguous = false;
             for (let group = 0; group < path.qualifiedNames.length; group++) {
                 const qualified = path.qualifiedNames[group];
                 let resolved: SysMLSymbol | undefined;
                 let ambiguous = false;
+                // The name resolved as a whole, each segment the element its result is reached through.
+                let segments: NameResolution[] | undefined;
                 for (let index = 0; index < qualified.segments.length; index++) {
                     const segment = qualified.segments[index];
                     const range = Range.create(doc.positionAt(segment.start), doc.positionAt(segment.end));
@@ -95,6 +105,9 @@ export class NameReferences {
                     if (declaration) {
                         resolved = declaration;
                         ambiguous = false;
+                    } else if (index > 0 && segments) {
+                        resolved = segments[index].symbol;
+                        ambiguous = segments[index].ambiguous;
                     } else if (index > 0) {
                         if (resolved) {
                             const result = this.resolver.resolveMemberReference(resolved, segment.name, this.indexes);
@@ -111,10 +124,10 @@ export class NameReferences {
                         resolved = result.symbol;
                         ambiguous = result.ambiguous;
                     } else {
-                        const result = this.resolver.resolveReferenceIn(
-                            namespace?.symbol, joinQualifiedName([segment.name]), this.indexes, namedAfter);
-                        resolved = result.symbol;
-                        ambiguous = result.ambiguous;
+                        segments = this.resolver.resolveSegmentsIn(namespace?.symbol,
+                            qualified.segments.map(s => s.name), this.indexes, namedAfter, mode);
+                        resolved = segments[0].symbol;
+                        ambiguous = segments[0].ambiguous;
                     }
                     if (cursor !== undefined && (cursor < segment.start || cursor > segment.end)) continue;
                     if (target && segment.name !== target.name && segment.name !== target.shortName) continue;
@@ -129,6 +142,32 @@ export class NameReferences {
             }
         }
         return refs;
+    }
+
+    /**
+     * Whether the reference from `start` to `end` is the general of a typing
+     * or specialization (not a conjugated one), which resolves to a type,
+     * never a package (`NamespaceResolver.resolveTarget`).
+     */
+    private isGeneral(symbols: SysMLSymbol[], doc: TextDocument, start: number, end: number): boolean {
+        return symbols.some(symbol => symbol.ownedSpecializations?.some(specialization =>
+            (specialization.kind === 'typing' || specialization.kind === 'specializes') && !specialization.conjugated &&
+            specialization.range !== undefined &&
+            doc.offsetAt(specialization.range.start) <= start && end <= doc.offsetAt(specialization.range.end)));
+    }
+
+    /**
+     * Whether the qualified name at `start` is the target of an import of the
+     * document: written in that import, with the names of its target, as
+     * opposed to a name in its filter condition.
+     */
+    private isImportTarget(uri: string, symbols: SysMLSymbol[], doc: TextDocument,
+        qualified: { readonly segments: readonly { readonly name: string }[] }, start: number): boolean {
+        const names = qualified.segments.map(segment => segment.name).join('\0');
+        const imports = [...this.indexes.registry.getRootImports(uri), ...symbols.flatMap(symbol => symbol.importTargets ?? [])];
+        return imports.some(imp => imp.range !== undefined &&
+            doc.offsetAt(imp.range.start) <= start && start < doc.offsetAt(imp.range.end) &&
+            splitQualifiedName(imp.target).join('\0') === names);
     }
 
     /**

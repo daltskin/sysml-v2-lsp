@@ -570,6 +570,29 @@ describe('TextValidationProvider', () => {
             expect(dm.getUris()).toEqual([]);
         });
 
+        it('gives each text a revision of its own, also a document opened again at the same version', async () => {
+            const { TextDocument } = await import('vscode-languageserver-textdocument');
+            const { dm } = await setup([]);
+            const uri = 'file:///ws/rev.sysml';
+            expect(dm.getRevision(uri)).toBe(-1);
+            dm.parse(TextDocument.create(uri, 'sysml', 1, 'package A;'));
+            const first = dm.getRevision(uri);
+            // The same version again keeps the cached text and its revision.
+            dm.parse(TextDocument.create(uri, 'sysml', 1, 'package A;'));
+            expect(dm.getRevision(uri)).toBe(first);
+            dm.remove(uri);
+            expect(dm.getRevision(uri)).toBe(-1);
+            dm.parse(TextDocument.create(uri, 'sysml', 1, 'package A;'));
+            const reopened = dm.getRevision(uri);
+            expect(reopened).toBeGreaterThan(first);
+            dm.cacheTextOnly(uri, 2, 'package B;');
+            expect(dm.getRevision(uri)).toBeGreaterThan(reopened);
+            const standIn = dm.withTexts([{ uri, text: 'package C;' }], () => dm.getRevision(uri));
+            expect(standIn).toBeGreaterThan(reopened);
+            // The real text is back afterwards, with its own revision.
+            expect(dm.getRevision(uri)).not.toBe(standIn);
+        });
+
         it('rejects exhausted internal versions without changing documents', async () => {
             const motors = { uri: 'file:///ws/motors.sysml', text: 'package Motors { part def Motor; }' };
             const { dm } = await setup([motors]);
