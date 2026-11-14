@@ -1,7 +1,7 @@
 import { ErrorNode, ParserRuleContext, ParseTree, TerminalNode, Token } from 'antlr4ng';
 import { Range } from 'vscode-languageserver/node';
 import { SysMLv2Lexer } from '../generated/SysMLv2Lexer.js';
-import { ConjugatedPortTypingContext, FeatureSpecializationContext, FeatureTypingContext, FeatureValueContext, MultiplicityBoundsContext, NameContext, OwnedExpressionContext, OwnedReferenceSubsettingContext, QualifiedNameContext, RedefinesContext, SubclassificationPartContext, SubsetsContext, SysMLv2Parser, TypedByContext } from '../generated/SysMLv2Parser.js';
+import { ConjugatedPortTypingContext, FeatureSpecializationContext, FeatureTypingContext, FeatureValueContext, MultiplicityBoundsContext, NameContext, OwnedExpressionContext, OwnedReferenceSubsettingContext, QualifiedNameContext, RedefinesContext, ReturnParameterMemberContext, SubclassificationPartContext, SubsetsContext, SysMLv2Parser, TypedByContext } from '../generated/SysMLv2Parser.js';
 import { ParseResult } from '../parser/parseDocument.js';
 import { contextToRange, tokenToRange } from '../parser/positionUtils.js';
 import { SYSML_KEYWORDS } from '../utils/sysmlKeywords.js';
@@ -360,6 +360,16 @@ const OCCURRENCE_USAGE_ELEMENT_RULE_INDICES: ReadonlySet<number> = new Set([
     SysMLv2Parser.RULE_occurrenceUsageElement,
     SysMLv2Parser.RULE_structureUsageElement,
     SysMLv2Parser.RULE_behaviorUsageElement,
+]);
+
+/**
+ * The rules a `usageElement` (SysML 8.2.2.5.2, 8.2.2.6.4) resolves through to the usage it
+ * declares: each is a choice between alternatives, owning no element itself.
+ */
+const USAGE_ELEMENT_RULE_INDICES: ReadonlySet<number> = new Set([
+    SysMLv2Parser.RULE_usageElement,
+    SysMLv2Parser.RULE_nonOccurrenceUsageElement,
+    ...OCCURRENCE_USAGE_ELEMENT_RULE_INDICES,
 ]);
 
 /** Rules that represent :> subsetting / specializes / subclassification */
@@ -1433,6 +1443,7 @@ export class SymbolTable {
             visibility,
             featureValue,
             prefixKeywords: prefixKeywords.length > 0 ? prefixKeywords : undefined,
+            isReturn: this.isReturnParameter(ctx) || undefined,
             ownedSpecializations: ownedSpecializations.length > 0 ? ownedSpecializations : undefined,
             source: transition?.source,
             target: transition?.target,
@@ -2197,6 +2208,20 @@ export class SymbolTable {
         }
         return current !== ctx.parent && current instanceof ParserRuleContext
             && current.ruleIndex === SysMLv2Parser.RULE_endOccurrenceUsageElement;
+    }
+
+    /**
+     * Whether `ctx` is the usage a `ReturnParameterMember` owns (`return : R;`,
+     * SysML 8.2.2.19; in a case body as in the examples of 7.23.2 and 7.24.2):
+     * the rule its `usageElement` resolves to, reached only through that rule's
+     * alternatives, never a member of its body.
+     */
+    private isReturnParameter(ctx: ParserRuleContext): boolean {
+        let current = ctx.parent;
+        while (current instanceof ParserRuleContext && USAGE_ELEMENT_RULE_INDICES.has(current.ruleIndex)) {
+            current = current.parent;
+        }
+        return current !== ctx.parent && current instanceof ReturnParameterMemberContext;
     }
 
     /**

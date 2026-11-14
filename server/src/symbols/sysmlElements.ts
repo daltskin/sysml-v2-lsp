@@ -152,6 +152,12 @@ export interface SysMLSymbol {
      */
     prefixKeywords?: string[];
     /**
+     * True for a result parameter: the usage owned by a `ReturnParameterMember`
+     * (SysML 8.2.2.19, also in a case body, 7.23.2), whose direction is `out`
+     * (KerML 8.3.4.7.8).
+     */
+    isReturn?: boolean;
+    /**
      * The specializations of the element's own declaration, one per target in
      * written order: a usage's typings, subsettings, reference and cross
      * subsettings and redefinitions (SysML 8.2.2.6.2), a definition's

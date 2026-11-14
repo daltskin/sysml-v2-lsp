@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- `sysml/model` marks a result parameter, declared with `return` in a calculation, constraint or case body (SysML 7.19.2, 8.2.2.19 `ReturnParameterMember`, 8.2.2.20), with `isReturn: true` and `direction: 'out'`, in `elements` and in `resolvedTypes` features. A result parameter in a case body, which the grammar allows as in SysML 7.23.2 and 7.24.2, is marked too. Its direction is `out` whatever direction is written after `return` (KerML 8.3.4.7.8). Other parameters keep the direction they are declared with, and a member of a result parameter's body is not marked.
+
 ## [0.44.0]
 
 ### Fixed
