@@ -3552,6 +3552,40 @@ part def A {
             expect(ambiguous.every(d => /also declared as part def in this document \(line \d+\)\.$/.test(d.message))).toBe(true);
         });
 
+        it('does not flag same-named parameters in separate calculation usage bodies (issue #178)', async () => {
+            const text = `
+package Repro {
+    part def Engine;
+    part x : Engine;
+    calc def A { in engine : Engine; }
+    calc def B { in engine : Engine; }
+    part def Car {
+        calc a : A { in engine = x; }
+        calc b : B { in engine = x; }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            expect(diags.filter(d => d.code === 'ambiguous-namespace-name')).toEqual([]);
+        });
+
+        it('still flags duplicate parameters in one calculation usage body', async () => {
+            const text = `
+package Repro {
+    part def Engine;
+    part x : Engine;
+    calc def A { in engine : Engine; }
+    part def Car {
+        calc a : A { in engine = x; in engine = x; }
+    }
+}
+`;
+            const diags = await getSemanticDiagnostics(text);
+            const ambiguous = diags.filter(d => d.code === 'ambiguous-namespace-name');
+            expect(ambiguous).toHaveLength(2);
+            expect(ambiguous.every(d => d.data.name === 'engine')).toBe(true);
+        });
+
         it('does not flag same-named features declared in the bodies of two concern usages', async () => {
             const text = `
 package Hazards {
