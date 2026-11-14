@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.44.0]
+
 ### Fixed
 
 - Calculation usages (`calc`) now own their body parameters. Parameters with the same name in separate calculation bodies no longer report `ambiguous-namespace-name`; duplicate declarations in one body still report an error (#178). This follows SysML 2.0 clauses 7.19.2 and 8.2.2.19, and KerML 1.0 clause 8.3.2.4.5 (`validateNamespaceDistinguishibility`).
