@@ -8,43 +8,7 @@ import { DocumentManager } from '../documentManager.js';
 import { SysMLv2Lexer } from '../generated/SysMLv2Lexer.js';
 import { SysMLv2Parser } from '../generated/SysMLv2Parser.js';
 import { SYSML_KEYWORDS } from '../utils/sysmlKeywords.js';
-
-/** Lexer token types that map to the "operator" semantic token. */
-const OPERATOR_TOKENS = new Set([
-    SysMLv2Lexer.BANG_EQ_EQ,    // !==
-    SysMLv2Lexer.STAR_STAR,     // **
-    SysMLv2Lexer.COLON_GT,      // :>
-    SysMLv2Lexer.COLON_GT_GT,   // :>>
-    SysMLv2Lexer.AMP,           // &
-    SysMLv2Lexer.COLON_COLON,   // ::
-    SysMLv2Lexer.STAR,          // *
-    SysMLv2Lexer.PIPE,          // |
-    SysMLv2Lexer.EQ_EQ,         // ==
-    SysMLv2Lexer.BANG_EQ,        // !=
-    SysMLv2Lexer.PLUS,          // +
-    SysMLv2Lexer.MINUS,         // -
-    SysMLv2Lexer.ARROW,         // ->
-    SysMLv2Lexer.SLASH,         // /
-    SysMLv2Lexer.LT,            // <
-    SysMLv2Lexer.EQ,            // =
-    SysMLv2Lexer.GT,            // >
-    SysMLv2Lexer.CARET,         // ^
-    SysMLv2Lexer.TILDE,         // ~
-]);
-
-/** Lexer token types for punctuation — let tmLanguage handle these. */
-const PUNCTUATION_TOKENS = new Set([
-    SysMLv2Lexer.LBRACE,        // {
-    SysMLv2Lexer.RBRACE,        // }
-    SysMLv2Lexer.LPAREN,        // (
-    SysMLv2Lexer.RPAREN,        // )
-    SysMLv2Lexer.SEMI,          // ;
-    SysMLv2Lexer.COMMA,         // ,
-    SysMLv2Lexer.DOT,           // .
-    SysMLv2Lexer.LBRACK,        // [
-    SysMLv2Lexer.RBRACK,        // ]
-    SysMLv2Lexer.COLON,         // :
-]);
+import { OPERATOR_TOKENS, PUNCTUATION_TOKENS } from '../utils/symbolTokens.js';
 
 /**
  * The token index of each flow or message payload type written without a payload name (8.2.2.16
