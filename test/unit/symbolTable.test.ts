@@ -23,6 +23,32 @@ async function buildMultiFileST(fragments: Array<{ text: string; uri: string }>)
 }
 
 describe('Symbol Table', () => {
+    it('records each calculation usage as the owner of its parameters (SysML 7.19.2)', async () => {
+        const { st, result } = await buildST(`
+package Repro {
+    part def Engine;
+    part x : Engine;
+    calc def A { in engine : Engine; }
+    calc def B { in engine : Engine; }
+    part def Car {
+        calc a : A { in engine = x; }
+        calc b : B { in engine = x; }
+    }
+}
+`);
+        expect(result.errors).toEqual([]);
+        for (const [name, typeName] of [['a', 'A'], ['b', 'B']]) {
+            const usage = st.getSymbol(`Repro::Car::${name}`);
+            expect(usage).toBeDefined();
+            expect(usage!.kind).toBe('calc');
+            expect(usage!.typeNames).toEqual([typeName]);
+            const parameter = st.getSymbol(`Repro::Car::${name}::engine`);
+            expect(parameter).toBeDefined();
+            expect(parameter!.parentId).toBe(usage!.symbolId);
+        }
+        expect(st.getSymbol('Repro::Car::engine')).toBeUndefined();
+    });
+
     it('should build a symbol table from a parsed document', async () => {
         const { parseDocument } = await import('../../server/src/parser/parseDocument.js');
         const { SymbolTable } = await import('../../server/src/symbols/symbolTable.js');

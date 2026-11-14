@@ -39,6 +39,7 @@ const RULE_INDEX_TO_KIND = new Map<number, SysMLElementKind>([
     [SysMLv2Parser.RULE_enumeratedValue, SysMLElementKind.EnumUsage],             // 228
     [SysMLv2Parser.RULE_enumerationUsage, SysMLElementKind.EnumUsage],            // 229
     [SysMLv2Parser.RULE_calculationDefinition, SysMLElementKind.CalcDef],         // 374
+    [SysMLv2Parser.RULE_calculationUsage, SysMLElementKind.CalcUsage],
     [SysMLv2Parser.RULE_viewDefinition, SysMLElementKind.ViewDef],                // 421
     [SysMLv2Parser.RULE_viewpointDefinition, SysMLElementKind.ViewpointDef],      // 432
     [SysMLv2Parser.RULE_metadataDefinition, SysMLElementKind.MetadataDef],        // 436
