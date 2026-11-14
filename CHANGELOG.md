@@ -20,6 +20,17 @@
 - A filtered import at the top level of a document imports only the members its filter selects (SysML 7.5.4).
 - An owned or inherited member hides an imported member of the same name or short name (KerML 7.2.5.4, 7.3.2.1), so a typing of the owned member gets its `targetId`. Hiding is by name whatever the kinds of the two members, as 7.2.5.4 states; KerML 8.3.2.4.5 `importedMemberships` would exclude only memberships that aren't distinguishable.
 
+## [0.44.0]
+
+### Fixed
+
+- Calculation usages (`calc`) now own their body parameters. Parameters with the same name in separate calculation bodies no longer report `ambiguous-namespace-name`; duplicate declarations in one body still report an error (#178). This follows SysML 2.0 clauses 7.19.2 and 8.2.2.19, and KerML 1.0 clause 8.3.2.4.5 (`validateNamespaceDistinguishibility`).
+
+### Security
+
+- Updated `@hono/node-server` to 2.1.8 and raised its override to address CVE-2026-126210 and CVE-2026-126343.
+- Updated transitive `hono` to 4.13.18 to address CVE-2026-126355, CVE-2026-126356, CVE-2026-126357, CVE-2026-126358, and CVE-2026-126359.
+
 ## [0.43.0]
 
 ### Added
