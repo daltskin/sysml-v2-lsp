@@ -1009,10 +1009,81 @@ package InheritTest {
         const symbols = st.getAllSymbols();
         const view = symbols.find(s => s.name === 'mySensorView');
         expect(view).toBeDefined();
-        // View should inherit filter from its definition
-        if (view!.viewFilters && view!.viewFilters.length > 0) {
-            expect(view!.viewFilters![0]).toContain('PartUsage');
-        }
+        // SysML 7.26.2: the view inherits the filter of its definition, in the same document.
+        expect(view!.viewFilters).toEqual(['@SysML::PartUsage']);
+        expect(view!.exposeTargets).toEqual(['Sensor']);
+    });
+
+    it('inherits filters and rendering through a chain of view definitions in the same document (SysML 7.26.2)', async () => {
+        const { st } = await buildST(`
+package InheritChain {
+    view def BaseView {
+        filter @SysML::PartUsage;
+        render asTreeDiagram;
+    }
+    view def SubView :> BaseView {
+        filter @SysML::PortUsage;
+    }
+    view sub : SubView;
+    view own : SubView {
+        render asTableForm;
+    }
+}
+`);
+        const byName = (name: string) => st.getAllSymbols().find(s => s.name === name)!;
+        expect(byName('SubView').viewFilters).toEqual(['@SysML::PortUsage', '@SysML::PartUsage']);
+        expect(byName('SubView').viewRendering).toBe('asTreeDiagram');
+        expect(byName('sub').viewFilters).toEqual(['@SysML::PortUsage', '@SysML::PartUsage']);
+        expect(byName('sub').viewRendering).toBe('asTreeDiagram');
+        // A rendering of its own isn't replaced by an inherited one.
+        expect(byName('own').viewRendering).toBe('asTableForm');
+    });
+
+    describe('view inheritance across documents (SysML 7.26.2)', () => {
+        const defs = { uri: 'file:///w/defs.sysml', text: 'package Defs {\n    view def BaseView { filter @SysML::PartUsage; render asTreeDiagram; }\n    view def SubView :> BaseView { filter @SysML::PortUsage; }\n}\n' };
+        const views = { uri: 'file:///w/views.sysml', text: 'package Views1 {\n    private import Defs::*;\n    view v : SubView;\n    view q : Defs::BaseView;\n}\n' };
+        const props = (st: { getAllSymbols(): Array<{ name: string; viewFilters?: string[]; viewRendering?: string }> }, name: string) => {
+            const view = st.getAllSymbols().find(s => s.name === name)!;
+            return { filters: view.viewFilters, rendering: view.viewRendering };
+        };
+
+        it('inherits from a view definition of another document, in either build order', async () => {
+            for (const order of [[defs, views], [views, defs]]) {
+                const st = await buildMultiFileST(order);
+                expect(props(st, 'v'), order[0].uri).toEqual({ filters: ['@SysML::PortUsage', '@SysML::PartUsage'], rendering: 'asTreeDiagram' });
+                expect(props(st, 'q'), order[0].uri).toEqual({ filters: ['@SysML::PartUsage'], rendering: 'asTreeDiagram' });
+            }
+        });
+
+        it('follows the definition a view is typed by, not another view definition of the same name', async () => {
+            const other = { uri: 'file:///w/other.sysml', text: 'package Other {\n    view def SubView { render asTableForm; }\n}\n' };
+            for (const order of [[defs, other, views], [views, other, defs]]) {
+                const st = await buildMultiFileST(order);
+                expect(props(st, 'v').rendering, order[0].uri).toBe('asTreeDiagram');
+            }
+        });
+
+        it('follows a change or removal of the defining document', async () => {
+            const { parseDocument } = await import('../../server/src/parser/parseDocument.js');
+            const st = await buildMultiFileST([defs, views]);
+            st.build(defs.uri, parseDocument(defs.text.replace('render asTreeDiagram;', 'render asTableForm;').replace('filter @SysML::PortUsage;', '')));
+            expect(props(st, 'v')).toEqual({ filters: ['@SysML::PartUsage'], rendering: 'asTableForm' });
+            st.removeUri(defs.uri);
+            expect(props(st, 'v')).toEqual({ filters: undefined, rendering: undefined });
+        });
+
+        it('inherits from the owned view definition, not an imported one it hides (KerML 7.2.5.4)', async () => {
+            const q = { uri: 'file:///w/q.sysml', text: 'package Q {\n    metadata def K;\n    view def VD { filter @K; render asTreeDiagram; }\n}\n' };
+            const u = { uri: 'file:///w/u.sysml', text: 'package U {\n    private import Q::*;\n    metadata def M;\n    view def VD { filter @M; }\n    view v : VD;\n}\n' };
+            for (const order of [[q, u], [u, q]]) {
+                expect(props(await buildMultiFileST(order), 'v'), order[0].uri).toEqual({ filters: ['@M'], rendering: undefined });
+            }
+        });
+
+        it('ends on a cycle of view definitions specializing one another', async () => {
+            const st = await buildMultiFileST([{ uri: 'file:///w/c.sysml', text: 'package C {\n    view def A :> B { filter @SysML::PartUsage; }\n    view def B :> A { render asTreeDiagram; }\n    view c : A;\n}\n' }]);
+            expect(props(st, 'c')).toEqual({ filters: ['@SysML::PartUsage'], rendering: 'asTreeDiagram' });
+        });
     });
 });
 

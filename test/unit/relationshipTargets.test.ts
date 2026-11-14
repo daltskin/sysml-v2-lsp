@@ -369,3 +369,79 @@ describe('sysml/model from the element registry', () => {
         expect(pb.children[0].relationships[0].targetId).toBe(pa.children[0].symbolId);
     });
 });
+
+describe('an owned or inherited member hides an imported one of the same name (KerML 7.2.5.4, 7.3.2.1)', () => {
+    const B = 'file:///w/b.sysml';
+    const q = { uri: 'file:///w/q.sysml', text: 'package Q {\n    metadata def K;\n    part def X;\n    #K part def Y;\n    package S { part def X; }\n    action a;\n}\npackage Q2 { part def <X> Xq; }\n' };
+    const Q = q.uri;
+    /** The target at `line` of document `a`, with `q` and `others`, in both document orders. */
+    const both = (text: string, line: number, kind: RegistryRelationship['kind'] | undefined, others: Array<{ uri: string; text: string }> = []) => {
+        const forward = targets([q, doc(text), ...others]).at(A, line, kind);
+        const reverse = targets([...others, doc(text), q].reverse()).at(A, line, kind);
+        expect(reverse, 'reverse document order').toBe(forward);
+        return forward;
+    };
+
+    it('in a package, an import written before or after', () => {
+        expect(both('package U {\n    private import Q::*;\n    part def X;\n    part x : X;\n}\n', 3, 'typing')).toBe(`${A}:2`);
+        expect(both('package U {\n    part x : X;\n    part def X;\n    private import Q::*;\n}\n', 1, 'typing')).toBe(`${A}:2`);
+    });
+
+    it('in a definition body, and for a specialization', () => {
+        expect(both('part def D {\n    private import Q::*;\n    part def X;\n    part x : X;\n}\n', 3, 'typing')).toBe(`${A}:2`);
+        expect(both('package U {\n    private import Q::*;\n    part def X;\n    part def Z :> X;\n}\n', 3, 'specializes')).toBe(`${A}:2`);
+    });
+
+    it('in the root namespace, a top-level element of another document hiding a top-level import', () => {
+        const other = { uri: B, text: 'part def X;\n' };
+        expect(both('private import Q::*;\npart x : X;\n', 1, 'typing', [other])).toBe(`${B}:0`);
+    });
+
+    it('through a membership, recursive or filtered import', () => {
+        expect(both('package U {\n    private import Q::X;\n    part def X;\n    part x : X;\n}\n', 3, 'typing')).toBe(`${A}:2`);
+        expect(both('package U {\n    private import Q::**;\n    part def X;\n    part x : X;\n}\n', 3, 'typing')).toBe(`${A}:2`);
+        expect(both('package U {\n    private import Q::*[not @Q::K];\n    part def X;\n    part x : X;\n}\n', 3, 'typing')).toBe(`${A}:2`);
+    });
+
+    it('an inherited member hides an imported one, also in a specialization of the importing type', () => {
+        const text = 'package U {\n    part def A { part def X; }\n    part def B :> A {\n        public import Q::*;\n        part x : X;\n    }\n    part b : B {\n        part y : X;\n    }\n}\n';
+        expect(both(text, 4, 'typing')).toBe(`${A}:1`);
+        expect(both(text, 7, 'typing')).toBe(`${A}:1`);
+    });
+
+    it('by short name, hiding the whole imported membership', () => {
+        expect(both('package U {\n    private import Q::*;\n    part def <X> Xlong;\n    part x : X;\n}\n', 3, 'typing')).toBe(`${A}:2`);
+        // Q2::Xq, short name <X>, is hidden by U::X under either of its names.
+        const text = 'package U {\n    private import Q2::*;\n    part def X;\n    part x : X;\n    part y : Xq;\n}\n';
+        expect(both(text, 3, 'typing')).toBe(`${A}:2`);
+        expect(both(text, 4, 'typing')).toBeUndefined();
+    });
+
+    it('by name, whatever the kinds of the two members', () => {
+        const text = 'package U {\n    public import Q::*;\n    port def X;\n    port x : X;\n}\npackage C {\n    private import U::*;\n    port c : X;\n}\n';
+        expect(both(text, 3, 'typing')).toBe(`${A}:2`);
+        expect(both(text, 7, 'typing')).toBe(`${A}:2`);
+    });
+
+    it('is not re-exported: a namespace importing the hiding one sees only its own member', () => {
+        const text = 'package U {\n    public import Q::*;\n    part def X;\n}\npackage C {\n    private import U::*;\n    part c : X;\n    part d : U::X;\n}\n';
+        expect(both(text, 6, 'typing')).toBe(`${A}:2`);
+        expect(both(text, 7, 'typing')).toBe(`${A}:2`);
+        // A private owned member hides the import too: `U::X` from outside is not visible.
+        expect(both('package U {\n    public import Q::*;\n    private part def X;\n}\npackage C {\n    part c : U::X;\n}\n', 5, 'typing')).toBeUndefined();
+    });
+
+    it('leaves two imports of one name, and the same element reached twice, as they are', () => {
+        const r = { uri: B, text: 'package R { part def X; }\npackage R2 { public import Q::*; }\n' };
+        expect(targets([q, r, doc('package U {\n    private import Q::*;\n    private import R::*;\n    part x : X;\n}\n')]).ambiguousAt(A, 3, 'typing')).toBe(true);
+        expect(both('package U {\n    private import Q::*;\n    private import R2::*;\n    part x : X;\n}\n', 3, 'typing', [r])).toBe(`${Q}:2`);
+        expect(both('package U {\n    part def X;\n    public import U::X;\n}\npackage C {\n    part c : U::X;\n}\n', 5, 'typing')).toBe(`${A}:1`);
+    });
+
+    it('leaves usages named after their reference, and redefinitions, as they are', () => {
+        expect(both('part def D {\n    private import Q::*;\n    perform a;\n}\n', 2, 'referenceSubsetting')).toBe(`${Q}:5`);
+        const text = 'package U {\n    part def A { attribute x; }\n    part def B :> A {\n        private import Q::*;\n        attribute :>> x;\n        attribute y :> x;\n    }\n}\n';
+        expect(both(text, 4, 'redefinition')).toBe(`${A}:1`);
+        expect(both(text, 5, 'subsetting')).toBe(`${A}:4`);
+    });
+});

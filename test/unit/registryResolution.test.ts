@@ -82,6 +82,46 @@ part b : d;
             const doc = { uri: 'file:///w/a.sysml', text: 'private import L::A::*;\npart def m;\npart t : m;\n' };
             expect(resolver([lib, doc]).from(doc.uri, 2, 'm')).toBe(`${doc.uri}:1`);
         });
+
+        describe('a filtered import imports only the members its filter selects (SysML 7.5.4)', () => {
+            const tagged = { uri: 'file:///w/tagged.sysml', text: `package T {
+    metadata def K;
+    metadata def D;
+    #K part def k;
+    #K #D part def kd;
+    part def u;
+    package Deep { #K part def dk; part def du; }
+}
+` };
+
+            it('as an import inside a package does', () => {
+                const top = { uri: 'file:///w/a.sysml', text: 'private import T::*[@K];\npart a : k;\npart b : u;\n' };
+                const nested = { uri: 'file:///w/b.sysml', text: 'package P {\n    private import T::*[@K];\n    part a : k;\n    part b : u;\n}\n' };
+                const { from } = resolver([tagged, top, nested]);
+                expect(from(top.uri, 1, 'k')).toBe(`${tagged.uri}:3`);
+                expect(from(top.uri, 2, 'u')).toBeUndefined();
+                expect(from(nested.uri, 2, 'k')).toBe(`${tagged.uri}:3`);
+                expect(from(nested.uri, 3, 'u')).toBeUndefined();
+            });
+
+            it('through a recursive import and a filter expression', () => {
+                const doc = { uri: 'file:///w/a.sysml', text: 'private import T::**[@K and not @D];\npart a : k;\npart b : kd;\npart c : dk;\npart d : du;\n' };
+                const { from } = resolver([tagged, doc]);
+                expect(from(doc.uri, 1, 'k')).toBe(`${tagged.uri}:3`);
+                expect(from(doc.uri, 2, 'kd')).toBeUndefined();
+                expect(from(doc.uri, 3, 'dk')).toBe(`${tagged.uri}:6`);
+                expect(from(doc.uri, 4, 'du')).toBeUndefined();
+            });
+
+            it('in every document, and without filtering the other top-level imports', () => {
+                const a = { uri: 'file:///w/a.sysml', text: 'private import T::*[@K];\n' };
+                const b = { uri: 'file:///w/b.sysml', text: 'private import L::*;\npart x : u;\npart y : n;\npackage P { part z : k; }\n' };
+                const { from } = resolver([lib, tagged, a, b]);
+                expect(from(b.uri, 1, 'u')).toBeUndefined();
+                expect(from(b.uri, 2, 'n')).toBe(`${lib.uri}:0`);
+                expect(from(b.uri, 3, 'k')).toBe(`${tagged.uri}:3`);
+            });
+        });
     });
 
     describe('a package declared more than once is one namespace', () => {

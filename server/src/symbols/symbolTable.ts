@@ -506,6 +506,8 @@ export class SymbolTable {
     private effectiveNames: Map<string, EffectiveName> | undefined;
     /** The usages whose effective names did not settle when last refreshed (`refreshNamingFeatures`) */
     private namingIssues: NamingIssue[] = [];
+    /** Each view's filters, rendering and expose targets as declared, before inheritance (`inheritViewProperties`) */
+    private ownViewProperties = new WeakMap<SysMLSymbol, ViewProperties>();
 
     /**
      * @param namingRounds the budget of rounds of `refreshNamingFeatures`,
@@ -518,13 +520,19 @@ export class SymbolTable {
      */
     build(uri: string, parseResult: ParseResult): void {
         this.buildDocument(uri, parseResult);
-        this.refreshNamingFeatures();
+        this.refresh();
     }
 
     /** Build the symbol table from the parse results of several documents. */
     buildAll(documents: Iterable<[uri: string, parseResult: ParseResult]>): void {
         for (const [uri, parseResult] of documents) this.buildDocument(uri, parseResult);
+        this.refresh();
+    }
+
+    /** Derive what depends on every document: effective names, then what views inherit. */
+    private refresh(): void {
         this.refreshNamingFeatures();
+        this.inheritViewProperties();
     }
 
     /** Build `uri`'s symbols, each named as written (`refreshNamingFeatures`). */
@@ -551,10 +559,10 @@ export class SymbolTable {
             this.effectiveNames = undefined;
         }
 
-        // Post-process: resolve view specialization chains to inherit
-        // filters, rendering, and expose targets from parent view defs
-        this.resolveViewInheritance(uri);
         const declarations = this.symbolsByUri.get(uri) ?? [];
+        for (const symbol of declarations) {
+            if (isView(symbol)) this.ownViewProperties.set(symbol, viewPropertiesOf(symbol));
+        }
         // SysML 7.5.5: a document's body is its root namespace's, its imports among them.
         this.registry.setDocument(uri, declarations, this.extractImportsFromBody(tree, SysMLv2Parser.RULE_packageBodyElement));
         // The symbols by element follow the registry, which only now has this document.
@@ -901,7 +909,7 @@ export class SymbolTable {
         this.symbolsByUri.delete(uri);
         this.trees.delete(uri);
         this.effectiveNamesByUri.delete(uri);
-        this.refreshNamingFeatures();
+        this.refresh();
     }
 
     private clearUri(uri: string): void {
@@ -944,70 +952,40 @@ export class SymbolTable {
     }
 
     /**
-     * Resolve view specialization chains to inherit filters, rendering,
-     * and expose targets from parent view definitions.
-     *
-     * For example, if `view x : PartsTreeView` and `PartsTreeView :> TreeView`,
-     * and TreeView has `render asTreeDiagram`, then x inherits that rendering.
+     * Give every view of the workspace what it inherits from the view
+     * definitions it specializes, transitively (SysML 7.26.2): their filter
+     * conditions after its own, their rendering unless it declares one, and
+     * their expose targets unless it has its own. Derived from each view's own
+     * declaration, so neither document nor declaration order matters.
      */
-    private resolveViewInheritance(uri: string): void {
-        const symbols = this.symbolsByUri.get(uri) ?? [];
-        const viewSymbols = symbols.filter(
-            s => s.kind === SysMLElementKind.ViewUsage || s.kind === SysMLElementKind.ViewDef,
-        );
-        if (viewSymbols.length === 0) return;
-
-        // Build a lookup of all view defs by name (for chain resolution)
-        const viewDefsByName = new Map<string, SysMLSymbol>();
-        for (const s of this.getAllSymbols()) {
-            if (s.kind === SysMLElementKind.ViewDef) {
-                for (const name of memberNamesOf(s)) viewDefsByName.set(name, s);
+    private inheritViewProperties(): void {
+        const views = this.getAllSymbolsIncludingDuplicates().filter(isView);
+        if (views.length === 0) return;
+        const indexes = this.getIndexes();
+        const inherited = new Map<SysMLSymbol, ViewProperties>();
+        const visiting = new Set<SysMLSymbol>();
+        const effective = (view: SysMLSymbol): ViewProperties => {
+            const own = this.ownViewProperties.get(view) ?? {};
+            const done = inherited.get(view);
+            // A view on a specialization cycle (KerML 8.2.3.5.1) inherits nothing more from it.
+            if (done || visiting.has(view)) return done ?? own;
+            visiting.add(view);
+            const result: ViewProperties = { ...own, viewFilters: own.viewFilters && [...own.viewFilters] };
+            for (const general of this.resolver.generalsOf(view, indexes)) {
+                if (general.kind !== SysMLElementKind.ViewDef || general === view) continue;
+                const parent = effective(general);
+                for (const filter of parent.viewFilters ?? []) {
+                    result.viewFilters ??= [];
+                    if (!result.viewFilters.includes(filter)) result.viewFilters.push(filter);
+                }
+                result.viewRendering ??= parent.viewRendering;
+                if (!result.exposeTargets?.length && parent.exposeTargets?.length) result.exposeTargets = [...parent.exposeTargets];
             }
-        }
-
-        for (const view of viewSymbols) {
-            // Walk the specialization chain (max depth 5 to prevent cycles)
-            const visited = new Set<string>();
-            let current: SysMLSymbol | undefined = view;
-            for (let depth = 0; depth < 5 && current; depth++) {
-                if (visited.has(current.name)) break;
-                visited.add(current.name);
-
-                // Follow the type reference to the parent view def
-                const parentName = current.typeNames[0] ?? current.typeName;
-                if (!parentName) break;
-
-                const parent = viewDefsByName.get(parentName);
-                if (!parent) break;
-
-                // Inherit viewFilters from parent if not already set
-                if (parent.viewFilters && parent.viewFilters.length > 0) {
-                    if (!view.viewFilters) {
-                        view.viewFilters = [...parent.viewFilters];
-                    } else {
-                        // Merge: add parent filters that aren't already present
-                        for (const f of parent.viewFilters) {
-                            if (!view.viewFilters.includes(f)) {
-                                view.viewFilters.push(f);
-                            }
-                        }
-                    }
-                }
-
-                // Inherit viewRendering from parent if not already set
-                if (parent.viewRendering && !view.viewRendering) {
-                    view.viewRendering = parent.viewRendering;
-                }
-
-                // Inherit exposeTargets from parent if not already set
-                if (parent.exposeTargets && parent.exposeTargets.length > 0 && (!view.exposeTargets || view.exposeTargets.length === 0)) {
-                    view.exposeTargets = [...parent.exposeTargets];
-                }
-
-                // Continue up the chain
-                current = parent;
-            }
-        }
+            visiting.delete(view);
+            inherited.set(view, result);
+            return result;
+        };
+        for (const view of views) Object.assign(view, effective(view));
     }
 
     /**
@@ -2877,4 +2855,17 @@ export class SymbolTable {
         }
         return parts.length > 0 ? parts.join('::') : undefined;
     }
+}
+
+/** The properties a view declares or inherits (SysML 7.26.2). */
+type ViewProperties = Pick<SysMLSymbol, 'viewFilters' | 'viewRendering' | 'exposeTargets'>;
+
+/** Whether `symbol` is a view definition or usage (SysML 7.26.2). */
+function isView(symbol: SysMLSymbol): boolean {
+    return symbol.kind === SysMLElementKind.ViewUsage || symbol.kind === SysMLElementKind.ViewDef;
+}
+
+/** The view properties `symbol` has now. */
+function viewPropertiesOf(symbol: SysMLSymbol): ViewProperties {
+    return { viewFilters: symbol.viewFilters, viewRendering: symbol.viewRendering, exposeTargets: symbol.exposeTargets };
 }

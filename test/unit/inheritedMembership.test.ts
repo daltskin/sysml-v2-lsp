@@ -328,7 +328,7 @@ package P {
         private import Lib::*;
     }
 }`;
-        expect((await resolvedMembers(text, 'P::B')).get('p')).toEqual(['P::A::p', 'Lib::p']);
+        expect((await resolvedMembers(text, 'P::B')).get('p')).toEqual(['P::A::p']);
     });
 
     it('does not inherit a private member', async () => {

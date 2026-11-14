@@ -900,28 +900,28 @@ export class NamespaceResolver {
             for (const id of indexes.registry.getRootIds()) addOwned(indexes.registry.getElement(id)!);
             // Every document's top-level imports are memberships of the one root namespace,
             // visible within all its top-level elements (SysML 7.5.5).
-            for (const imp of indexes.registry.getAllRootImports()) this.applyImport(imp, scope, indexes, addMember);
+            // SysML 7.5.4: an import's filter conditions select the memberships it imports. The
+            // root namespace isn't a package, so it has no filter of its own.
+            // KerML 7.2.5.4: a top-level element of any document hides an imported member of its name.
+            const importRoot = unlessHidden(members, addMember);
+            for (const imp of indexes.registry.getAllRootImports()) this.applyImport(imp, scope, indexes, filtered(importRoot, imp.filter));
             return;
         }
 
         for (const id of scope.ownedElementIds) addOwned(indexes.registry.getElement(id)!);
 
         const owner = this.symbolOf(scope, indexes);
-        // Inherited before imported: an inherited membership hides an imported one of the same name (KerML 7.3.2.1).
         if (owner && (isDefinition(owner.kind) || isUsage(owner.kind))) this.addInheritedMembers(owner, scope, indexes, addMember);
-        // Imports of every declaration, each resolved from the document declaring it; SysML
-        // 7.5.4: a package's `filter` applies to every import of that package.
+        // An owned or inherited membership hides an imported one of the same name (KerML 7.2.5.4,
+        // 7.3.2.1). Imports of every declaration, each resolved from the document declaring it;
+        // SysML 7.5.4: a package's `filter` applies to every import of that package.
+        const importing = unlessHidden(members, addMember);
         const declarations = indexes.registry.symbolsOf(scope);
         const packageFilter = combineFilters(declarations.flatMap(d => d.filterConditions ?? []));
         for (const declaration of declarations) {
             for (const imp of declaration.importTargets ?? []) {
                 const effectiveFilter = combineFilters([packageFilter, imp.filter].filter((f): f is FilterExpr => f !== undefined));
-                const filteredAddMember = effectiveFilter
-                    ? (name: string, entry: ResolvedMember) => {
-                        if (evaluateFilter(effectiveFilter, entry.symbol)) addMember(name, entry);
-                    }
-                    : addMember;
-                this.applyImport(imp, scope, indexes, filteredAddMember);
+                this.applyImport(imp, scope, indexes, filtered(importing, effectiveFilter));
             }
         }
     }
@@ -967,7 +967,7 @@ export class NamespaceResolver {
      * (SysML 7.17.6, 7.9.5). `type` itself when it specializes itself, as
      * KerML 8.2.3.5.1 allows circular specialization.
      */
-    private generalsOf(type: SysMLSymbol, indexes: SymbolIndexes): SysMLSymbol[] {
+    generalsOf(type: SysMLSymbol, indexes: SymbolIndexes): SysMLSymbol[] {
         const element = this.scopeOf(type, indexes);
         const generals: (SysMLSymbol | undefined)[] = [];
         for (const id of element?.ownedRelationshipIds ?? []) {
@@ -1090,6 +1090,34 @@ export class NamespaceResolver {
             }
         }
     }
+}
+
+/** `addMember`, adding only the members `filter` (if any) selects (SysML 7.5.4). */
+function filtered(addMember: (name: string, entry: ResolvedMember) => void, filter: FilterExpr | undefined): (name: string, entry: ResolvedMember) => void {
+    return filter ? (name, entry) => { if (evaluateFilter(filter, entry.symbol)) addMember(name, entry); } : addMember;
+}
+
+/**
+ * `addMember` for the imports of a namespace whose owned and inherited members
+ * are in `members`: an imported member is left out when one of its names is
+ * the name of such a member other than itself (KerML 7.2.5.4, 7.3.2.1), by
+ * name, whatever the kinds. A usage named after the feature it references
+ * (`perform a;`) hides nothing: its name is pending resolution (KerML 8.2.3.5.1).
+ */
+function unlessHidden(members: MemberTable, addMember: (name: string, entry: ResolvedMember) => void): (name: string, entry: ResolvedMember) => void {
+    const hiding = new Map<string, Set<SysMLSymbol>>();
+    for (const [name, entries] of members) {
+        if (entries.some(entry => entry.symbol.namingReference === undefined || entry.symbol.namedByRedefinition)) {
+            hiding.set(name, new Set(entries.map(entry => entry.symbol)));
+        }
+    }
+    return (name, entry) => {
+        for (const memberName of new Set([name, ...memberNamesOf(entry.symbol)])) {
+            const hidden = hiding.get(memberName);
+            if (hidden && !hidden.has(entry.symbol)) return;
+        }
+        addMember(name, entry);
+    };
 }
 
 /** Whether `scope` is an element of the registry, not a root or the global namespace. */
