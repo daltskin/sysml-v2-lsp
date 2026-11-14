@@ -3159,6 +3159,194 @@ package Test {
     // Connection and keyword relationship tests
     // -------------------------------------------------------------------
 
+    describe('result parameters (SysML 8.2.2.19 ReturnParameterMember)', () => {
+        const text = `
+package Demo {
+    attribute def Mass;
+    part def P;
+    calc def K;
+    calc def Half {
+        in v : Mass;
+        in attribute a : Mass;
+        out o : Mass;
+        inout io : Mass;
+        attribute local : Mass;
+        /* return */ attribute commented : Mass;
+        attribute 'return' : Mass;
+        action act { out ao : Mass; }
+        return h : Mass;
+    }
+    calc def Anon { in v : Mass; return : Mass; }
+    calc def Kinds {
+        private return attribute r : Mass;
+    }
+    calc def Ref { return ref rr : Mass; }
+    calc def Written { return in w : Mass; }
+    calc def Body {
+        return part rp : P {
+            attribute inner : Mass;
+            in attribute innerIn : Mass;
+        }
+    }
+    calc def Nested {
+        return calc rc : K {
+            in x : Mass;
+            return inner : Mass;
+        }
+    }
+    calc def Expr { in x : Mass; x }
+    constraint def C { in x : Mass; return cr : Mass; }
+    analysis def An { return ar : Mass; }
+    part def Q {
+        calc u : Half { in v : Mass; return hu : Mass; }
+        calc : Half { in av : Mass; return : Mass; }
+    }
+    action def A { in ai : Mass; out ao : Mass; }
+    constraint def CD;
+    part def U {
+        constraint cu : CD { in cx : Mass; return cur : Mass; }
+        analysis au { in ax : Mass; return aur : Mass; }
+        verification vu { return vur : Mass; }
+        use case ucu { subject us : P; return ucr : Mass; }
+        include use case iu { return iur : Mass; }
+    }
+    verification def VD { subject vs : P; return vdr : Mass; }
+    use case def UD { subject ds : P; in dx : Mass; return udr : Mass; }
+}
+`;
+        const find = (elements: any[], path: (string | number)[]): any =>
+            path.reduce((found, step) => typeof step === 'number'
+                ? found?.children[step]
+                : found?.children.find((e: { name: string }) => e.name === step), { children: elements });
+        const paramOf = (element: any) => ({
+            direction: element.attributes['direction'],
+            isReturn: element.attributes['isReturn'],
+        });
+        const RESULT = { direction: 'out', isReturn: true };
+        const all = (elements: any[]): any[] => elements.flatMap(e => [e, ...all(e.children)]);
+
+        it('parses without syntax errors', async () => {
+            const { parseDocument } = await import('../../server/src/parser/parseDocument.js');
+            expect(parseDocument(text).errors).toEqual([]);
+        });
+
+        it('marks a named and an anonymous result parameter of a calc definition', async () => {
+            const model = await getModelForText(text, ['elements']);
+            expect(paramOf(find(model.elements!, ['Demo', 'Half', 'h']))).toEqual(RESULT);
+            const anon = find(model.elements!, ['Demo', 'Anon', 1]);
+            expect(anon.name).toBe('');
+            expect(paramOf(anon)).toEqual(RESULT);
+        });
+
+        it('marks a result parameter declared with any usage kind and a visibility', async () => {
+            const model = await getModelForText(text, ['elements']);
+            const r = find(model.elements!, ['Demo', 'Kinds', 'r']);
+            expect(paramOf(r)).toEqual(RESULT);
+            expect(r.attributes['visibility']).toBe('private');
+            expect(paramOf(find(model.elements!, ['Demo', 'Ref', 'rr']))).toEqual(RESULT);
+            expect(find(model.elements!, ['Demo', 'Ref', 'rr']).attributes['modifier']).toBe('ref');
+            expect(paramOf(find(model.elements!, ['Demo', 'Body', 'rp']))).toEqual(RESULT);
+            expect(paramOf(find(model.elements!, ['Demo', 'Nested', 'rc']))).toEqual(RESULT);
+        });
+
+        it('reports a result parameter as out, whatever direction is written (KerML 8.3.4.7.8)', async () => {
+            const model = await getModelForText(text, ['elements']);
+            expect(paramOf(find(model.elements!, ['Demo', 'Written', 'w']))).toEqual(RESULT);
+        });
+
+        it('keeps the direction of input, output and in-out parameters, not marked as the result', async () => {
+            const model = await getModelForText(text, ['elements']);
+            expect(paramOf(find(model.elements!, ['Demo', 'Half', 'v']))).toEqual({ direction: 'in', isReturn: undefined });
+            expect(paramOf(find(model.elements!, ['Demo', 'Half', 'a']))).toEqual({ direction: 'in', isReturn: undefined });
+            expect(paramOf(find(model.elements!, ['Demo', 'Half', 'o']))).toEqual({ direction: 'out', isReturn: undefined });
+            expect(paramOf(find(model.elements!, ['Demo', 'Half', 'io']))).toEqual({ direction: 'inout', isReturn: undefined });
+            expect(paramOf(find(model.elements!, ['Demo', 'Anon', 'v']))).toEqual({ direction: 'in', isReturn: undefined });
+        });
+
+        it('marks no member that is not a result parameter, also one named or commented like return', async () => {
+            const model = await getModelForText(text, ['elements']);
+            const none = { direction: undefined, isReturn: undefined };
+            expect(paramOf(find(model.elements!, ['Demo', 'Half', 'local']))).toEqual(none);
+            expect(paramOf(find(model.elements!, ['Demo', 'Half', 'commented']))).toEqual(none);
+            expect(paramOf(find(model.elements!, ['Demo', 'Half', 'return']))).toEqual(none);
+            expect(paramOf(find(model.elements!, ['Demo', 'Half', 'act', 'ao']))).toEqual({ direction: 'out', isReturn: undefined });
+        });
+
+        it('does not mark the members of a result parameter, only their own result', async () => {
+            const model = await getModelForText(text, ['elements']);
+            expect(paramOf(find(model.elements!, ['Demo', 'Body', 'rp', 'inner']))).toEqual({ direction: undefined, isReturn: undefined });
+            expect(paramOf(find(model.elements!, ['Demo', 'Body', 'rp', 'innerIn']))).toEqual({ direction: 'in', isReturn: undefined });
+            expect(paramOf(find(model.elements!, ['Demo', 'Nested', 'rc', 'x']))).toEqual({ direction: 'in', isReturn: undefined });
+            expect(paramOf(find(model.elements!, ['Demo', 'Nested', 'rc', 'inner']))).toEqual(RESULT);
+        });
+
+        it('marks no member of a calc whose result is a result expression', async () => {
+            const model = await getModelForText(text, ['elements']);
+            const expr = find(model.elements!, ['Demo', 'Expr']);
+            expect(expr.children.length).toBeGreaterThan(0);
+            expect(all(expr.children).filter(e => e.attributes['isReturn'])).toEqual([]);
+        });
+
+        it('marks the result parameter of a named and an anonymous calc usage', async () => {
+            const model = await getModelForText(text, ['elements']);
+            expect(paramOf(find(model.elements!, ['Demo', 'Q', 'u', 'v']))).toEqual({ direction: 'in', isReturn: undefined });
+            expect(paramOf(find(model.elements!, ['Demo', 'Q', 'u', 'hu']))).toEqual(RESULT);
+            const anonCalc = find(model.elements!, ['Demo', 'Q', 1]);
+            expect(anonCalc.type).toBe('calc');
+            expect(paramOf(find(anonCalc.children, ['av']))).toEqual({ direction: 'in', isReturn: undefined });
+            expect(paramOf(anonCalc.children[1])).toEqual(RESULT);
+        });
+
+        it('marks the result parameter of a constraint and a case definition', async () => {
+            const model = await getModelForText(text, ['elements']);
+            expect(paramOf(find(model.elements!, ['Demo', 'C', 'cr']))).toEqual(RESULT);
+            expect(paramOf(find(model.elements!, ['Demo', 'C', 'x']))).toEqual({ direction: 'in', isReturn: undefined });
+            expect(paramOf(find(model.elements!, ['Demo', 'An', 'ar']))).toEqual(RESULT);
+        });
+
+        it('does not mark the parameters of an action', async () => {
+            const model = await getModelForText(text, ['elements']);
+            expect(paramOf(find(model.elements!, ['Demo', 'A', 'ai']))).toEqual({ direction: 'in', isReturn: undefined });
+            expect(paramOf(find(model.elements!, ['Demo', 'A', 'ao']))).toEqual({ direction: 'out', isReturn: undefined });
+        });
+
+        it('marks the result parameter of constraint, analysis, verification, use case and include usages', async () => {
+            const model = await getModelForText(text, ['elements']);
+            expect(paramOf(find(model.elements!, ['Demo', 'U', 'cu', 'cur']))).toEqual(RESULT);
+            expect(paramOf(find(model.elements!, ['Demo', 'U', 'cu', 'cx']))).toEqual({ direction: 'in', isReturn: undefined });
+            expect(paramOf(find(model.elements!, ['Demo', 'U', 'au', 'aur']))).toEqual(RESULT);
+            expect(paramOf(find(model.elements!, ['Demo', 'U', 'au', 'ax']))).toEqual({ direction: 'in', isReturn: undefined });
+            expect(paramOf(find(model.elements!, ['Demo', 'U', 'vu', 'vur']))).toEqual(RESULT);
+            expect(paramOf(find(model.elements!, ['Demo', 'U', 'ucu', 'ucr']))).toEqual(RESULT);
+            expect(paramOf(find(model.elements!, ['Demo', 'U', 'iu', 'iur']))).toEqual(RESULT);
+        });
+
+        it('marks the result parameter of a case body after its subject, not the subject', async () => {
+            const model = await getModelForText(text, ['elements']);
+            expect(paramOf(find(model.elements!, ['Demo', 'VD', 'vdr']))).toEqual(RESULT);
+            expect(find(model.elements!, ['Demo', 'VD', 'vs']).attributes['isReturn']).toBeUndefined();
+            expect(paramOf(find(model.elements!, ['Demo', 'UD', 'udr']))).toEqual(RESULT);
+            expect(paramOf(find(model.elements!, ['Demo', 'UD', 'dx']))).toEqual({ direction: 'in', isReturn: undefined });
+            expect(find(model.elements!, ['Demo', 'UD', 'ds']).attributes['isReturn']).toBeUndefined();
+            expect(find(model.elements!, ['Demo', 'U', 'ucu', 'us']).attributes['isReturn']).toBeUndefined();
+        });
+
+        it('reports a result parameter as an out feature marked isReturn in resolvedTypes', async () => {
+            const model = await getModelForText(text, ['resolvedTypes']);
+            const featuresOf = (qualifiedName: string): any[] =>
+                (Object.values(model.resolvedTypes!).find((t: any) => t.qualifiedName === qualifiedName) as any).features;
+            const feature = (qualifiedName: string, name: string) => {
+                const found = featuresOf(qualifiedName).find((f: any) => f.name === name);
+                return { direction: found.direction, isReturn: found.isReturn };
+            };
+            expect(feature('Demo::Half', 'h')).toEqual(RESULT);
+            expect(feature('Demo::Written', 'w')).toEqual(RESULT);
+            expect(feature('Demo::Half', 'v')).toEqual({ direction: 'in', isReturn: undefined });
+            expect(feature('Demo::Half', 'o')).toEqual({ direction: 'out', isReturn: undefined });
+            expect(feature('Demo::Half', 'local')).toEqual({ direction: undefined, isReturn: undefined });
+        });
+    });
+
     describe('connection and keyword relationships', () => {
         it('should extract connection endpoints (connect X to Y)', async () => {
             const model = await getModelForText(`

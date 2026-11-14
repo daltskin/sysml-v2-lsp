@@ -219,6 +219,8 @@ export interface SysMLElementDTO {
      *   isMessage     – true for a flow usage declared as a message (`message`,
      *                   SysML 8.2.2.16 `Message`); a flow's `type` is 'flow' either way
      *   direction     – Feature direction: 'in' | 'out' | 'inout'
+     *   isReturn      – true for a result parameter (`return`, SysML 8.2.2.19
+     *                   `ReturnParameterMember`); its direction is 'out'
      *   multiplicity  – Multiplicity string (e.g., "0..1", "1..*")
      *   ordered       – true when declared `ordered`
      *   nonunique     – true when declared `nonunique`
@@ -417,6 +419,8 @@ export interface ResolvedFeatureDTO {
     type?: string;
     multiplicity?: string;
     direction?: 'in' | 'out' | 'inout';
+    /** True for a result parameter (`return`, SysML 8.2.2.19); its direction is 'out'. */
+    isReturn?: boolean;
     visibility?: 'public' | 'private' | 'protected';
     isDerived: boolean;
     isConstant: boolean;

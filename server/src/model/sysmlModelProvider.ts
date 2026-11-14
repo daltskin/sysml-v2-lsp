@@ -403,6 +403,9 @@ export class SysMLModelProvider {
         if (prefix.direction) {
             attributes['direction'] = prefix.direction;
         }
+        if (symbol.isReturn) {
+            attributes['isReturn'] = true;
+        }
 
         // Multiplicity from the element's own declaration, never a nested element's
         if (symbol.multiplicity) {
@@ -1188,6 +1191,7 @@ export class SysMLModelProvider {
                         type: c.typeNames.join(', ') || undefined,
                         multiplicity: c.multiplicity,
                         direction: prefix.direction,
+                        isReturn: c.isReturn || undefined,
                         visibility: c.visibility,
                         isDerived: prefix.keywords.includes('derived'),
                         isConstant: prefix.isConstant,
@@ -1836,7 +1840,8 @@ const MULTIPLICITY_KEYWORDS: ReadonlySet<string> = new Set(['ordered', 'nonuniqu
 /**
  * An element's prefix as `sysml/model` attributes (SysML 8.2.2.6.2 `RefPrefix`,
  * `BasicUsagePrefix`, 8.2.2.6.6 `MultiplicityPart`): its direction, its other
- * prefix keywords as written (`modifier`), and `ordered`/`nonunique`.
+ * prefix keywords as written (`modifier`), and `ordered`/`nonunique`. A result
+ * parameter's direction is `out` (KerML 8.3.4.7.8), whatever is written.
  */
 function prefixAttributesOf(symbol: SysMLSymbol): {
     keywords: string[];
@@ -1847,7 +1852,9 @@ function prefixAttributesOf(symbol: SysMLSymbol): {
     nonunique: boolean;
 } {
     const keywords = symbol.prefixKeywords ?? [];
-    const direction = keywords.find(keyword => DIRECTIONS.has(keyword)) as 'in' | 'out' | 'inout' | undefined;
+    const direction = symbol.isReturn
+        ? 'out'
+        : keywords.find(keyword => DIRECTIONS.has(keyword)) as 'in' | 'out' | 'inout' | undefined;
     const modifiers = keywords.filter(keyword => !DIRECTIONS.has(keyword) && !MULTIPLICITY_KEYWORDS.has(keyword));
     return {
         keywords,
