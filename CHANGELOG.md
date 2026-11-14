@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Semantic tokens: `::>`, `=>`, `:=`, `..`, `===`, `<=`, `>=`, `??`, `@@`, `.?`, `%`, `?`, `@`, `$` and `#` get the `operator` token, like `:>`, `:>>`, `=` and `==` (SysML 8.2.2.1.2, KerML 8.2.2.7). The operator and punctuation symbols are defined once, for the semantic tokens provider and the parse worker alike.
+
 ## [0.44.0]
 
 ### Fixed

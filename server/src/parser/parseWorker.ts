@@ -26,6 +26,7 @@ import { clearAllDFAStates, hasStaleDfaStates, isDfaPreSeeded, loadDFASnapshot, 
 import { SysMLErrorListener } from './errorListener.js';
 import { keywordAsNameMessage, NAME_PRECEDING_KEYWORDS } from './keywordAsName.js';
 import { EMPTY_NAME_MESSAGE, isEmptyName } from '../utils/emptyNames.js';
+import { OPERATOR_TOKENS } from '../utils/symbolTokens.js';
 import { WARMUP_TEXT } from './warmupText.js';
 import { normalizeUtf16Columns } from './positionUtils.js';
 
@@ -313,29 +314,6 @@ const ST_STRING = 8;
 const ST_NUMBER = 9;
 const ST_OPERATOR = 10;
 
-/** Lexer token types that map to the "operator" semantic token. */
-const OPERATOR_TOKENS = new Set([
-    SysMLv2Lexer.BANG_EQ_EQ,    // !==
-    SysMLv2Lexer.STAR_STAR,     // **
-    SysMLv2Lexer.COLON_GT,      // :>
-    SysMLv2Lexer.COLON_GT_GT,   // :>>
-    SysMLv2Lexer.AMP,           // &
-    SysMLv2Lexer.COLON_COLON,   // ::
-    SysMLv2Lexer.STAR,          // *
-    SysMLv2Lexer.PIPE,          // |
-    SysMLv2Lexer.EQ_EQ,         // ==
-    SysMLv2Lexer.BANG_EQ,        // !=
-    SysMLv2Lexer.PLUS,          // +
-    SysMLv2Lexer.MINUS,         // -
-    SysMLv2Lexer.ARROW,         // ->
-    SysMLv2Lexer.SLASH,         // /
-    SysMLv2Lexer.LT,            // <
-    SysMLv2Lexer.EQ,            // =
-    SysMLv2Lexer.GT,            // >
-    SysMLv2Lexer.CARET,         // ^
-    SysMLv2Lexer.TILDE,         // ~
-]);
-
 function classifyTokenType(text: string, lexerType: number): number | undefined {
     if (lexerType === SysMLv2Lexer.REGULAR_COMMENT || lexerType === SysMLv2Lexer.SINGLE_LINE_NOTE) return ST_COMMENT;
     if (lexerType === SysMLv2Lexer.STRING || lexerType === SysMLv2Lexer.DOUBLE_STRING) return ST_STRING;
@@ -351,7 +329,7 @@ function classifyTokenType(text: string, lexerType: number): number | undefined 
  * Returns a flat array of [deltaLine, deltaStart, length, tokenType, modifiers]
  * tuples matching SemanticTokensBuilder output format.
  */
-function buildSemanticTokenData(tokenStream: CommonTokenStream): number[] {
+export function buildSemanticTokenData(tokenStream: CommonTokenStream): number[] {
     tokenStream.fill();
     const allTokens = tokenStream.getTokens();
     const data: number[] = [];
