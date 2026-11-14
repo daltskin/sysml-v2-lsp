@@ -1280,6 +1280,30 @@ describe('Semantic Tokens Provider', () => {
         expect(tokens.data.length % 5).toBe(0);
     });
 
+    it('gives a document closed and opened again at the same version the tokens of its new text', async () => {
+        const { SemanticTokensProvider } = await import('../../server/src/providers/semanticTokensProvider.js');
+        const { DocumentManager } = await import('../../server/src/documentManager.js');
+        const { TextDocument } = await import('vscode-languageserver-textdocument');
+        const uri = 'file:///w/tokens.sysml';
+        const dm = new DocumentManager();
+        const provider = new SemanticTokensProvider(dm);
+        const tokensOf = (text: string) => {
+            dm.remove(uri);
+            dm.parse(TextDocument.create(uri, 'sysml', 1, text));
+            return [...provider.provideSemanticTokens({ textDocument: { uri } }).data];
+        };
+        const fresh = (text: string) => {
+            const other = new DocumentManager();
+            other.parse(TextDocument.create(uri, 'sysml', 1, text));
+            return [...new SemanticTokensProvider(other).provideSemanticTokens({ textDocument: { uri } }).data];
+        };
+        const first = 'package A { part def B; }';
+        const second = 'package A {\n    part def B;\n    part b : B;\n}';
+        expect(tokensOf(first)).toEqual(fresh(first));
+        expect(tokensOf(second)).toEqual(fresh(second));
+        expect(tokensOf(first)).toEqual(fresh(first));
+    });
+
     it('should classify keywords with keyword token type', async () => {
         const { SemanticTokensProvider } = await import('../../server/src/providers/semanticTokensProvider.js');
         const text = 'package Test { part def Vehicle; }';

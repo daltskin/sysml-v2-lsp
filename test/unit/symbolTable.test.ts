@@ -1106,6 +1106,24 @@ package InheritChain {
             }
         });
 
+        it('gives every view definition on a cycle the filters of the whole cycle, in any declaration and document order (KerML 8.2.3.5.1)', async () => {
+            const defs = ['view def A :> B { filter @SysML::PartUsage; }', 'view def B :> C { filter @SysML::PortUsage; render asTreeDiagram; }', 'view def C :> A { filter @SysML::ItemUsage; }'];
+            const orders = [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]];
+            for (const order of orders) {
+                const cycle = { uri: 'file:///w/cycle.sysml', text: `package Cyc {\n${order.map(i => `    ${defs[i]}\n`).join('')}}\n` };
+                const users = { uri: 'file:///w/users.sysml', text: 'package Users {\n    private import Cyc::*;\n    view a : A;\n    view b : B;\n    view c : C;\n}\n' };
+                for (const documents of [[cycle, users], [users, cycle]]) {
+                    const st = await buildMultiFileST(documents);
+                    for (const name of ['A', 'B', 'C', 'a', 'b', 'c']) {
+                        const { filters, rendering } = props(st, name);
+                        expect([...(filters ?? [])].sort(), `${name}, order ${order}, ${documents[0].uri}`)
+                            .toEqual(['@SysML::ItemUsage', '@SysML::PartUsage', '@SysML::PortUsage']);
+                        expect(rendering, `${name}, order ${order}`).toBe('asTreeDiagram');
+                    }
+                }
+            }
+        });
+
         it('ends on a cycle of view definitions specializing one another', async () => {
             const st = await buildMultiFileST([{ uri: 'file:///w/c.sysml', text: 'package C {\n    view def A :> B { filter @SysML::PartUsage; }\n    view def B :> A { render asTreeDiagram; }\n    view c : A;\n}\n' }]);
             expect(props(st, 'c')).toEqual({ filters: ['@SysML::PartUsage'], rendering: 'asTreeDiagram' });

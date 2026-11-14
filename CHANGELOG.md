@@ -16,7 +16,8 @@
 - Go to definition, hover and references resolve names as `sysml/model` does.
 - The duplicate definition check counts a namespace's definitions in every document declaring it, not only in one.
 - A feature chain through a feature that only redefines, and a redefinition owned by a package, resolve.
-- A view inherits the filter conditions and rendering of the view definitions it specializes (SysML 7.26.2) in any document and document order, resolved by ID, and follows edits and closes of the document declaring them.
+- A view inherits the filter conditions and rendering of the view definitions it specializes (SysML 7.26.2) in any document and document order, resolved by ID, and follows edits and closes of the document declaring them. Every view definition on a specialization cycle (KerML 8.2.3.5.1) has the filter conditions of the whole cycle, in any declaration order.
+- A document closed and opened again at the same version gets its unsatisfied and unverified requirement warnings again, and the semantic tokens of its new text; the satisfy and verify data and the tokens of its earlier text were reused.
 - A filtered import at the top level of a document imports only the members its filter selects (SysML 7.5.4).
 - An owned or inherited member hides an imported member of the same name or short name (KerML 7.2.5.4, 7.3.2.1), so a typing of the owned member gets its `targetId`. Hiding is by name whatever the kinds of the two members, as 7.2.5.4 states; KerML 8.3.2.4.5 `importedMemberships` would exclude only memberships that aren't distinguishable.
 

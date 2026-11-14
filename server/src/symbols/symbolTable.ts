@@ -956,34 +956,43 @@ export class SymbolTable {
      * Give every view of the workspace what it inherits from the view
      * definitions it specializes, transitively (SysML 7.26.2): their filter
      * conditions after its own, their rendering unless it declares one, and
-     * their expose targets unless it has its own. Derived from each view's own
-     * declaration, so neither document nor declaration order matters.
+     * their expose targets unless it has its own, the nearest one first.
+     * Derived from each view's own declaration and those of the definitions
+     * it reaches, so neither document nor declaration order matters, and
+     * every definition on a specialization cycle (KerML 8.2.3.5.1) has all of
+     * the cycle's.
      */
     private inheritViewProperties(): void {
         const views = this.getAllSymbolsIncludingDuplicates().filter(isView);
         if (views.length === 0) return;
         const indexes = this.getIndexes();
-        const inherited = new Map<SysMLSymbol, ViewProperties>();
-        const visiting = new Set<SysMLSymbol>();
+        const viewDefGenerals = new Map<SysMLSymbol, SysMLSymbol[]>();
+        const generalsOf = (view: SysMLSymbol): SysMLSymbol[] => {
+            let generals = viewDefGenerals.get(view);
+            if (!generals) {
+                generals = this.resolver.generalsOf(view, indexes).filter(general => general.kind === SysMLElementKind.ViewDef);
+                viewDefGenerals.set(view, generals);
+            }
+            return generals;
+        };
         const effective = (view: SysMLSymbol): ViewProperties => {
             const own = this.ownViewProperties.get(view) ?? {};
-            const done = inherited.get(view);
-            // A view on a specialization cycle (KerML 8.2.3.5.1) inherits nothing more from it.
-            if (done || visiting.has(view)) return done ?? own;
-            visiting.add(view);
             const result: ViewProperties = { ...own, viewFilters: own.viewFilters && [...own.viewFilters] };
-            for (const general of this.resolver.generalsOf(view, indexes)) {
-                if (general.kind !== SysMLElementKind.ViewDef || general === view) continue;
-                const parent = effective(general);
+            // Each view definition `view` reaches, once, depth-first in the order of its specializations.
+            const reached = new Set<SysMLSymbol>([view]);
+            const pending = [...generalsOf(view)].reverse();
+            for (let general = pending.pop(); general; general = pending.pop()) {
+                if (reached.has(general)) continue;
+                reached.add(general);
+                const parent = this.ownViewProperties.get(general) ?? {};
                 for (const filter of parent.viewFilters ?? []) {
                     result.viewFilters ??= [];
                     if (!result.viewFilters.includes(filter)) result.viewFilters.push(filter);
                 }
                 result.viewRendering ??= parent.viewRendering;
                 if (!result.exposeTargets?.length && parent.exposeTargets?.length) result.exposeTargets = [...parent.exposeTargets];
+                pending.push(...[...generalsOf(general)].reverse());
             }
-            visiting.delete(view);
-            inherited.set(view, result);
             return result;
         };
         for (const view of views) Object.assign(view, effective(view));

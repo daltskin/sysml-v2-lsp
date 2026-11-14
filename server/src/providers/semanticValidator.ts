@@ -35,21 +35,21 @@ const CONNECTOR_KINDS: ReadonlySet<SysMLElementKind> = new Set([
 export class SemanticValidator {
     private readonly modelProvider: SysMLModelProvider;
 
-    /** Cached workspace-wide satisfy data, invalidated when any document version changes. */
+    /** Cached workspace-wide satisfy data, invalidated when any document text changes (`DocumentManager.getRevision`). */
     private satisfyCache?: {
-        versionKey: string;
+        revisionKey: string;
         satisfiedNames: Set<string>;
         satisfyBlockRanges: Map<string, Array<{ startLine: number; endLine: number }>>;
     };
 
-    /** Cached workspace-wide verify data, invalidated when any document version changes. */
+    /** Cached workspace-wide verify data, invalidated when any document text changes (`DocumentManager.getRevision`). */
     private verifyCache?: {
-        versionKey: string;
+        revisionKey: string;
         verifiedNames: Set<string>;
     };
 
-    /** Each document's satisfy block ranges, by URI, for the document version they were taken from. */
-    private satisfyBlockRangesByUri = new Map<string, { version: number; ranges: Array<{ startLine: number; endLine: number }> }>();
+    /** Each document's satisfy block ranges, by URI, for the text revision they were taken from. */
+    private satisfyBlockRangesByUri = new Map<string, { revision: number; ranges: Array<{ startLine: number; endLine: number }> }>();
 
     /** Cached library package names — never changes after init. */
     private libraryNamesCache?: Set<string>;
@@ -540,11 +540,11 @@ export class SemanticValidator {
                 satisfyBlockRanges.set('__static__', this.extractSatisfyBlockRanges(stripped));
             }
         } else if (this.documentManager) {
-            // Build a version fingerprint from all cached document versions.
+            // A fingerprint of every cached document's text revision.
             const uris = this.documentManager.getUris();
-            const versionKey = uris.map(u => u + ':' + this.documentManager.getVersion(u)).join('|');
+            const revisionKey = uris.map(u => u + ':' + this.documentManager.getRevision(u)).join('|');
 
-            if (this.satisfyCache && this.satisfyCache.versionKey === versionKey) {
+            if (this.satisfyCache && this.satisfyCache.revisionKey === revisionKey) {
                 satisfiedNames = this.satisfyCache.satisfiedNames;
                 satisfyBlockRanges = this.satisfyCache.satisfyBlockRanges;
             } else {
@@ -555,10 +555,10 @@ export class SemanticValidator {
                     const ranges = this.satisfyBlockRangesOf(uri);
                     if (ranges) satisfyBlockRanges.set(uri, ranges);
                 }
-                this.satisfyCache = { versionKey, satisfiedNames, satisfyBlockRanges };
+                this.satisfyCache = { revisionKey, satisfiedNames, satisfyBlockRanges };
                 // Pre-populate verify cache from the same scan.
-                if (!this.verifyCache || this.verifyCache.versionKey !== versionKey) {
-                    this.verifyCache = { versionKey, verifiedNames: relNames.verifiedNames };
+                if (!this.verifyCache || this.verifyCache.revisionKey !== revisionKey) {
+                    this.verifyCache = { revisionKey, verifiedNames: relNames.verifiedNames };
                 }
             }
         } else {
@@ -628,16 +628,18 @@ export class SemanticValidator {
 
     /**
      * The satisfy block ranges of document `uri`, taken from its text once per
-     * document version; undefined for a document without text.
+     * revision of that text (`DocumentManager.getRevision`), so a document
+     * opened again isn't given the ranges of its earlier text; undefined for a
+     * document without text.
      */
     private satisfyBlockRangesOf(uri: string): Array<{ startLine: number; endLine: number }> | undefined {
-        const version = this.documentManager.getVersion(uri);
+        const revision = this.documentManager.getRevision(uri);
         const cached = this.satisfyBlockRangesByUri.get(uri);
-        if (cached && cached.version === version) return cached.ranges;
+        if (cached && cached.revision === revision) return cached.ranges;
         const stripped = this.documentManager.getStrippedText(uri);
         if (!stripped) return undefined;
         const ranges = this.extractSatisfyBlockRanges(stripped);
-        this.satisfyBlockRangesByUri.set(uri, { version, ranges });
+        this.satisfyBlockRangesByUri.set(uri, { revision, ranges });
         return ranges;
     }
 
@@ -722,10 +724,10 @@ export class SemanticValidator {
             }
         } else if (this.documentManager) {
             const uris = this.documentManager.getUris();
-            const versionKey = uris.map(u => u + ':' + this.documentManager.getVersion(u)).join('|');
+            const revisionKey = uris.map(u => u + ':' + this.documentManager.getRevision(u)).join('|');
 
-            const satisfyCacheValid = this.satisfyCache && this.satisfyCache.versionKey === versionKey;
-            const verifyCacheValid = this.verifyCache && this.verifyCache.versionKey === versionKey;
+            const satisfyCacheValid = this.satisfyCache && this.satisfyCache.revisionKey === revisionKey;
+            const verifyCacheValid = this.verifyCache && this.verifyCache.revisionKey === revisionKey;
 
             // Collect from model once if either cache is stale.
             if (!satisfyCacheValid || !verifyCacheValid) {
@@ -737,10 +739,10 @@ export class SemanticValidator {
                         const ranges = this.satisfyBlockRangesOf(uri);
                         if (ranges) satisfyBlockRanges.set(uri, ranges);
                     }
-                    this.satisfyCache = { versionKey, satisfiedNames: relNames.satisfiedNames, satisfyBlockRanges };
+                    this.satisfyCache = { revisionKey, satisfiedNames: relNames.satisfiedNames, satisfyBlockRanges };
                 }
                 if (!verifyCacheValid) {
-                    this.verifyCache = { versionKey, verifiedNames: relNames.verifiedNames };
+                    this.verifyCache = { revisionKey, verifiedNames: relNames.verifiedNames };
                 }
             }
 
