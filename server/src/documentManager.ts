@@ -29,6 +29,8 @@ export class DocumentManager {
      * These internal positive versions are never sent to the client.
      */
     private temporaryVersion = 2 ** 31 - 1;
+    /** Last revision given to a cached text (`getRevision`); never reused. */
+    private lastRevision = 0;
 
     /**
      * Parse a document and cache the result.
@@ -48,6 +50,7 @@ export class DocumentManager {
 
         this.cache.set(uri, {
             version,
+            revision: ++this.lastRevision,
             text,
             result,
             needsParse: false,
@@ -72,6 +75,7 @@ export class DocumentManager {
 
         this.cache.set(uri, {
             version,
+            revision: ++this.lastRevision,
             text,
             result,
             needsParse: false,
@@ -95,6 +99,7 @@ export class DocumentManager {
         }
         this.cache.set(uri, {
             version,
+            revision: ++this.lastRevision,
             text,
             // Stub result — will be replaced by real parse when needed
             result: {
@@ -143,6 +148,16 @@ export class DocumentManager {
      */
     getVersion(uri: string): number {
         return this.cache.get(uri)?.version ?? -1;
+    }
+
+    /**
+     * The revision of the text cached for a URI, or -1 if none: a number
+     * given to each text the cache takes, and never given again. Unlike the
+     * version, which starts over when a closed document is opened again, it
+     * tells two texts of a URI apart over the server's lifetime.
+     */
+    getRevision(uri: string): number {
+        return this.cache.get(uri)?.revision ?? -1;
     }
 
     /**
@@ -279,7 +294,7 @@ export class DocumentManager {
         const parsed = documents.map(({ uri, text }) => ({ uri, text, result: parseDocument(text) }));
         const previous = new Map(parsed.map(({ uri }) => [uri, this.cache.get(uri)]));
         for (const { uri, text, result } of parsed) {
-            this.cache.set(uri, { version: ++this.temporaryVersion, text, result, needsParse: false });
+            this.cache.set(uri, { version: ++this.temporaryVersion, revision: ++this.lastRevision, text, result, needsParse: false });
         }
         try {
             return fn();
@@ -314,6 +329,8 @@ export class DocumentManager {
 
 interface CachedDocument {
     version: number;
+    /** This text's revision (`DocumentManager.getRevision`). */
+    revision: number;
     text: string;
     result: ParseResult;
     /** Lazily built and cached symbol table — invalidated on re-parse. */

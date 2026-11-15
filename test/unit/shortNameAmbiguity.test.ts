@@ -10,7 +10,7 @@ import { TypeHierarchyProvider } from '../../server/src/providers/typeHierarchyP
 import { CallHierarchyProvider } from '../../server/src/providers/callHierarchyProvider.js';
 import { SemanticValidator } from '../../server/src/providers/semanticValidator.js';
 import { NameReferences } from '../../server/src/symbols/nameReferences.js';
-import { findConflictingDeclarations } from '../../server/src/symbols/namespaceResolver.js';
+import { buildSymbolIndexes, findConflictingDeclarations } from '../../server/src/symbols/namespaceResolver.js';
 
 function setup(text: string) {
     const uri = 'file:///short-name-ambiguity.sysml';
@@ -116,7 +116,7 @@ describe('Overlapping conflict groups', () => {
                 : 'package P { part def <A> Alpha; part def <B> A; part def B; }'));
         const symbols = dm.getWorkspaceSymbolTable().getAllSymbols();
         const middle = symbols.find(symbol => symbol.name === 'A')!;
-        const peers = findConflictingDeclarations(symbols).get(middle)!;
+        const peers = findConflictingDeclarations(buildSymbolIndexes(symbols)).get(middle)!;
         expect(peers.map(symbol => symbol.name).sort()).toEqual(['A', 'Alpha', 'B']);
         expect(new Set(peers).size).toBe(peers.length);
         const diagnostic = new SemanticValidator(dm).validate(uri).find(d =>
