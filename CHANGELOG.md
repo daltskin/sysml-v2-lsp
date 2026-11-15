@@ -22,7 +22,7 @@
 - A document closed and opened again at the same version gets its unsatisfied and unverified requirement warnings again, and the semantic tokens of its new text; the satisfy and verify data and the tokens of its earlier text were reused.
 - A filtered import at the top level of a document imports only the members its filter selects (SysML 7.5.4).
 - An owned or inherited member hides an imported member of the same name or short name (KerML 7.2.5.4, 7.3.2.1), so a typing of the owned member gets its `targetId`. Hiding is by name whatever the kinds of the two members, as 7.2.5.4 states; KerML 8.3.2.4.5 `importedMemberships` would exclude only memberships that aren't distinguishable.
-
+- Semantic tokens: the target of a specialization gets its token from the production it is written in (SysML 8.2.2.6.5), not from the symbol before it. A subsetted, referenced, crossed or redefined feature and each feature of a feature chain are a `variable` (`:> f` in a usage, `:>> g`, `:> y.f`); a superclassifier, a type and the port definition of a conjugated port typing (`: ~P`) are a `type`, also when qualified (`: T::A`), in a list (`: A, B`), or typing metadata (`#K`, `@K`). A target named like a keyword is classified like any other name.
 ## [0.44.0]
 
 ### Fixed
