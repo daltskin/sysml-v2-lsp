@@ -2,10 +2,26 @@
 
 ## [Unreleased]
 
+### Added
+
+- `sysml/model` reports `targetId`, the `symbolId` of the element a specialization's target resolves to. It is absent when the target is unresolved, resolves to more than one element, is a conjugated port typing (`~P`) or is in the standard library.
+- A package declared more than once has one `symbolId` in `sysml/model`, and lists its `declarations`.
+- The `initialize` result reports how symbol IDs are derived, as `sysml.symbolIdScheme` (`element-registry/1`; IDs are unchanged).
+
 ### Fixed
 
+- `sysml/model` marks a result parameter, declared with `return` in a calculation, constraint or case body (SysML 7.19.2, 8.2.2.19 `ReturnParameterMember`, 8.2.2.20), with `isReturn: true` and `direction: 'out'`, in `elements` and in `resolvedTypes` features. A result parameter in a case body, which the grammar allows as in SysML 7.23.2 and 7.24.2, is marked too. Its direction is `out` whatever direction is written after `return` (KerML 8.3.4.7.8). Other parameters keep the direction they are declared with, and a member of a result parameter's body is not marked.
+- A top-level import applies to the top-level elements of every document (SysML 7.5.5); it was ignored.
+- Each of two same-named declarations in one namespace keeps its own imports and members; they were pooled or lost.
+- A qualified name through a package and a same-named definition resolves through each, and a general naming both is the definition (KerML 8.3.3.1.8).
+- Go to definition, hover and references resolve names as `sysml/model` does.
+- The duplicate definition check counts a namespace's definitions in every document declaring it, not only in one.
+- A feature chain through a feature that only redefines, and a redefinition owned by a package, resolve.
+- A view inherits the filter conditions and rendering of the view definitions it specializes (SysML 7.26.2) in any document and document order, resolved by ID, and follows edits and closes of the document declaring them. Every view definition on a specialization cycle (KerML 8.2.3.5.1) has the filter conditions of the whole cycle, in any declaration order.
+- A document closed and opened again at the same version gets its unsatisfied and unverified requirement warnings again, and the semantic tokens of its new text; the satisfy and verify data and the tokens of its earlier text were reused.
+- A filtered import at the top level of a document imports only the members its filter selects (SysML 7.5.4).
+- An owned or inherited member hides an imported member of the same name or short name (KerML 7.2.5.4, 7.3.2.1), so a typing of the owned member gets its `targetId`. Hiding is by name whatever the kinds of the two members, as 7.2.5.4 states; KerML 8.3.2.4.5 `importedMemberships` would exclude only memberships that aren't distinguishable.
 - Semantic tokens: the target of a specialization gets its token from the production it is written in (SysML 8.2.2.6.5), not from the symbol before it. A subsetted, referenced, crossed or redefined feature and each feature of a feature chain are a `variable` (`:> f` in a usage, `:>> g`, `:> y.f`); a superclassifier, a type and the port definition of a conjugated port typing (`: ~P`) are a `type`, also when qualified (`: T::A`), in a list (`: A, B`), or typing metadata (`#K`, `@K`). A target named like a keyword is classified like any other name.
-
 ## [0.44.0]
 
 ### Fixed

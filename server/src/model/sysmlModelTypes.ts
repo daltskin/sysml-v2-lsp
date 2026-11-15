@@ -203,6 +203,13 @@ export interface SysMLElementDTO {
     /** Source location. */
     range: RangeDTO;
 
+    /**
+     * For a package declared more than once, one element: each of its
+     * declarations in the workspace, by document URI, then position. Every
+     * node of it carries the same `symbolId`.
+     */
+    declarations?: { uri: string; range: RangeDTO }[];
+
     /** Nested child elements (recursive tree). */
     children: SysMLElementDTO[];
 
@@ -219,6 +226,8 @@ export interface SysMLElementDTO {
      *   isMessage     – true for a flow usage declared as a message (`message`,
      *                   SysML 8.2.2.16 `Message`); a flow's `type` is 'flow' either way
      *   direction     – Feature direction: 'in' | 'out' | 'inout'
+     *   isReturn      – true for a result parameter (`return`, SysML 8.2.2.19
+     *                   `ReturnParameterMember`); its direction is 'out'
      *   multiplicity  – Multiplicity string (e.g., "0..1", "1..*")
      *   ordered       – true when declared `ordered`
      *   nonunique     – true when declared `nonunique`
@@ -279,6 +288,14 @@ export interface RelationshipDTO {
      * name as KerML `escapedName()` writes it (KerML 8.3.2.1.2).
      */
     target: string;
+
+    /**
+     * For a specialization: the `symbolId` of the element its target resolves
+     * to (its general); absent when unresolved or ambiguous, and when it is a
+     * standard library element, which has no `symbolId`. `target` stays the
+     * text as written.
+     */
+    targetId?: string;
 
     /**
      * Optional label for the relationship: a flow's payload type, else its
@@ -417,6 +434,8 @@ export interface ResolvedFeatureDTO {
     type?: string;
     multiplicity?: string;
     direction?: 'in' | 'out' | 'inout';
+    /** True for a result parameter (`return`, SysML 8.2.2.19); its direction is 'out'. */
+    isReturn?: boolean;
     visibility?: 'public' | 'private' | 'protected';
     isDerived: boolean;
     isConstant: boolean;
