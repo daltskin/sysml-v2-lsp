@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- Semantic tokens: the target of a specialization gets its token from the production it is written in (SysML 8.2.2.6.5), not from the symbol before it. A subsetted, referenced, crossed or redefined feature and each feature of a feature chain are a `variable` (`:> f` in a usage, `:>> g`, `:> y.f`); a superclassifier, a type and the port definition of a conjugated port typing (`: ~P`) are a `type`, also when qualified (`: T::A`), in a list (`: A, B`), or typing metadata (`#K`, `@K`). A target named like a keyword is classified like any other name.
+
 ## [0.44.0]
 
 ### Fixed
