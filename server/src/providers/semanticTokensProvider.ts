@@ -46,24 +46,61 @@ const PUNCTUATION_TOKENS = new Set([
     SysMLv2Lexer.COLON,         // :
 ]);
 
+/** Rules whose target is a feature (SysML 8.2.2.6.5): subsetted, referenced, crossed or redefined. */
+const FEATURE_TARGET_RULES = new Set([
+    SysMLv2Parser.RULE_ownedSubsetting,
+    SysMLv2Parser.RULE_ownedReferenceSubsetting,
+    SysMLv2Parser.RULE_ownedCrossSubsetting,
+    SysMLv2Parser.RULE_ownedRedefinition,
+]);
+
 /**
- * The token index of each flow or message payload type written without a payload name (8.2.2.16
- * `PayloadFeature`): the last token of the payload's own typing. A payload with a name is typed
- * after `:`, which the context classification handles.
+ * The semantic token type of each specialization target name, by token index, from the production
+ * it is written in (SysML 8.2.2.6.5): an OwnedSubclassification's superClassifier, an
+ * OwnedFeatureTyping's type and a ConjugatedPortTyping's port definition (SysML 8.2.2.12,
+ * 8.3.12.3) are types; a subsetted, referenced, crossed or redefined feature, and
+ * each chainingFeature of an OwnedFeatureChain, are features. Only the last name of each qualified
+ * name is the target; its qualifiers are left to the context classification.
  */
-function payloadTypeTokenIndices(tree: ParserRuleContext): Set<number> {
-    const indices = new Set<number>();
+function specializationTargetTokens(tree: ParserRuleContext): Map<number, number> {
+    const targets = new Map<number, number>();
     const visit = (ctx: ParserRuleContext): void => {
-        for (const child of ctx.children) {
-            if (!(child instanceof ParserRuleContext)) continue;
-            if (ctx.ruleIndex === SysMLv2Parser.RULE_payloadFeature && child.ruleIndex === SysMLv2Parser.RULE_ownedFeatureTyping && child.stop) {
-                indices.add(child.stop.tokenIndex);
+        if (isStandaloneFeatureTyping(ctx)) return;
+        const qualifiedNames = ctx.children.filter(
+            (child): child is ParserRuleContext => child instanceof ParserRuleContext && child.ruleIndex === SysMLv2Parser.RULE_qualifiedName);
+        let target: number | undefined;
+        if (ctx.ruleIndex === SysMLv2Parser.RULE_ownedSubclassification || ctx.ruleIndex === SysMLv2Parser.RULE_conjugatedPortTyping) target = TYPE_TARGET;
+        else if (ctx.ruleIndex === SysMLv2Parser.RULE_ownedFeatureTyping) target = qualifiedNames.length === 1 ? TYPE_TARGET : FEATURE_TARGET;
+        else if (FEATURE_TARGET_RULES.has(ctx.ruleIndex)) target = FEATURE_TARGET;
+        if (target !== undefined) {
+            for (const qualifiedName of qualifiedNames) {
+                const names = qualifiedName.children.filter(
+                    (child): child is ParserRuleContext => child instanceof ParserRuleContext && child.ruleIndex === SysMLv2Parser.RULE_name);
+                const last = names[names.length - 1]?.start;
+                if (last) targets.set(last.tokenIndex, target);
             }
-            visit(child);
+            return; // A target is only qualified names: it owns nothing further to classify.
+        }
+        for (const child of ctx.children) {
+            if (child instanceof ParserRuleContext) visit(child);
         }
     };
     visit(tree);
-    return indices;
+    return targets;
+}
+
+/**
+ * Whether `ctx` is a bare name, or `~` and a name, that the grammar accepts as a standalone
+ * `featureTyping` element (`nonFeatureElement > featureTyping`), as it parses the result `f(x)` or
+ * `~x` of an expression body. The specification has no such element: a standalone FeatureTyping is
+ * written with `typing` (KerML 8.2.4.3.2), and an OwnedFeatureTyping or ConjugatedPortTyping is
+ * only part of a feature's declaration (SysML 8.2.2.6.5), so it is no typing target.
+ */
+function isStandaloneFeatureTyping(ctx: ParserRuleContext): boolean {
+    return ctx.ruleIndex === SysMLv2Parser.RULE_featureTyping
+        && ctx.parent?.ruleIndex === SysMLv2Parser.RULE_nonFeatureElement
+        && ctx.children.some((child) => child instanceof ParserRuleContext
+            && (child.ruleIndex === SysMLv2Parser.RULE_ownedFeatureTyping || child.ruleIndex === SysMLv2Parser.RULE_conjugatedPortTyping));
 }
 
 /** Module-level keyword sets — allocated once, shared by all provider instances. */
@@ -93,6 +130,10 @@ export const tokenTypes = [
     'enum',         // 11 — enumerations, states
     'interface',    // 12 — ports, interfaces
 ];
+
+/** Semantic token types of a specialization's target: a type, or a feature (as for usages). */
+const TYPE_TARGET = tokenTypes.indexOf('type');
+const FEATURE_TARGET = tokenTypes.indexOf('variable');
 
 export const tokenModifiers = [
     'declaration',   // 0
@@ -138,7 +179,7 @@ export class SemanticTokensProvider {
         // context-sensitive classification: `previousText` is the one just before this token.
         let previousText: string | undefined;
         let textBeforePrevious: string | undefined;
-        const payloadTypes = result.tree ? payloadTypeTokenIndices(result.tree) : new Set<number>();
+        const targets = result.tree ? specializationTargetTokens(result.tree) : new Map<number, number>();
 
         for (const token of tokens) {
             if (!token.text || token.channel !== 0) {
@@ -146,7 +187,7 @@ export class SemanticTokensProvider {
             }
 
             const text = token.text;
-            const tokenType = payloadTypes.has(token.tokenIndex) ? 1 : this.classifyTokenInContext(text, previousText, textBeforePrevious, token.type);
+            const tokenType = targets.get(token.tokenIndex) ?? this.classifyTokenInContext(text, previousText, textBeforePrevious, token.type);
 
             textBeforePrevious = previousText;
             previousText = text;
@@ -229,12 +270,11 @@ export class SemanticTokensProvider {
         // After action/calc → function name (matches entity.name.function.sysml)
         if (previous === 'action' || previous === 'calc' || previous === 'analysis' || previous === 'verification') return 5; // function
 
-        // After ':' or ':>' or ':>>' → type reference (matches entity.name.type.sysml)
+        // A specialization's target is classified by its production (specializationTargetTokens).
+        // What still comes here after ':', ':>', ':>>', 'specializes', 'defined by' or 'typed by'
+        // is a target's first qualifier (`T` in `: T::A`) or a name the parser recovered outside a
+        // target production: it keeps the classification by the previous token.
         if (previous === ':' || previous === ':>' || previous === ':>>') return 1; // type
-
-        // After the keyword forms of ':' and ':>' naming a type → type reference, like the symbol
-        // (SysML 8.2.2.1: DEFINED_BY = ':' | 'defined' 'by', SPECIALIZES = ':>' | 'specializes';
-        // KerML 8.2.2.1: TYPED_BY = ':' | 'typed' 'by')
         if (previous === 'specializes') return 1; // type
         if (previous === 'by' && (beforePrevious === 'defined' || beforePrevious === 'typed')) return 1; // type
 
