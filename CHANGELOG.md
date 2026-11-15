@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.45.0]
+
 ### Added
 
 - `sysml/model` reports `targetId`, the `symbolId` of the element a specialization's target resolves to. It is absent when the target is unresolved, resolves to more than one element, is a conjugated port typing (`~P`) or is in the standard library.
