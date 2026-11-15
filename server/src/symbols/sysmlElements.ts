@@ -96,7 +96,7 @@ export interface SysMLSymbol {
     ends?: string[];
     /**
      * The symbol's ID: a version 5 UUID derived from the project ID and the
-     * element's name, or, without one, its declaration (see `IdRegistry`). The
+     * element's name, or, without one, its declaration (see `RegistryIds`). The
      * same after a reload, but not the KerML `elementId`: a rename gives a new
      * one. Empty only while its document is being built; an empty symbolId
      * after `SymbolTable.build` is invalid.
@@ -106,6 +106,12 @@ export interface SysMLSymbol {
     shortName?: string;
     /** The kind of SysML element */
     kind: SysMLElementKind;
+    /**
+     * For a package: whether it is a library package (`library package`,
+     * `standard library package`), a `LibraryPackage` of its own (KerML
+     * 8.3.4.13.3), though reported with the kind `Package`.
+     */
+    isLibraryPackage?: boolean;
     /**
      * The fully qualified name (e.g., "VehicleModel::Chassis::wheel"); undefined
      * for an element without one (KerML): an anonymous element, or any member of one.
@@ -222,6 +228,8 @@ export interface ImportTarget {
      * given filter conditions").
      */
     filter?: FilterExpr;
+    /** The range of the import itself (`importRule`), as written. */
+    range?: Range;
 }
 
 /**
@@ -238,7 +246,19 @@ export interface OwnedSpecialization {
     target: string;
     /** The operator or keyword as written (`:>`, `subsets`, ...); none for a typing. */
     notation?: string;
+    /** The range of the target as written. */
+    range?: Range;
+    /**
+     * The target as parsed: its feature chain of qualified names (SysML 7.6.6),
+     * each its names, unquoted, and whether it starts with the global `$::`.
+     */
+    chain?: ReferenceChain;
+    /** Whether the target is a conjugated port typing's `~P` (SysML 8.3.12.3). */
+    conjugated?: boolean;
 }
+
+/** A reference as parsed: a feature chain of qualified names, each with its names and whether it is global (`$::`). */
+export type ReferenceChain = readonly { readonly global: boolean; readonly names: readonly string[] }[];
 
 /**
  * A boolean filter-condition expression (§7.5.4), supporting the metadata
