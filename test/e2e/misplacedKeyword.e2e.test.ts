@@ -45,9 +45,12 @@ it('preserves syntax errors and keyword messages in worker and main-thread diagn
                 textDocument: { uri: `file:///${name}.sysml`, languageId: 'sysml', version: 1, text },
             });
         }
-        // Both the worker's and the main thread's diagnostics have been published.
+        // Diagnostics can arrive before the worker/main completion notification.
         const deadline = Date.now() + 10_000;
-        while (Object.keys(cases).some(name => (published.get(`file:///${name}.sysml`)?.length ?? 0) < 2) && Date.now() < deadline) {
+        while (Object.keys(cases).some(name => {
+            const uri = `file:///${name}.sysml`;
+            return !workerParsed.has(uri) || (published.get(uri)?.length ?? 0) < 2;
+        }) && Date.now() < deadline) {
             await new Promise(resolve => setTimeout(resolve, 100));
         }
         for (const [name, { asName, parserMessage, syntaxLine }] of Object.entries(cases)) {
