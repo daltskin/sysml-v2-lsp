@@ -305,6 +305,17 @@ export function nameText(symbol: SysMLSymbol): string {
 }
 
 /**
+ * The name and short name written in `symbol`'s own declaration (KerML 8.3.2.1.2
+ * `declaredName`, `declaredShortName`), null for each it doesn't declare. A usage
+ * named after a feature (`namingReference`) declares neither: its names are that
+ * feature's (KerML 8.3.3.3.4 `effectiveName()`).
+ */
+export function declaredNamesOf(symbol: SysMLSymbol): { declaredName: string | null; declaredShortName: string | null } {
+    if (symbol.namingReference !== undefined) return { declaredName: null, declaredShortName: null };
+    return { declaredName: symbol.name || null, declaredShortName: symbol.shortName || null };
+}
+
+/**
  * The names a membership of `symbol` is known by: its name and its short name
  * (KerML 8.2.3.5.3, `memberName` and `memberShortName`), each once.
  */

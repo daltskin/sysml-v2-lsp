@@ -187,6 +187,21 @@ export interface SysMLElementDTO {
     shortName?: string;
 
     /**
+     * The name as written in the element's own declaration (KerML 8.3.2.1.2
+     * `Element::declaredName`); null when it declares none. `name` is the effective
+     * name: for a usage without a name or short name of its own, that of its naming
+     * feature (KerML 8.3.3.3.4 `Feature::effectiveName()`).
+     */
+    declaredName: string | null;
+
+    /**
+     * The short name as written in the element's own declaration (KerML 8.3.2.1.2
+     * `Element::declaredShortName`); null when it declares none. `shortName` is the
+     * effective short name (KerML 8.3.3.3.4 `Feature::effectiveShortName()`).
+     */
+    declaredShortName: string | null;
+
+    /**
      * Text to show for the element, as in the outline: its name; for an
      * anonymous element its declaration without a name (`: Engine`), else what
      * it connects (`a.p→b.p`), else its declaration as written (`decide`).
