@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+### Fixed
+
+- A `duplicate-definition` or `ambiguous-namespace-name` of a clash on a short name (KerML 8.3.2.4.3) has the short name's range and says `short name` in the diagnostic message.
+- `ambiguous-namespace-name` is reported once per clashing name.
+
 ## [0.45.0]
 
 ### Added

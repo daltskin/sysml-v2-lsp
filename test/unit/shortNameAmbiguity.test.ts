@@ -119,8 +119,13 @@ describe('Overlapping conflict groups', () => {
         const peers = findConflictingDeclarations(buildSymbolIndexes(symbols)).get(middle)!;
         expect(peers.map(symbol => symbol.name).sort()).toEqual(['A', 'Alpha', 'B']);
         expect(new Set(peers).size).toBe(peers.length);
-        const diagnostic = new SemanticValidator(dm).validate(uri).find(d =>
-            d.code === 'ambiguous-namespace-name' && d.data.name === 'A')!;
-        expect(diagnostic.message).toContain('and 1 other occurrence');
+        // One diagnostic per name it clashes on, each naming the peer sharing that name.
+        const messages = new SemanticValidator(dm).validate(uri)
+            .filter(d => d.code === 'ambiguous-namespace-name' && d.data.name === 'A')
+            .map(d => d.message);
+        expect(messages).toEqual([
+            "Ambiguous name 'A': also declared as part def in this document (line 1).",
+            `Ambiguous short name 'B': also declared as part def in ${split ? 'document other.sysml' : 'this document'} (line 1).`,
+        ]);
     });
 });

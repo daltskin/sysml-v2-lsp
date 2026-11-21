@@ -67,10 +67,15 @@ const MAX_NAMESPACE_NESTING_DEPTH = 64;
 
 export { memberNamesOf };
 
-/** A declaration's clash: the declarations it clashes with, itself included, and the names it clashes on. */
+/**
+ * A declaration's clash: the declarations it clashes with, itself included,
+ * the names it clashes on, and for each of those names the declarations
+ * sharing it, itself included.
+ */
 export interface Conflict {
     declarations: SysMLSymbol[];
     names: string[];
+    declarationsByName: Map<string, SysMLSymbol[]>;
 }
 
 /** The conflicts of each `SymbolIndexes`, found once (`findConflicts`). */
@@ -103,9 +108,12 @@ export function findConflicts(indexes: SymbolIndexes): Map<SysMLSymbol, Conflict
         const declarations = group.flatMap(element => [...registry.symbolsOf(element)]);
         for (const s of declarations) {
             const found = conflicting.get(s);
+            const declarationsByName = new Map(found?.declarationsByName);
+            declarationsByName.set(name, [...new Set([...(declarationsByName.get(name) ?? []), ...declarations])]);
             conflicting.set(s, {
                 declarations: [...new Set([...(found?.declarations ?? []), ...declarations])],
                 names: [...new Set([...(found?.names ?? []), name])],
+                declarationsByName,
             });
         }
     };

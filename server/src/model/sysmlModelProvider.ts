@@ -18,7 +18,10 @@ import {
     OwnedSpecialization,
     SysMLElementKind,
     SysMLSymbol,
+    ambiguityLabel,
+    clashRange,
     isDefinition,
+    memberNamesOf,
     displayName,
     isAnonymous,
     isFlowUsage,
@@ -1289,15 +1292,17 @@ export class SysMLModelProvider {
 
         for (const symbol of symbols) {
             const conflict = conflicts.get(symbol.symbolId);
-            if (conflict) {
-                // The names it clashes on, which may be a short name (`<A> X` and `<A> Y` clash on `A`).
-                const names = conflict.names.map(name => `'${name}'`).join(', ');
-                const others = otherDeclarations(conflict.declarations, symbol);
+            // One per name it clashes on, which may be its short name (`<A> X` and `<A> Y` clash on `A`),
+            // its name first.
+            for (const name of conflict ? memberNamesOf(symbol) : []) {
+                const declarations = conflict?.declarationsByName.get(name);
+                if (!declarations) continue;
+                const others = otherDeclarations(declarations, symbol);
                 diagnostics.push({
                     code: 'ambiguous-namespace-name',
-                    message: `Ambiguous ${conflict.names.length > 1 ? 'names' : 'name'} ${names}: also declared as ${describeConflictingDeclarations(others, symbol.uri)}.`,
+                    message: `Ambiguous ${ambiguityLabel(symbol, name)}: also declared as ${describeConflictingDeclarations(others, symbol.uri)}.`,
                     severity: 'error',
-                    range: this.rangeToDTO(symbol.selectionRange),
+                    range: this.rangeToDTO(clashRange(symbol, name)),
                     elementName: nameText(symbol),
                     id: symbol.symbolId,
                 });
