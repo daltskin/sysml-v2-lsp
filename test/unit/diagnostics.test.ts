@@ -1486,15 +1486,20 @@ package MVCE {
             }
         });
 
-        it('should still reject circular specialization', async () => {
+        it('warns of circular specialization, which KerML 8.2.3.5.1 allows, without an error', async () => {
             const diagnostics = await getSemanticDiagnostics(`
-package Invalid {
+package Cycles {
     part def A :> B;
     part def B :> A;
+    view def V1 :> V2;
+    view def V2 :> V3;
+    view def V3 :> V1;
 }
 `);
-            expect(diagnostics.some(diagnostic => diagnostic.code === 'circular-specialization'))
-                .toBe(true);
+            const circular = diagnostics.filter(diagnostic => diagnostic.code === 'circular-specialization');
+            // Warning (2) on each of the five definitions, and no Error (1).
+            expect(circular.map(diagnostic => diagnostic.severity)).toEqual([2, 2, 2, 2, 2]);
+            expect(diagnostics.filter(diagnostic => diagnostic.severity === 1)).toEqual([]);
         });
 
         it('should NOT treat referential part typing as containment (issue #101)', async () => {
