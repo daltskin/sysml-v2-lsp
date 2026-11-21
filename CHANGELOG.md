@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.46.0]
+
 ### Added
 
 - `sysml/model` reports each element's `declaredName` and `declaredShortName`, the name and short name written in its own declaration (KerML 8.3.2.1.2), or `null`. A usage without a name or short name of its own, such as one written as `part :>> wheels;`, `perform a;` or `variant part1;`, declares neither: its `name` and `shortName` remain those of the feature it is named after (KerML 8.3.3.3.4 `effectiveName()`, `effectiveShortName()`).
