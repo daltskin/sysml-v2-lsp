@@ -437,8 +437,9 @@ export class SemanticValidator {
     /**
      * Rule: Circular specialization chain.
      *
-     * Detects cycles in definition specialization hierarchies.
-     * For example: A :> B, B :> C, C :> A forms a cycle.
+     * Detects cycles in definition specialization hierarchies, e.g. A :> B,
+     * B :> C, C :> A. A cycle is valid (KerML 7.3.2.3, 8.2.3.5.1) but makes all
+     * its types have the same instances, which is seldom intended: a warning.
      */
     private checkCircularSpecialization(symbolsInUri: SysMLSymbol[], indexes: SymbolIndexes): Diagnostic[] {
         const diagnostics: Diagnostic[] = [];
@@ -451,7 +452,7 @@ export class SemanticValidator {
             const cycle = this.followSpecializationChain(isAnonymous(def) ? '' : escapedName(nameText(def)), def.typeNames, visited, indexes);
             if (cycle) {
                 diagnostics.push({
-                    severity: DiagnosticSeverity.Error,
+                    severity: DiagnosticSeverity.Warning,
                     range: def.selectionRange,
                     message: `Circular specialization: ${cycle.join(' :> ')} :> ${cycle[0]}`,
                     source: 'sysml',
