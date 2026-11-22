@@ -123,6 +123,8 @@ export interface SysMLSymbol {
     range: Range;
     /** The range of just the symbol's name (for rename, hover) */
     selectionRange: Range;
+    /** The range of the short name its own declaration writes (`<w>`'s `w`); absent without one. */
+    shortNameRange?: Range;
     /** The URI of the document containing this symbol */
     uri: string;
     /** The type this symbol specializes (e.g., "Vehicle" in "part car : Vehicle") */
@@ -319,6 +321,30 @@ export function declaredNamesOf(symbol: SysMLSymbol): { declaredName: string | n
  */
 export function memberNamesOf(symbol: SysMLSymbol): string[] {
     return [...new Set([symbol.name, symbol.shortName])].filter((name): name is string => !!name);
+}
+
+/**
+ * Whether `name`, one `symbol` is indistinguishable by (KerML 8.3.2.4.3
+ * `isDistinguishableFrom`), is its short name; a short name equal to its
+ * name counts as the name.
+ */
+function isShortNameClash(symbol: SysMLSymbol, name: string): boolean {
+    return name === symbol.shortName && name !== symbol.name;
+}
+
+/** Where a clash of `symbol` on `name` is reported: its declared short name for its short name, else its name (`selectionRange`). */
+export function clashRange(symbol: SysMLSymbol, name: string): Range {
+    return isShortNameClash(symbol, name) && symbol.shortNameRange ? symbol.shortNameRange : symbol.selectionRange;
+}
+
+/** `name` as an ambiguity names it: `short name 'e'` for `symbol`'s short name, else `name 'e'`. */
+export function ambiguityLabel(symbol: SysMLSymbol, name: string): string {
+    return isShortNameClash(symbol, name) ? `short name '${name}'` : `name '${name}'`;
+}
+
+/** `name`, which `symbol` clashes on, as a message names it: `short name 'e'` for its short name, else `'e'`. */
+export function clashLabel(symbol: SysMLSymbol, name: string): string {
+    return isShortNameClash(symbol, name) ? `short name '${name}'` : `'${name}'`;
 }
 
 /**

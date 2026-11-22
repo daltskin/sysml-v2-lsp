@@ -3,7 +3,7 @@ import { DocumentManager } from '../documentManager.js';
 import { getLibraryPackageNames, resolveLibraryType } from '../library/libraryIndex.js';
 import { SysMLModelProvider } from '../model/sysmlModelProvider.js';
 import { NamespaceResolver, SymbolIndexes, buildSymbolIndexes, describeConflictingDeclarations, findConflicts, otherDeclarations, ownerOf } from '../symbols/namespaceResolver.js';
-import { SysMLElementKind, SysMLSymbol, displayName, isAnonymous, isDefinition, memberNamesOf, nameText } from '../symbols/sysmlElements.js';
+import { SysMLElementKind, SysMLSymbol, ambiguityLabel, clashLabel, clashRange, displayName, isAnonymous, isDefinition, memberNamesOf, nameText } from '../symbols/sysmlElements.js';
 import { describeNamingIssue, NamingIssue } from '../symbols/symbolTable.js';
 import { resolveTypeName } from '../symbols/typeResolution.js';
 import { escapedName, scanFeaturePaths, splitQualifiedName, stripComments } from '../utils/identUtils.js';
@@ -1527,8 +1527,8 @@ export class SemanticValidator {
                 if (count < 2) continue;
                 diagnostics.push({
                     severity: DiagnosticSeverity.Warning,
-                    range: symbol.selectionRange,
-                    message: `Duplicate definition: '${name}' is defined ${count} times in the same scope`,
+                    range: clashRange(symbol, name),
+                    message: `Duplicate definition: ${clashLabel(symbol, name)} is defined ${count} times in the same scope`,
                     source: 'sysml',
                     code: 'duplicate-definition',
                     data: { symbolId: symbol.symbolId },
@@ -1569,17 +1569,21 @@ export class SemanticValidator {
             const conflict = conflicts.get(symbol);
             if (!conflict) continue;
 
-            // The names it clashes on, which may be a short name (`<A> X` and `<A> Y` clash on `A`).
-            const names = conflict.names.map(name => `'${name}'`).join(', ');
-            const others = otherDeclarations(conflict.declarations, symbol);
-            diagnostics.push({
-                severity: DiagnosticSeverity.Error,
-                range: symbol.selectionRange,
-                message: `Ambiguous ${conflict.names.length > 1 ? 'names' : 'name'} ${names}: also declared as ${describeConflictingDeclarations(others, symbol.uri)}.`,
-                source: 'sysml',
-                code: 'ambiguous-namespace-name',
-                data: { name: nameText(symbol), symbolId: symbol.symbolId },
-            });
+            // One per name it clashes on, which may be its short name (`<A> X` and `<A> Y` clash on `A`),
+            // its name first.
+            for (const name of memberNamesOf(symbol)) {
+                const declarations = conflict.declarationsByName.get(name);
+                if (!declarations) continue;
+                const others = otherDeclarations(declarations, symbol);
+                diagnostics.push({
+                    severity: DiagnosticSeverity.Error,
+                    range: clashRange(symbol, name),
+                    message: `Ambiguous ${ambiguityLabel(symbol, name)}: also declared as ${describeConflictingDeclarations(others, symbol.uri)}.`,
+                    source: 'sysml',
+                    code: 'ambiguous-namespace-name',
+                    data: { name: nameText(symbol), symbolId: symbol.symbolId },
+                });
+            }
         }
 
         return diagnostics;
