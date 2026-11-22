@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.47.0]
+
 ### Changed
 
 - A specialization cycle (`part def A :> B; part def B :> A;`) is reported as a `circular-specialization` warning instead of an error. A cycle is valid (KerML 7.3.2.3, 8.2.3.5.1), but makes all types in it have the same instances, which is seldom intended.
