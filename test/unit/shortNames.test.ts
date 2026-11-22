@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { TextDocument } from 'vscode-languageserver-textdocument';
+import type { Range } from 'vscode-languageserver/node';
 import { DocumentManager } from '../../server/src/documentManager.js';
 import { generateMermaidDiagram } from '../../server/src/mcp/mermaidGenerator.js';
 import { formatSymbol } from '../../server/src/mcpCore.js';
@@ -220,10 +221,10 @@ describe('elements with a short name and no name', () => {
             const { dm, uri } = setup('package Q {\n    part def <A> X1;\n    part def <A> Y1;\n}\n');
             const ambiguous = diagnosticsOf(dm, uri, 'ambiguous-namespace-name').map(d => d.message);
             expect(ambiguous).toHaveLength(2);
-            for (const message of ambiguous) expect(message).toMatch(/^Ambiguous name 'A': /);
+            for (const message of ambiguous) expect(message).toMatch(/^Ambiguous short name 'A': /);
             expect(diagnosticsOf(dm, uri, 'duplicate-definition').map(d => d.message)).toEqual([
-                "Duplicate definition: 'A' is defined 2 times in the same scope",
-                "Duplicate definition: 'A' is defined 2 times in the same scope",
+                "Duplicate definition: short name 'A' is defined 2 times in the same scope",
+                "Duplicate definition: short name 'A' is defined 2 times in the same scope",
             ]);
         });
 
@@ -505,7 +506,7 @@ describe('elements with a short name and no name', () => {
                 ['X1', symbols.find(s => s.name === 'X1')!.symbolId],
                 ['Y1', symbols.find(s => s.name === 'Y1')!.symbolId],
             ]);
-            for (const d of ambiguous) expect(d.message).toMatch(/^Ambiguous name 'A': /);
+            for (const d of ambiguous) expect(d.message).toMatch(/^Ambiguous short name 'A': /);
         });
     });
 
@@ -657,8 +658,11 @@ describe('elements with a short name and no name', () => {
                 'invalid-redefinition-multiplicity', 'duplicate-definition', 'circular-naming'];
             const diagnostics = new SemanticValidator(dm).validate(uri).filter(d => codes.includes(d.code as string));
             expect(new Set(diagnostics.map(d => d.code))).toEqual(new Set(codes));
+            // At its name, or at its short name for a clash on that alone.
+            const startsAt = (range: Range | undefined, line: number, character: number) =>
+                range?.start.line === line && range.start.character === character;
             const at = (line: number, character: number) => symbols.find(s =>
-                s.selectionRange.start.line === line && s.selectionRange.start.character === character)!;
+                startsAt(s.selectionRange, line, character) || startsAt(s.shortNameRange, line, character))!;
             for (const d of diagnostics) {
                 expect((d.data as any).symbolId, `${d.code} at ${d.range.start.line}`).toBe(at(d.range.start.line, d.range.start.character).symbolId);
             }

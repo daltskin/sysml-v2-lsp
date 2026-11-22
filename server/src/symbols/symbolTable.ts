@@ -1175,6 +1175,9 @@ export class SymbolTable {
         const selectionRange = anonymous
             ? (ctx.start ? tokenToRange(ctx.start) : range)
             : this.extractNameRange(ctx) ?? range;
+        // Only a short name the declaration writes; an effective one (`effectiveNames`) has no range here.
+        const shortNameContext = effectiveName ? undefined : this.ownShortNameContext(ctx, kind);
+        const shortNameRange = shortNameContext && contextToRange(shortNameContext);
         // Extract type names for both usages (typing) and definitions (specialization)
         const typeNames = isFlowUsage(kind)
             ? this.extractFlowTypeNames(ctx)
@@ -1224,6 +1227,7 @@ export class SymbolTable {
             qualifiedName,
             range,
             selectionRange,
+            shortNameRange,
             uri,
             typeName,
             typeNames,
@@ -1806,6 +1810,15 @@ export class SymbolTable {
      * any, the declared name (KerML 8.2.3.1, 8.3.2.1.2).
      */
     private parseIdentification(ctx: ParserRuleContext): { shortName?: string; name?: string } {
+        const { shortName, name } = this.identificationContexts(ctx);
+        return {
+            ...(shortName && { shortName: this.extractTextFromSubtree(shortName) }),
+            ...(name && { name: this.extractTextFromSubtree(name) }),
+        };
+    }
+
+    /** The `name` nodes of an `identification` or `featureIdentification`'s short name and name (`parseIdentification`). */
+    private identificationContexts(ctx: ParserRuleContext): { shortName?: ParserRuleContext; name?: ParserRuleContext } {
         let hasAngleBrackets = false;
         const nameCtxs: ParserRuleContext[] = [];
         for (let i = 0; i < ctx.getChildCount(); i++) {
@@ -1816,16 +1829,29 @@ export class SymbolTable {
                 nameCtxs.push(child);
             }
         }
-        if (!hasAngleBrackets) {
-            return { name: nameCtxs[0] ? this.extractTextFromSubtree(nameCtxs[0]) : undefined };
-        }
-        if (nameCtxs.length >= 2) {
-            return {
-                shortName: this.extractTextFromSubtree(nameCtxs[0]),
-                name: this.extractTextFromSubtree(nameCtxs[1]),
-            };
-        }
-        return { shortName: nameCtxs[0] ? this.extractTextFromSubtree(nameCtxs[0]) : undefined };
+        if (!hasAngleBrackets) return { name: nameCtxs[0] };
+        return { shortName: nameCtxs[0], name: nameCtxs[1] };
+    }
+
+    /**
+     * The `name` node of the short name an element's own declaration writes
+     * (`identification`, `featureIdentification`, SysML 8.2.2.5.1
+     * `AliasMember`, a transition's `UsageDeclaration`); never one of a
+     * member, a body element or an inline-owned feature.
+     */
+    private ownShortNameContext(ctx: ParserRuleContext, kind: SysMLElementKind): ParserRuleContext | undefined {
+        if (kind === SysMLElementKind.Alias) return this.aliasNameContexts(ctx).shortName;
+        const identification = kind === SysMLElementKind.TransitionUsage
+            ? this.transitionIdentification(ctx)
+            : this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_identification)
+                ?? this.findOwnHeaderRule(ctx, SysMLv2Parser.RULE_featureIdentification);
+        return identification && this.identificationContexts(identification).shortName;
+    }
+
+    /** A transition's own `identification` (SysML 8.2.2.18.3: `'transition' ( UsageDeclaration 'first' )?`). */
+    private transitionIdentification(ctx: ParserRuleContext): ParserRuleContext | undefined {
+        const declaration = this.childRule(ctx, SysMLv2Parser.RULE_usageDeclaration);
+        return declaration && this.childRule(declaration, SysMLv2Parser.RULE_identification);
     }
 
     /**
