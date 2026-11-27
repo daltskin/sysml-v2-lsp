@@ -1195,6 +1195,61 @@ package NamedPayloadSequence {
             ]);
         });
 
+        it.each([true, false])('should emit each declared message once (occurrence instance: %s)', async (includeInstance) => {
+            const model = await getModelForText(`
+package MessageSequence {
+    part def Client;
+    part def Service;
+
+    occurrence def Interaction {
+        part client : Client;
+        part service : Service;
+
+        message request from client to service;
+        message validate from service to service;
+        message process from service to service;
+        message response from service to client;
+    }
+
+    ${includeInstance ? 'occurrence interaction : Interaction;' : ''}
+}
+`, ['sequenceDiagrams']);
+
+            expect(model.sequenceDiagrams).toHaveLength(1);
+            const diagram = model.sequenceDiagrams![0];
+            expect(diagram.name).toBe('Interaction');
+            expect(diagram.participants.map(participant => participant.name)).toEqual(['client', 'service']);
+            expect(diagram.messages.map(message => [message.name, message.from, message.to, message.occurrence])).toEqual([
+                ['request', 'client', 'service', 1],
+                ['validate', 'service', 'service', 2],
+                ['process', 'service', 'service', 3],
+                ['response', 'service', 'client', 4],
+            ]);
+        });
+
+        it('should keep nested occurrence messages in their own sequence diagrams', async () => {
+            const model = await getModelForText(`
+package NestedSequences {
+    occurrence def Outer {
+        part source;
+        part target;
+        message firstMessage from source to target;
+        occurrence def Inner {
+            part source;
+            part target;
+            message innerMessage from source to target;
+        }
+        message lastMessage from target to source;
+    }
+}
+`, ['sequenceDiagrams']);
+
+            expect(model.sequenceDiagrams!.map(diagram => [diagram.name, diagram.messages.map(message => message.name)])).toEqual([
+                ['Outer', ['firstMessage', 'lastMessage']],
+                ['Inner', ['innerMessage']],
+            ]);
+        });
+
         // Issue #44: message statements with dotted endpoints should reduce
         // to root participant names so arrows render between lifelines.
         it('should extract message statements with dotted endpoints', async () => {

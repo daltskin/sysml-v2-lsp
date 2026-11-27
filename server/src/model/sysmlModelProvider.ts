@@ -835,11 +835,8 @@ export class SysMLModelProvider {
         }
 
         // ── D5: flow/message statements inside part/item/interface containers ──
-        // SysML v2 allows `flow X from A to B;` and `message X from A to B;`
-        // inside part defs/usages (and similar containers). These are not
-        // tracked as individual symbols, so we parse them from the body text
-        // and synthesise a sequence diagram with the container's parts/items
-        // as participants.
+        // Both `Message` and `FlowUsage` declare flow usages (SysML 8.2.2.16).
+        // Project each owned flow symbol once, with the container's parts/items as participants.
         const containerKinds = new Set<SysMLElementKind>([
             SysMLElementKind.PartDef,
             SysMLElementKind.PartUsage,
@@ -869,7 +866,6 @@ export class SysMLModelProvider {
             if (!containerKinds.has(symbol.kind)) continue;
 
             const children = this.getChildSymbols(symbol, symbolTable);
-            const fullText = this.getFullElementText(symbol, lines);
 
             // Flow usages are available as parse-tree-derived symbols, so
             // their payload feature names do not need to be reparsed here.
@@ -888,37 +884,6 @@ export class SysMLModelProvider {
                     occurrence: occ++,
                     range: this.rangeToDTO(child.range),
                 });
-            }
-
-            for (const keyword of ['message']) {
-                for (const { afterPos } of findWordPositionsCI(fullText, keyword)) {
-                    const nameStart = skipWS(fullText, afterPos);
-                    const [firstName, afterName] = readNameOrQuoted(fullText, nameStart);
-                    if (!firstName || firstName === 'def') continue;
-                    const name = firstName;
-                    const payload = firstName;
-                    const fromStart = skipWS(fullText, afterName);
-                    const [fromKw, afterFromKw] = readIdent(fullText, fromStart);
-                    if (fromKw !== 'from') continue;
-                    const srcStart = skipWS(fullText, afterFromKw);
-                    const [srcRaw, afterSrc] = readIdent(fullText, srcStart, true);
-                    if (!srcRaw) continue;
-                    const toStart = skipWS(fullText, afterSrc);
-                    const [toKw, afterToKw] = readIdent(fullText, toStart);
-                    if (toKw !== 'to') continue;
-                    const tgtStart = skipWS(fullText, afterToKw);
-                    const [tgtRaw] = readIdent(fullText, tgtStart, true);
-                    if (!tgtRaw) continue;
-
-                    parsedMessages.push({
-                        name,
-                        from: rootName(srcRaw),
-                        to: rootName(tgtRaw),
-                        payload,
-                        occurrence: occ++,
-                        range: this.rangeToDTO(symbol.range),
-                    });
-                }
             }
 
             if (parsedMessages.length === 0) continue;
