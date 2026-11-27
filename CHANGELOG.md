@@ -2,6 +2,8 @@
 
 ## [Unreleased]
 
+## [0.48.0]
+
 ### Fixed
 
 - Sequence diagrams report each owned message once, in source order, instead of duplicating messages or including those from nested containers (#190). Messages use their parsed flow symbols (SysML 8.2.2.16 `Message : FlowUsage`).
